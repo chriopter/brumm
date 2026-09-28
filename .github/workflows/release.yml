@@ -85,7 +85,7 @@ jobs:
           go run ./tools/sign SHA256SUMS > SHA256SUMS.sig
 
       # Provenance anyone can check: gh attestation verify <file> -R chriopter/brumm
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         if: steps.version.outputs.tag != ''
         with:
           subject-path: |
