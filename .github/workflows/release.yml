@@ -51,7 +51,7 @@ jobs:
           IFS=. read -r major minor patch <<<"${tag#v}"
           echo "tag=v$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: steps.version.outputs.tag != ''
         with:
           go-version-file: go.mod
