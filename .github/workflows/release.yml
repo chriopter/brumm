@@ -1,12 +1,21 @@
 name: release
 
-# Tag a version (git tag v0.1.0 && git push origin v0.1.0) to publish a
-# release. The Apple Music developer token is signed fresh from the MusicKit
-# key in the repository secrets and embedded in the binary; it is valid for
-# six months, so cut a release at least that often.
+# A pushed tag (git tag -s v0.2.0 && git push origin v0.2.0) publishes that
+# version. Every day the workflow also checks the newest release: once it is
+# 30 days old, it publishes the next patch version from main. The embedded
+# Apple Music developer token is valid for six months, so a release that no
+# one refreshes would stop playing; this keeps the latest one fresh.
 on:
   push:
     tags: ["v*"]
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release now even if the latest release is recent
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -14,15 +23,41 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pick version
+        id: version
+        run: |
+          if [[ $GITHUB_EVENT_NAME == push ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest=$(gh release view --json tagName,publishedAt --jq '.tagName + " " + .publishedAt' 2>/dev/null || true)
+          if [[ -z $latest ]]; then
+            echo "tag=v0.1.0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          read -r tag published <<<"$latest"
+          age=$(( ($(date +%s) - $(date -d "$published" +%s)) / 86400 ))
+          if (( age < 30 )) && [[ ${{ inputs.force || false }} != true ]]; then
+            echo "$tag is $age days old; nothing to do"
+            exit 0
+          fi
+          IFS=. read -r major minor patch <<<"${tag#v}"
+          echo "tag=v$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-go@v5
+        if: steps.version.outputs.tag != ''
         with:
           go-version-file: go.mod
 
       - name: Build
+        if: steps.version.outputs.tag != ''
         env:
+          TAG: ${{ steps.version.outputs.tag }}
           APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_PRIVATE_KEY: ${{ secrets.APPLE_PRIVATE_KEY }}
@@ -31,12 +66,15 @@ jobs:
           echo "::add-mask::$token"
           mkdir -p dist/brumm
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-            -ldflags "-s -w -X main.version=$GITHUB_REF_NAME -X github.com/chriopter/brumm/internal/config.DevToken=$token" \
+            -ldflags "-s -w -X main.version=$TAG -X github.com/chriopter/brumm/internal/config.DevToken=$token" \
             -o dist/brumm/brumm .
           cp -r omarchy LICENSE README.md dist/brumm/
           tar -C dist -czf brumm-linux-amd64.tar.gz brumm
 
       - name: Publish
+        if: steps.version.outputs.tag != ''
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" brumm-linux-amd64.tar.gz --title "$GITHUB_REF_NAME" --generate-notes
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" brumm-linux-amd64.tar.gz \
+            --target "$GITHUB_SHA" --title "$TAG" --generate-notes
