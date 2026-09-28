@@ -26,6 +26,14 @@ const (
 	CmdPlay      = "play"      // IDs, Start, Source
 	CmdAlbum     = "album"     // Start: a song id → Items: its album
 	CmdPreview   = "preview"   // Start: a song id; Value 0 stops the preview
+	CmdQueue     = "queue"     // Value: how many → Tracks from the current song, Pos
+	CmdJump      = "jump"      // Value: queue index to play
+	CmdEnqueue   = "enqueue"   // IDs; Value 1 plays them next, 0 at the end
+	CmdLoved     = "loved"     // IDs → IDs: those marked as favorites
+	CmdLove      = "love"      // Start: a song id; Value 1 favorite, 0 not
+	CmdArtist    = "artist"    // Start: a song id → Items: its artist
+	CmdLink      = "link"      // Start: a song id → Link: its music.apple.com address
+	CmdUpdate    = "update"    // Value 1 installs the available update; 0 checks for one
 	CmdToggle    = "toggle"
 	CmdNext      = "next"
 	CmdPrev      = "prev"
@@ -75,6 +83,8 @@ type State struct {
 	// ExpiresIn is set when this build's Apple Music access runs out soon
 	// (days left); an update brings a fresh one.
 	ExpiresIn int `json:"expiresIn,omitempty"`
+	// Update names a newer release when one is available.
+	Update string `json:"update,omitempty"`
 	engine.State
 }
 
@@ -88,6 +98,9 @@ type Message struct {
 	Spectrum []int          `json:"spectrum,omitempty"`
 	Wave     []int          `json:"wave,omitempty"`
 	Library  bool           `json:"library,omitempty"` // the cached library changed
+	Pos      int            `json:"pos,omitempty"`
+	IDs      []string       `json:"ids,omitempty"`
+	Link     string         `json:"link,omitempty"`
 }
 
 // Client is one connection to the daemon.

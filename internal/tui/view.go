@@ -67,7 +67,7 @@ func (r rect) has(x, y int) bool { return x >= r.x0 && x < r.x1 && y >= r.y0 && 
 // geometry records where things were drawn, for mouse hit-testing.
 type geometry struct {
 	list, crumb, search, divider                   rect
-	tabs                                           [5]rect
+	tabs                                           [numSections]rect
 	prev, play, next, shuffle, repeat, volume, bar rect
 }
 
@@ -149,8 +149,10 @@ func (m *Model) footer() string {
 
 	right := sHere.Render(m.bear())
 	switch {
+	case m.state.Update != "" && m.flash == "":
+		right = sDim.Render(m.state.Update+" is available · ") + sKey.Render("U") + sDim.Render(" update") + "   " + right
 	case m.state.ExpiresIn > 0 && m.flash == "":
-		right = sErr.Render(fmt.Sprintf("Apple Music access in this build ends in %d days: run brumm update", m.state.ExpiresIn)) + "   " + right
+		right = sErr.Render(fmt.Sprintf("Apple Music access in this build ends in %d days: press U to update", m.state.ExpiresIn)) + "   " + right
 	case m.flash != "":
 		right = sDim.Render(m.flash) + "   " + right
 	case m.state.Status == ipc.StatusLoggedOut:
@@ -271,6 +273,9 @@ func (m *Model) row(v *view, i, w int) string {
 			title = sBold.Render(t.Title)
 		}
 		text = title + "  " + sDim.Render(t.Artist)
+		if m.loved[t.ID] {
+			dur = sErr.Render("♥") + " " + dur
+		}
 		detail = dur
 	} else {
 		it := r.item
@@ -428,9 +433,9 @@ func (m *Model) helpLines() []stageLine {
 		name string
 		keys [][2]string
 	}{
-		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"1–5 tab", "sections"}, {"/", "search"}, {"a", "go to the song's album"}, {"c", "go to what's playing"}}},
-		{"play", [][2]string{{"space", "play / pause"}, {"hold space", "preview the selected song"}, {"n p", "next / previous"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
-		{"brumm", [][2]string{{"f", "fullscreen visualizer (v: next)"}, {"[ ]", "narrower / wider list"}, {"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}}},
+		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"1–5 tab", "sections"}, {"/", "search (paste a music.apple.com link to open it)"}, {"6", "queue"}, {"a A", "the song's album / artist"}, {"c", "go to what's playing"}}},
+		{"play", [][2]string{{"space", "play / pause"}, {"hold space", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"z Z", "add to queue / play next"}, {"*", "favorite ♥"}, {"y", "copy the song's link"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
+		{"brumm", [][2]string{{"f", "fullscreen visualizer (v: next)"}, {"[ ]", "narrower / wider list"}, {"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}, {"U", "install an available update"}}},
 	}
 	var out []stageLine
 	for i, g := range groups {

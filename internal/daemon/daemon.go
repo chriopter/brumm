@@ -64,10 +64,12 @@ type Daemon struct {
 	conns      map[*conn]bool
 	booting    bool
 	refreshing bool
-	expiresIn  int // days until the developer token expires, when under 45
+	expiresIn  int    // days until the developer token expires, when under 45
+	update     string // a newer release, when one is available
 
 	quit     chan struct{}
 	quitOnce sync.Once
+	checkNow chan struct{} // ask checkUpdates to look now
 }
 
 // Run serves until SIGTERM, SIGINT or a quit request.
@@ -79,12 +81,13 @@ func Run(version string) error {
 	defer os.Remove(config.Socket())
 
 	d := &Daemon{
-		version: version,
-		state:   ipc.State{Status: ipc.StatusStarting, Message: "starting"},
-		lib:     loadLibrary(),
-		resume:  loadResume(),
-		conns:   map[*conn]bool{},
-		quit:    make(chan struct{}),
+		version:  version,
+		state:    ipc.State{Status: ipc.StatusStarting, Message: "starting"},
+		lib:      loadLibrary(),
+		resume:   loadResume(),
+		conns:    map[*conn]bool{},
+		quit:     make(chan struct{}),
+		checkNow: make(chan struct{}, 1),
 	}
 	if d.mpris, err = mpris.Start(d); err != nil {
 		log.Printf("mpris disabled: %v", err)
@@ -93,7 +96,7 @@ func Run(version string) error {
 	go d.accept(ln)
 	go d.boot()
 	go d.loop()
-	go d.autoUpdate()
+	go d.checkUpdates()
 	go d.watchSelf()
 
 	sig := make(chan os.Signal, 1)
@@ -286,7 +289,7 @@ func (d *Daemon) apply(es engine.State) {
 			r.track(es)
 		}
 	}
-	next := ipc.State{Status: status, Message: msg, State: es, ExpiresIn: d.expiresIn}
+	next := ipc.State{Status: status, Message: msg, State: es, ExpiresIn: d.expiresIn, Update: d.update}
 	changed := !reflect.DeepEqual(next, d.state)
 	d.state = next
 	d.mu.Unlock()
@@ -406,6 +409,49 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		}
 		reply.Items = []apple.Item{album}
 		return nil
+	case ipc.CmdLoved:
+		api, err := d.client()
+		if err != nil {
+			return err
+		}
+		loved, err := api.Loved(r.IDs)
+		for id := range loved {
+			reply.IDs = append(reply.IDs, id)
+		}
+		return d.authCheck(err)
+	case ipc.CmdLove:
+		api, err := d.client()
+		if err != nil {
+			return err
+		}
+		return d.authCheck(api.SetLoved(r.Start, r.Value != 0))
+	case ipc.CmdArtist:
+		api, err := d.client()
+		if err != nil {
+			return err
+		}
+		artist, err := api.ArtistOf(r.Start)
+		if err != nil {
+			return d.authCheck(err)
+		}
+		reply.Items = []apple.Item{artist}
+		return nil
+	case ipc.CmdLink:
+		api, err := d.client()
+		if err != nil {
+			return err
+		}
+		reply.Link, err = api.Link(r.Start)
+		return d.authCheck(err)
+	case ipc.CmdUpdate:
+		if r.Value == 0 { // just look
+			select {
+			case d.checkNow <- struct{}{}:
+			default:
+			}
+			return nil
+		}
+		return d.installUpdate()
 	case ipc.CmdReload:
 		go d.reload()
 		return nil
@@ -445,6 +491,17 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 			return eng.StopPreview()
 		}
 		return eng.Preview(r.Start)
+	case ipc.CmdQueue:
+		q, err := eng.Queue(max(1, int(r.Value)))
+		if err != nil {
+			return err
+		}
+		reply.Tracks, reply.Pos = q.Items, q.Pos
+		return nil
+	case ipc.CmdJump:
+		return eng.Jump(int(r.Value))
+	case ipc.CmdEnqueue:
+		return eng.Enqueue(r.IDs, r.Value != 0)
 	case ipc.CmdShuffle:
 		return eng.SetShuffle(r.Value != 0)
 	case ipc.CmdRepeat:

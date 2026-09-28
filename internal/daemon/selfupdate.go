@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"syscall"
@@ -13,31 +14,60 @@ import (
 // again (RestartForceExitStatus in the unit): the program was replaced.
 const ExitUpdated = 75
 
-// autoUpdate installs new releases, checking a while after start and then
-// daily. Only the installed program updates itself, never a dev build.
-func (d *Daemon) autoUpdate() {
+// checkUpdates looks for a newer release right after start, daily, and
+// whenever a client opens (checkNow), and offers it to clients. It installs on its own only when this
+// build's Apple Music access is about to run out, so playback never simply
+// stops. Development builds never update.
+func (d *Daemon) checkUpdates() {
 	if !update.Managed(d.version) {
 		return
 	}
-	check := func() {
-		tag, installed, err := update.Update(d.version)
-		switch {
-		case err != nil:
-			log.Printf("update check: %v", err)
-		case installed:
-			log.Printf("installed %s; restarting when idle", tag)
-		}
-	}
-	t := time.NewTimer(10 * time.Minute)
+	t := time.NewTimer(5 * time.Second)
 	for {
 		select {
 		case <-d.quit:
 			return
 		case <-t.C:
-			check()
-			t.Reset(24 * time.Hour)
+		case <-d.checkNow:
+		}
+		t.Reset(24 * time.Hour)
+		tag, err := update.Latest()
+		if err != nil {
+			log.Printf("update check: %v", err)
+			continue
+		}
+		if !update.Newer(tag, d.version) {
+			continue
+		}
+		d.mu.Lock()
+		d.update = tag
+		urgent := d.expiresIn > 0 && d.expiresIn < 30
+		d.mu.Unlock()
+		if urgent {
+			if err := d.installUpdate(); err != nil {
+				log.Printf("update: %v", err)
+			}
 		}
 	}
+}
+
+// installUpdate installs the newest release; the daemon then restarts into
+// it at the next quiet moment (watchSelf).
+func (d *Daemon) installUpdate() error {
+	if !update.Managed(d.version) {
+		return fmt.Errorf("this brumm (%s) was built from source; update it with bin/update", d.version)
+	}
+	tag, installed, err := update.Update(d.version)
+	if err != nil {
+		return err
+	}
+	if installed {
+		log.Printf("installed %s; restarting when idle", tag)
+		d.mu.Lock()
+		d.update = ""
+		d.mu.Unlock()
+	}
+	return nil
 }
 
 // fileID identifies the file behind a path, so a replaced program is

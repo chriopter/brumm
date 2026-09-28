@@ -156,7 +156,42 @@ Object.assign(B, {
   play() { if (B.m && !B.m.isPlaying) play(B.m).catch((e) => { B.err = 'play: ' + errText(e); }); },
   pause() { if (B.m) B.m.pause(); },
   next() { if (B.m) B.m.skipToNextItem().catch(() => {}); },
-  prev() { if (B.m) B.m.skipToPreviousItem().catch(() => {}); },
+  // Previous restarts the song once it is past three seconds in, like
+  // every hardware player; before that it goes back a song.
+  prev() {
+    const m = B.m;
+    if (!m) return;
+    if ((m.currentPlaybackTime || 0) > 3) m.seekToTime(0).catch(() => {});
+    else m.skipToPreviousItem().catch(() => {});
+  },
+  // queue returns the current song and up to n after it.
+  queue(n) {
+    const m = B.m;
+    const out = { pos: -1, items: [] };
+    if (!m || !m.queue) return JSON.stringify(out);
+    const items = m.queue.items || [];
+    out.pos = typeof m.nowPlayingItemIndex === 'number' ? m.nowPlayingItemIndex : -1;
+    for (let i = Math.max(0, out.pos); i < items.length && out.items.length < n; i++) {
+      const it = items[i], a = it.attributes || {};
+      out.items.push({ id: it.id, title: it.title || a.name || '', artist: it.artistName || a.artistName || '',
+                       album: it.albumName || a.albumName || '', duration: (it.playbackDuration || a.durationInMillis || 0) / 1000 });
+    }
+    return JSON.stringify(out);
+  },
+  jump(i) { if (B.m) B.m.changeToMediaAtIndex(i).then(() => play(B.m)).catch((e) => { B.err = 'play: ' + errText(e); }); },
+  // enqueue adds songs after the current one (next) or at the end.
+  async enqueue(ids, next) {
+    const m = B.m;
+    if (!m) return;
+    try {
+      if (!m.queue || !m.queue.items || !m.queue.items.length) return B.playIds(ids, ids[0], 'queue:', 0);
+      const items = await resolve(m, ids);
+      if (!items.length) { B.err = 'nothing playable here'; return; }
+      if (next) await m.playNext({ items }); else await m.playLater({ items });
+    } catch (e) {
+      B.err = 'queue: ' + errText(e);
+    }
+  },
   seek(t) { if (B.m) B.m.seekToTime(Math.max(0, t)).catch(() => {}); },
   volume(v) { if (B.m) B.m.volume = Math.max(0, Math.min(1, v)); },
   shuffle(on) { if (B.m) B.m.shuffleMode = on ? 1 : 0; },

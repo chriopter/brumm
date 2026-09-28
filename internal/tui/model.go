@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"math/rand/v2"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -38,10 +40,12 @@ const (
 	secArtists
 	secSongs
 	secSearch
+	secQueue
+	numSections
 )
 
 var (
-	sectionNames = []string{"Playlists", "Albums", "Artists", "Songs", "Search"}
+	sectionNames = []string{"Playlists", "Albums", "Artists", "Songs", "Search", "Queue"}
 	sectionLists = []string{ipc.ListPlaylists, ipc.ListAlbums, ipc.ListArtists, ipc.ListSongs}
 )
 
@@ -63,6 +67,7 @@ type view struct {
 	sel     int
 	off     int
 	selAt   int // frame the selection last changed, for the marquee
+	qpos    int // for the queue view: the queue index of the first row
 }
 
 // songs returns the view's song ids and maps a row index to its position
@@ -103,6 +108,14 @@ type (
 	errMsg   struct{ err error }
 	tickMsg  struct{}
 	holdMsg  struct{ seq int } // space is still down after holdDelay
+	lovedMsg struct{ ids []string }
+	seekMsg  struct{ seq int } // the last seek key was a moment ago
+	typedMsg struct{ seq int } // the search query stopped changing
+	flashMsg string
+	openMsg  struct { // open an item found by a lookup, select a song in it
+		item apple.Item
+		song string
+	}
 )
 
 // Holding space this long previews the selected song instead of pausing.
@@ -121,10 +134,17 @@ type Model struct {
 	spec    []float64
 
 	section section
-	stacks  [5][]*view // one navigation stack per section
+	stacks  [numSections][]*view // one navigation stack per section
 
 	searching bool // the search box has focus
 	query     string
+	typedSeq  int
+
+	loved map[string]bool // favorite song ids seen so far
+
+	seekTo  float64 // where pending seek keys point
+	seekAt  time.Time
+	seekSeq int
 
 	coverURL string
 	cover    image.Image
@@ -173,11 +193,14 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		m.stacks[s] = []*view{{title: sectionNames[s], key: "list:" + sectionLists[s]}}
 	}
 	m.stacks[secSearch] = []*view{{title: "Search", key: "search:", loaded: true}}
+	m.stacks[secQueue] = []*view{{title: "Queue", key: "queue:"}}
+	m.loved = map[string]bool{}
 	return m
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), tick(), m.load(m.cur()), m.maybeFetchCover())
+	return tea.Batch(m.listen(), tick(), m.load(m.cur()), m.maybeFetchCover(),
+		m.send(ipc.Request{Cmd: ipc.CmdUpdate})) // look for an update on every start
 }
 
 func tick() tea.Cmd {
@@ -238,6 +261,8 @@ func (m *Model) load(v *view) tea.Cmd {
 		req = ipc.Request{Cmd: ipc.CmdList, List: strings.TrimPrefix(v.key, "list:")}
 	case strings.HasPrefix(v.key, "search:") && v.key != "search:":
 		req = ipc.Request{Cmd: ipc.CmdSearch, Query: strings.TrimPrefix(v.key, "search:")}
+	case v.key == "queue:":
+		req = ipc.Request{Cmd: ipc.CmdQueue, Value: 500}
 	default:
 		return nil
 	}
@@ -268,7 +293,33 @@ func fill(v *view, reply ipc.Message) {
 		rows = append(rows, row{track: &reply.Tracks[i]})
 	}
 	v.rows, v.loaded, v.err = rows, true, nil
+	v.qpos = max(0, reply.Pos)
+	// An album opened from a link has no name yet; its songs carry it.
+	if v.item != nil && v.item.Kind == apple.KindAlbum && v.title == "Album" && len(reply.Tracks) > 0 {
+		v.title = reply.Tracks[0].Album
+	}
 	v.sel = min(v.sel, max(0, len(rows)-1))
+}
+
+// fetchLoved asks which songs of a view are favorites.
+func (m *Model) fetchLoved(v *view) tea.Cmd {
+	var ids []string
+	for _, r := range v.rows {
+		if r.track != nil && len(ids) < 1000 {
+			ids = append(ids, r.track.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	client := m.client
+	return func() tea.Msg {
+		reply, err := client.Do(ipc.Request{Cmd: ipc.CmdLoved, IDs: ids})
+		if err != nil {
+			return nil
+		}
+		return lovedMsg{reply.IDs}
+	}
 }
 
 func (m *Model) maybeFetchCover() tea.Cmd {
@@ -330,7 +381,46 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		fill(msg.v, msg.reply)
-		return m, m.maybeResume()
+		return m, tea.Batch(m.maybeResume(), m.fetchLoved(msg.v))
+	case lovedMsg:
+		for _, id := range msg.ids {
+			m.loved[id] = true
+		}
+	case seekMsg:
+		if msg.seq == m.seekSeq {
+			if d := m.state.Dur; d > 0 && m.seekTo >= d-1 {
+				return m, m.send(ipc.Request{Cmd: ipc.CmdNext})
+			}
+			return m, m.send(ipc.Request{Cmd: ipc.CmdSeek, Value: m.seekTo})
+		}
+	case typedMsg:
+		if msg.seq == m.typedSeq {
+			return m, m.runSearch(false)
+		}
+	case flashMsg:
+		m.setFlash(string(msg))
+	case openMsg:
+		it := msg.item
+		v := &view{title: it.Name, key: it.Key(), item: &it, loading: true}
+		m.stacks[m.section] = append(m.stack(), v)
+		client, song := m.client, msg.song
+		return m, func() tea.Msg {
+			reply, err := client.Do(ipc.Request{Cmd: ipc.CmdOpen, Item: v.item})
+			for i, t := range reply.Tracks {
+				if song != "" && (t.ID == song || strings.HasSuffix(t.ID, song)) {
+					v.sel = i
+				}
+			}
+			return loadedMsg{v, reply, err}
+		}
+	case tea.PasteMsg:
+		if m.searching {
+			m.query += strings.TrimSpace(msg.Content)
+			return m, m.typed()
+		}
+		// A pasted music.apple.com link opens right away.
+		m.query = strings.TrimSpace(msg.Content)
+		return m, m.runSearch(true)
 	case coverMsg:
 		if msg.url == m.coverURL {
 			m.cover = msg.img
@@ -400,7 +490,11 @@ func (m *Model) event(msg ipc.Message) tea.Cmd {
 	cmds := []tea.Cmd{m.listen()}
 	if msg.State != nil {
 		wasLoggedOut := m.state.Status == ipc.StatusLoggedOut
+		songChanged := msg.State.ID != m.state.ID
 		m.state, m.stateAt = *msg.State, time.Now()
+		if songChanged && m.section == secQueue && len(m.stack()) == 1 {
+			cmds = append(cmds, m.load(m.cur()))
+		}
 		if e := m.state.Err; e != "" && e != m.lastErr {
 			m.setFlash(e)
 		}
@@ -450,8 +544,16 @@ func (m *Model) feedSpectrum(in []int) {
 	}
 }
 
-// position extrapolates the playhead between state updates.
+// position extrapolates the playhead between state updates; right after a
+// seek it shows where the seek goes, so the bar never jumps back.
 func (m *Model) position() float64 {
+	if since := time.Since(m.seekAt); since < 1500*time.Millisecond {
+		p := m.seekTo
+		if m.state.Playing && since > 250*time.Millisecond {
+			p += (since - 250*time.Millisecond).Seconds()
+		}
+		return min(p, max(m.state.Dur, p))
+	}
 	p := m.state.Pos
 	if m.state.Playing {
 		p += time.Since(m.stateAt).Seconds()
@@ -466,6 +568,10 @@ func (m *Model) position() float64 {
 
 func (m *Model) switchTo(s section) tea.Cmd {
 	m.section, m.help = s, false
+	if s == secQueue {
+		m.stacks[secQueue] = m.stacks[secQueue][:1]
+		m.cur().loaded = false // always fresh
+	}
 	if s == secSearch && m.cur().key == "search:" {
 		m.searching = true
 	}
@@ -498,10 +604,146 @@ func (m *Model) activate() tea.Cmd {
 		it := *r.item
 		return m.push(&view{title: it.Name, key: it.Key(), item: &it})
 	}
+	if v.key == "queue:" {
+		return m.send(ipc.Request{Cmd: ipc.CmdJump, Value: float64(v.qpos + v.sel)})
+	}
 	ids, at := v.songs()
 	i := at[v.sel]
 	lo, hi := max(0, i-queueBefore), min(len(ids), i+queueAfter)
-	return m.send(ipc.Request{Cmd: ipc.CmdPlay, IDs: ids[lo:hi], Start: r.track.ID, Source: v.key})
+	window := ids[lo:hi]
+	if m.state.Shuffle && len(ids) > len(window) {
+		// Shuffle draws from the whole list, not just the songs around
+		// the chosen one: it first, then a random pick of the rest.
+		window = append([]string{r.track.ID}, sample(ids, r.track.ID, queueBefore+queueAfter-1)...)
+	}
+	return m.send(ipc.Request{Cmd: ipc.CmdPlay, IDs: window, Start: r.track.ID, Source: v.key})
+}
+
+// sample returns up to n ids in random order, leaving out skip.
+func sample(ids []string, skip string, n int) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != skip {
+			out = append(out, id)
+		}
+	}
+	rand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+	return out[:min(n, len(out))]
+}
+
+// seek moves the playhead to sec. Repeated seek keys collect into one
+// request, sent once they stop; the bar shows the target at once.
+func (m *Model) seek(sec float64) tea.Cmd {
+	if m.state.Dur <= 0 {
+		return nil
+	}
+	m.seekTo = max(0, min(sec, m.state.Dur))
+	m.seekAt = time.Now()
+	m.seekSeq++
+	seq := m.seekSeq
+	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return seekMsg{seq} })
+}
+
+// selectedTrack is the song under the cursor, or else the one playing.
+func (m *Model) selectedTrack() (id string, ok bool) {
+	v := m.cur()
+	if v.sel < len(v.rows) && v.rows[v.sel].track != nil {
+		return v.rows[v.sel].track.ID, true
+	}
+	return m.state.ID, m.state.ID != ""
+}
+
+// lookup opens what a song belongs to (CmdArtist, CmdAlbum).
+func (m *Model) lookup(cmd string) tea.Cmd {
+	id, ok := m.selectedTrack()
+	if !ok {
+		return nil
+	}
+	client := m.client
+	return func() tea.Msg {
+		reply, err := client.Do(ipc.Request{Cmd: cmd, Start: id})
+		if err != nil || len(reply.Items) == 0 {
+			return errMsg{fmt.Errorf("nothing found for this song")}
+		}
+		return albumMsg{item: reply.Items[0]}
+	}
+}
+
+// enqueue adds the selected song — or everything in the selected album or
+// playlist — to play next or at the end of the queue.
+func (m *Model) enqueue(next bool) tea.Cmd {
+	v := m.cur()
+	if v.sel >= len(v.rows) {
+		return nil
+	}
+	r, client := v.rows[v.sel], m.client
+	done := map[bool]string{true: "plays next", false: "added to the queue"}[next]
+	return func() tea.Msg {
+		var ids []string
+		if r.track != nil {
+			ids = []string{r.track.ID}
+		} else {
+			reply, err := client.Do(ipc.Request{Cmd: ipc.CmdOpen, Item: r.item})
+			if err != nil {
+				return errMsg{err}
+			}
+			for _, t := range reply.Tracks {
+				ids = append(ids, t.ID)
+			}
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		value := 0.0
+		if next {
+			value = 1
+		}
+		if _, err := client.Do(ipc.Request{Cmd: ipc.CmdEnqueue, IDs: ids, Value: value}); err != nil {
+			return errMsg{err}
+		}
+		return flashMsg(done)
+	}
+}
+
+// toggleLoved marks the selected (or playing) song as a favorite or not.
+func (m *Model) toggleLoved() tea.Cmd {
+	id, ok := m.selectedTrack()
+	if !ok {
+		return nil
+	}
+	on := !m.loved[id]
+	if on {
+		m.loved[id] = true
+	} else {
+		delete(m.loved, id)
+	}
+	m.setFlash(map[bool]string{true: "♥ favorite", false: "no longer a favorite"}[on])
+	value := 0.0
+	if on {
+		value = 1
+	}
+	return m.send(ipc.Request{Cmd: ipc.CmdLove, Start: id, Value: value})
+}
+
+// copyLink puts the song's music.apple.com link on the clipboard.
+func (m *Model) copyLink() tea.Cmd {
+	id, ok := m.selectedTrack()
+	if !ok {
+		return nil
+	}
+	client := m.client
+	return func() tea.Msg {
+		reply, err := client.Do(ipc.Request{Cmd: ipc.CmdLink, Start: id})
+		if err != nil {
+			return errMsg{err}
+		}
+		cmd := exec.Command("wl-copy")
+		cmd.Stdin = strings.NewReader(reply.Link)
+		if err := cmd.Run(); err != nil {
+			return errMsg{fmt.Errorf("copy: %w", err)}
+		}
+		return flashMsg("link copied")
+	}
 }
 
 // spaceDownKey starts a tap-or-hold: a tap toggles playback on release, a
@@ -683,12 +925,12 @@ func (m *Model) key(k string) tea.Cmd {
 		m.help = !m.help
 	case "L":
 		return func() tea.Msg { return loginMsg{login.Run(context.Background(), func(string) {})} }
-	case "1", "2", "3", "4", "5":
+	case "1", "2", "3", "4", "5", "6":
 		return m.switchTo(section(k[0] - '1'))
 	case "tab":
-		return m.switchTo((m.section + 1) % 5)
+		return m.switchTo((m.section + 1) % numSections)
 	case "shift+tab":
-		return m.switchTo((m.section + 4) % 5)
+		return m.switchTo((m.section + numSections - 1) % numSections)
 	case "/":
 		m.section, m.searching, m.help = secSearch, true, false
 	case "f":
@@ -702,7 +944,7 @@ func (m *Model) key(k string) tea.Cmd {
 		if k == "left" {
 			delta = -10
 		}
-		return m.send(ipc.Request{Cmd: ipc.CmdSeek, Value: max(0, m.position()+delta)})
+		return m.seek(m.position() + delta)
 	case "+", "=", "-":
 		delta := 0.05
 		if k == "-" {
@@ -737,6 +979,26 @@ func (m *Model) key(k string) tea.Cmd {
 		return m.jumpToPlaying()
 	case "a":
 		return m.openAlbum()
+	case "A":
+		return m.lookup(ipc.CmdArtist)
+	case "z", "Z":
+		return m.enqueue(k == "Z")
+	case "*":
+		return m.toggleLoved()
+	case "y":
+		return m.copyLink()
+	case "U":
+		if m.state.Update == "" {
+			return nil
+		}
+		m.setFlash("installing " + m.state.Update + "…")
+		client := m.client
+		return func() tea.Msg {
+			if _, err := client.Do(ipc.Request{Cmd: ipc.CmdUpdate, Value: 1}); err != nil {
+				return errMsg{err}
+			}
+			return flashMsg("updated — brumm restarts into it at the next pause or song change")
+		}
 	case "esc", "h", "backspace":
 		if m.help {
 			m.help = false
@@ -760,31 +1022,80 @@ func (m *Model) setVolume(v float64) tea.Cmd {
 	return m.send(ipc.Request{Cmd: ipc.CmdVolume, Value: v})
 }
 
-// searchKey edits the search box.
+// searchKey edits the search box; results follow the typing.
 func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.searching = false
+		return nil
 	case "enter":
 		m.searching = false
-		q := strings.TrimSpace(m.query)
-		if q == "" {
-			return nil
-		}
-		m.stacks[secSearch] = []*view{{title: "Search", key: "search:" + q}}
-		return m.load(m.cur())
+		return m.runSearch(true)
 	case "backspace":
 		if r := []rune(m.query); len(r) > 0 {
 			m.query = string(r[:len(r)-1])
+		}
+	case "ctrl+w":
+		q := strings.TrimRight(m.query, " ")
+		if i := strings.LastIndex(q, " "); i >= 0 {
+			m.query = q[:i+1]
+		} else {
+			m.query = ""
 		}
 	case "ctrl+u":
 		m.query = ""
 	case "ctrl+c":
 		return tea.Quit
+	case "down", "up":
+		m.searching = false // move into the results
+		return m.move(msg.String())
 	default:
+		if msg.Text == "" {
+			return nil
+		}
 		m.query += msg.Text
 	}
-	return nil
+	return m.typed()
+}
+
+// typed runs the search once the query rests for a moment.
+func (m *Model) typed() tea.Cmd {
+	m.typedSeq++
+	seq := m.typedSeq
+	return tea.Tick(350*time.Millisecond, func(time.Time) tea.Msg { return typedMsg{seq} })
+}
+
+// runSearch searches for the query — or opens it, if it is a
+// music.apple.com link. final is true for enter or a paste.
+func (m *Model) runSearch(final bool) tea.Cmd {
+	q := strings.TrimSpace(m.query)
+	m.section = secSearch
+	if it, song, ok := apple.ParseLink(q); ok {
+		if !final {
+			return nil
+		}
+		m.searching = false
+		m.stacks[secSearch] = m.stacks[secSearch][:1]
+		if it.ID == "" { // a song link: open its album
+			client := m.client
+			return func() tea.Msg {
+				reply, err := client.Do(ipc.Request{Cmd: ipc.CmdAlbum, Start: song})
+				if err != nil || len(reply.Items) == 0 {
+					return errMsg{fmt.Errorf("could not open that link")}
+				}
+				return openMsg{reply.Items[0], song}
+			}
+		}
+		return func() tea.Msg { return openMsg{it, song} }
+	}
+	if len([]rune(q)) < 2 {
+		return nil
+	}
+	if cur := m.stacks[secSearch][0]; cur.key == "search:"+q {
+		return nil // already showing it
+	}
+	m.stacks[secSearch] = []*view{{title: "Search", key: "search:" + q}}
+	return m.load(m.cur())
 }
 
 func (m *Model) move(k string) tea.Cmd {
@@ -853,7 +1164,7 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 		return m.key("m")
 	case g.bar.has(ms.X, ms.Y) && m.state.Dur > 0:
 		f := float64(ms.X-g.bar.x0) / float64(max(1, g.bar.x1-g.bar.x0-1))
-		return m.send(ipc.Request{Cmd: ipc.CmdSeek, Value: f * m.state.Dur})
+		return m.seek(f * m.state.Dur)
 	case g.list.has(ms.X, ms.Y):
 		v := m.cur()
 		idx := v.off + ms.Y - g.list.y0

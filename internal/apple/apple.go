@@ -3,9 +3,11 @@
 package apple
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -85,6 +87,45 @@ type resource struct {
 type page struct {
 	Next string     `json:"next"`
 	Data []resource `json:"data"`
+}
+
+// send makes a request with an optional JSON body and decodes the answer
+// into out when it is non-nil.
+func (c *Client) send(method, path string, body, out any) error {
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, base+path, rd)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.dev)
+	req.Header.Set("Music-User-Token", c.user)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return ErrUnauthorized
+	case resp.StatusCode == http.StatusNotFound && method == http.MethodDelete:
+		return nil // nothing to remove
+	case resp.StatusCode >= 300:
+		return fmt.Errorf("apple music: %s", resp.Status)
+	}
+	if out != nil && resp.StatusCode != http.StatusNoContent {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
 }
 
 // get fetches one document into out. Apple answers 404 for an empty
@@ -275,4 +316,126 @@ func (c *Client) Search(term string) (Results, error) {
 		Artists:   items(doc.Results["artists"].Data, KindArtist, true),
 		Playlists: items(doc.Results["playlists"].Data, KindPlaylist, true),
 	}, nil
+}
+
+// ratingPath is where a song's rating lives: library songs ("i.…") and
+// catalog songs have separate rating collections.
+func ratingPath(id string) string {
+	if strings.HasPrefix(id, "i.") {
+		return "/v1/me/ratings/library-songs"
+	}
+	return "/v1/me/ratings/songs"
+}
+
+// Loved returns which of ids the user marked as favorites (loved).
+func (c *Client) Loved(ids []string) (map[string]bool, error) {
+	loved := map[string]bool{}
+	groups := map[string][]string{}
+	for _, id := range ids {
+		groups[ratingPath(id)] = append(groups[ratingPath(id)], id)
+	}
+	for path, list := range groups {
+		for i := 0; i < len(list); i += 100 {
+			chunk := list[i:min(i+100, len(list))]
+			var doc struct {
+				Data []struct {
+					ID         string `json:"id"`
+					Attributes struct {
+						Value int `json:"value"`
+					} `json:"attributes"`
+				} `json:"data"`
+			}
+			found, err := c.get(path+"?ids="+url.QueryEscape(strings.Join(chunk, ",")), &doc)
+			if err != nil {
+				return loved, err
+			}
+			if !found {
+				continue
+			}
+			for _, r := range doc.Data {
+				if r.Attributes.Value == 1 {
+					loved[r.ID] = true
+				}
+			}
+		}
+	}
+	return loved, nil
+}
+
+// SetLoved marks a song as a favorite, or clears that.
+func (c *Client) SetLoved(id string, on bool) error {
+	path := ratingPath(id) + "/" + url.PathEscape(id)
+	if !on {
+		return c.send(http.MethodDelete, path, nil, nil)
+	}
+	body := map[string]any{"type": "rating", "attributes": map[string]int{"value": 1}}
+	return c.send(http.MethodPut, path, body, nil)
+}
+
+// ArtistOf finds the artist of a song, in the library or the catalog.
+func (c *Client) ArtistOf(songID string) (Item, error) {
+	id := url.PathEscape(songID)
+	catalog := !strings.HasPrefix(songID, "i.")
+	path := "/v1/me/library/songs/" + id + "/artists"
+	if catalog {
+		path = "/v1/catalog/" + c.Storefront() + "/songs/" + id + "/artists"
+	}
+	var p page
+	found, err := c.get(path, &p)
+	if err != nil {
+		return Item{}, err
+	}
+	if !found || len(p.Data) == 0 {
+		return Item{}, errors.New("no artist for this song")
+	}
+	return items(p.Data[:1], KindArtist, catalog)[0], nil
+}
+
+// Link is a song's public music.apple.com address.
+func (c *Client) Link(songID string) (string, error) {
+	id := url.PathEscape(songID)
+	path := "/v1/catalog/" + c.Storefront() + "/songs/" + id
+	if strings.HasPrefix(songID, "i.") {
+		path = "/v1/me/library/songs/" + id + "/catalog"
+	}
+	var doc struct {
+		Data []struct {
+			Attributes struct {
+				URL string `json:"url"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	found, err := c.get(path, &doc)
+	if err != nil {
+		return "", err
+	}
+	if !found || len(doc.Data) == 0 || doc.Data[0].Attributes.URL == "" {
+		return "", errors.New("this song has no public link")
+	}
+	return doc.Data[0].Attributes.URL, nil
+}
+
+// ParseLink resolves a music.apple.com link to what it points at: an album
+// or playlist to open, and the song within it, if the link names one.
+func ParseLink(link string) (it Item, songID string, ok bool) {
+	u, err := url.Parse(strings.TrimSpace(link))
+	if err != nil || !strings.HasSuffix(u.Host, "music.apple.com") {
+		return Item{}, "", false
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 3 {
+		return Item{}, "", false
+	}
+	id := parts[len(parts)-1]
+	switch parts[1] {
+	case "album":
+		return Item{Kind: KindAlbum, ID: id, Name: "Album", Catalog: true}, u.Query().Get("i"), true
+	case "playlist":
+		return Item{Kind: KindPlaylist, ID: id, Name: "Playlist", Catalog: true}, "", true
+	case "artist":
+		return Item{Kind: KindArtist, ID: id, Name: "Artist", Catalog: true}, "", true
+	case "song":
+		return Item{}, id, true
+	}
+	return Item{}, "", false
 }

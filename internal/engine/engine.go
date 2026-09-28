@@ -16,6 +16,7 @@ import (
 
 	"github.com/chromedp/chromedp"
 
+	"github.com/chriopter/brumm/internal/apple"
 	"github.com/chriopter/brumm/internal/chrome"
 )
 
@@ -182,6 +183,34 @@ func (e *Engine) PlayIDs(ids []string, startID, source string, startAt float64) 
 		return err
 	}
 	return e.call(`brumm.playIds(%s, %q, %q, %f)`, list, startID, source, startAt)
+}
+
+// Queue is the current song and what follows it.
+type Queue struct {
+	Pos   int           `json:"pos"`
+	Items []apple.Track `json:"items"`
+}
+
+func (e *Engine) Queue(n int) (Queue, error) {
+	var raw string
+	var q Queue
+	if err := e.eval(fmt.Sprintf(`window.brumm && brumm.queue ? brumm.queue(%d) : "{}"`, n), &raw); err != nil {
+		return q, err
+	}
+	err := json.Unmarshal([]byte(raw), &q)
+	return q, err
+}
+
+// Jump plays the queue item at index i.
+func (e *Engine) Jump(i int) error { return e.call(`brumm.jump(%d)`, i) }
+
+// Enqueue adds songs right after the current one (next) or at the end.
+func (e *Engine) Enqueue(ids []string, next bool) error {
+	list, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return e.call(`brumm.enqueue(%s, %t)`, list, next)
 }
 
 // Alive reports whether Chrome is still there.

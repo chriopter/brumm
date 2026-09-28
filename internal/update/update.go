@@ -68,8 +68,17 @@ func Managed(version string) bool {
 	return self == bin
 }
 
+// testBase, when set, replaces GitHub for tests: BRUMM_UPDATE_BASE/latest
+// answers the newest tag, BRUMM_UPDATE_BASE/<tag>/<file> the release files.
+// Signatures are checked all the same.
+func testBase() string { return os.Getenv("BRUMM_UPDATE_BASE") }
+
 // Latest returns the newest release's tag.
 func Latest() (string, error) {
+	if b := testBase(); b != "" {
+		tag, err := fetch(b + "/latest")
+		return strings.TrimSpace(string(tag)), err
+	}
 	resp, err := client.Get("https://api.github.com/repos/" + repo + "/releases/latest")
 	if err != nil {
 		return "", err
@@ -129,6 +138,9 @@ func Update(current string) (string, bool, error) {
 // SHA256SUMS and unpacks it into a temporary directory.
 func download(tag string) (string, error) {
 	base := "https://github.com/" + repo + "/releases/download/" + tag + "/"
+	if b := testBase(); b != "" {
+		base = b + "/" + tag + "/"
+	}
 	want, err := checksum(base + sums)
 	if err != nil {
 		return "", err

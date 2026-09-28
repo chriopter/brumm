@@ -66,7 +66,11 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 	case st.Length > 1 && st.Index >= 0:
 		tag = sDim.Render(fmt.Sprintf("%d/%d", st.Index+1, st.Length))
 	}
-	add(spread(sBold.Render(title), tag, colW))
+	heading := sBold.Render(title)
+	if st.Preview == nil && m.loved[st.ID] {
+		heading += "  " + sErr.Render("♥")
+	}
+	add(spread(heading, tag, colW))
 	meta := artist
 	if album != "" && album != title {
 		meta += sDim.Render("  ·  " + album)
