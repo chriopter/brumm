@@ -29,6 +29,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # tags and history for the release notes
 
       - name: Pick version
         id: version
@@ -100,5 +102,24 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          # Commits go straight to main, so list their titles; GitHub's
+          # generated notes only summarize pull requests.
+          prev=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          if [[ -n $prev ]] && git rev-parse -q --verify "$prev^{commit}" >/dev/null; then
+            changes=$(git log --no-merges --format='- %s' "$prev..$GITHUB_SHA")
+          else
+            changes=$(git log --no-merges --format='- %s' "$GITHUB_SHA")
+          fi
+          {
+            if [[ -n $changes ]]; then
+              echo "## Changes"
+              echo
+              echo "$changes"
+            else
+              echo "No changes since $prev — a fresh build so the embedded Apple Music token stays valid."
+            fi
+            echo
+            echo "**Update:** press <kbd>U</kbd> when brumm offers it, or run \`brumm update\`."
+          } > notes.md
           gh release create "$TAG" brumm-linux-amd64.tar.gz install.sh SHA256SUMS SHA256SUMS.sig \
-            --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
