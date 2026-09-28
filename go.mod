@@ -1,6 +1,6 @@
 module github.com/chriopter/brumm
 
-go 1.26
+go 1.26.0
 
 require (
 	charm.land/bubbletea/v2 v2.0.6
@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/chromedp/chromedp v0.16.0
 	github.com/godbus/dbus/v5 v5.2.2
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
