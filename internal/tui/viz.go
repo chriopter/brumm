@@ -666,14 +666,14 @@ func (v *visualizer) drawFire(spec []float64, steps int) {
 		v.heatW, v.heatH = w, H
 	}
 	v.fireSd = vizResample(v.fireSd, spec, w)
-	cool := float32(2.2 / float64(h))
+	cool := float32(2.0 / float64(h))
 	for s := 0; s < min(steps, 3); s++ {
 		// seed the two bottom rows
 		for x := 0; x < w; x++ {
 			e := v.fireSd[x]
-			e = math.Sqrt(e) * (0.75 + 0.5*v.rf())
-			if e > 1.2 {
-				e = 1.2
+			e = math.Sqrt(e) * (0.85 + 0.65*v.rf())
+			if e > 1.4 {
+				e = 1.4
 			}
 			v.heat[(H-1)*w+x] = float32(e)
 			v.heat[(H-2)*w+x] = float32(e * (0.85 + 0.15*v.rf()))
@@ -746,7 +746,7 @@ func (v *visualizer) drawWaterfall(spec []float64, steps int) {
 		v.wfHead = (v.wfHead + 1) % h
 		row := v.wf[v.wfHead*w : (v.wfHead+1)*w]
 		for x, b := range v.bands {
-			l := int(math.Sqrt(b)*9.0 - 0.6)
+			l := int((0.55*b+0.45*math.Sqrt(b))*9.4 - 0.5)
 			row[x] = uint8(min(max(l, 0), 8))
 		}
 	}
