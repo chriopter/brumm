@@ -55,6 +55,11 @@ const (
 	colMin   = 30
 	stagePad = 2
 	listTop  = 3 // list rows start this far below the panel's top border
+
+	// Stage lines under the cover: title, meta, gap, spectrum, gap,
+	// progress, gap, controls.
+	specRows   = 4
+	stageBelow = 3 + specRows + 4
 )
 
 // rect is a clickable screen area, x1/y1 exclusive.
@@ -70,9 +75,14 @@ type geometry struct {
 }
 
 func (m *Model) View() tea.View {
-	v := tea.NewView(m.render())
+	content := m.render()
+	if m.full && m.width >= 20 && m.height >= 6 {
+		content = m.fullscreen()
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	v.KeyboardEnhancements.ReportEventTypes = true // hold space to preview
 	v.WindowTitle = "brumm"
 	return v
 }
@@ -89,8 +99,7 @@ func (m *Model) render() string {
 	bodyH := m.height - bodyTop - 2 // blank line + footer
 
 	// The stage is one column as wide as the cover; the list gets the rest.
-	const below = 11 // gap, title, meta, gap, spectrum×3, progress, gap, controls, gap
-	coverH := max(0, bodyH-1-below)
+	coverH := max(0, bodyH-1-stageBelow)
 	colW := int(math.Round(float64(coverH) * m.cellAspect))
 	if maxCol := inner - navMin - 2 - 2*stagePad; colW > maxCol {
 		colW = maxCol
@@ -127,7 +136,7 @@ func (m *Model) bear() string {
 }
 
 func (m *Model) footer() string {
-	keys := [][2]string{{"enter", "play"}, {"esc", "back"}, {"/", "search"}, {"?", "keys"}}
+	keys := [][2]string{{"enter", "play"}, {"space", "hold to preview"}, {"esc", "back"}, {"f", "visualizer"}, {"?", "keys"}}
 	if m.state.Status == ipc.StatusLoggedOut {
 		keys = append([][2]string{{"L", "sign in"}}, keys...)
 	}
@@ -156,13 +165,13 @@ func (m *Model) footer() string {
 // ── browser panel ───────────────────────────────────────────────────────
 
 func (m *Model) nav(w, h, x, y int) string {
-	inner := w - 6
-	cx := x + 3 // first content column
+	inner := w - 3 // between the borders, less one cell of right padding
+	tx0 := x + 3   // text column: under the breadcrumb, after the gutter
 	v := m.cur()
 
 	// Tabs: the active one where-you-are colored, the rest dim.
 	var tabs []string
-	tx := cx
+	tx := tx0
 	for i, name := range sectionNames {
 		label := sDim.Render(name)
 		if section(i) == m.section {
@@ -172,32 +181,32 @@ func (m *Model) nav(w, h, x, y int) string {
 		tabs = append(tabs, label)
 		tx += len(name) + 3
 	}
-	lines := []string{strings.Join(tabs, "   "), ""}
+	lines := []string{"  " + strings.Join(tabs, "   "), ""}
 
 	rows := h - 2 - len(lines) - 1
 	top := y + 1 + len(lines)
 	if m.section == secSearch && len(m.stack()) == 1 {
-		lines = append(lines, m.searchBox(inner), "")
-		m.geo.search = rect{cx, top, cx + inner, top + 1}
+		lines = append(lines, "  "+m.searchBox(inner-2), "")
+		m.geo.search = rect{tx0, top, x + w - 1, top + 1}
 		rows -= 2
 		top += 2
 	}
 
-	spin := spinner[m.frame%len(spinner)]
+	msg := func(s string) []string { return centered(s, inner, rows) }
 	switch {
 	case v.err != nil && len(v.rows) == 0:
-		lines = append(lines, centered(sErr.Render(v.err.Error()), inner, rows)...)
+		lines = append(lines, msg(sErr.Render(v.err.Error()))...)
 	case !v.loaded && m.state.Status == ipc.StatusLoggedOut:
-		lines = append(lines, centered(sDim.Render("sign in to see your library"), inner, rows)...)
+		lines = append(lines, msg(sDim.Render("sign in to see your library"))...)
 	case !v.loaded:
-		lines = append(lines, centered(sDim.Render(spin+"  loading"), inner, rows)...)
+		lines = append(lines, msg(sDim.Render(spinner[m.frame%len(spinner)]+"  loading"))...)
 	case v.key == "search:":
-		lines = append(lines, centered(sDim.Render("search Apple Music: type and press ")+sKey.Render("enter"), inner, rows)...)
+		lines = append(lines, msg(sDim.Render("search Apple Music: type and press ")+sKey.Render("enter"))...)
 	case len(v.rows) == 0:
-		lines = append(lines, centered(sDim.Render("nothing here"), inner, rows)...)
+		lines = append(lines, msg(sDim.Render("nothing here"))...)
 	default:
 		v.off = scroll(v.sel, v.off, rows)
-		m.geo.list = rect{cx, top, cx + inner, top + rows}
+		m.geo.list = rect{x + 1, top, x + w - 1, top + rows}
 		for i := v.off; i < len(v.rows) && i < v.off+rows; i++ {
 			lines = append(lines, m.row(v, i, inner))
 		}
@@ -211,7 +220,7 @@ func (m *Model) nav(w, h, x, y int) string {
 	title := strings.Join(crumb, " / ")
 	if len(crumb) > 1 {
 		parent := strings.Join(crumb[:len(crumb)-1], " / ")
-		m.geo.crumb = rect{x + 3, y, x + 3 + lipgloss.Width(parent), y + 1}
+		m.geo.crumb = rect{tx0, y, tx0 + lipgloss.Width(parent), y + 1}
 	}
 	pos := ""
 	if n := len(v.rows); n > 0 && v.loaded {
@@ -232,8 +241,8 @@ func (m *Model) searchBox(w int) string {
 	return sHere.Render(icSearch) + "  " + ansi.TruncateLeft(q, max(0, lipgloss.Width(q)-(w-5)), "…") + cursor
 }
 
-// row renders one list line: gutter, marker, text (the selected row
-// scrolls when it does not fit), and a right-aligned detail.
+// row renders one list line: the selection gutter, the text (the
+// selected row scrolls when it does not fit) and a right-aligned detail.
 func (m *Model) row(v *view, i, w int) string {
 	r := v.rows[i]
 	sel := i == v.sel
@@ -242,28 +251,25 @@ func (m *Model) row(v *view, i, w int) string {
 		gutter = sHere.Render("▌") + " "
 	}
 
-	var mark, text, detail string
+	var text, detail string
 	if t := r.track; t != nil {
-		playing := t.ID != "" && t.ID == m.state.ID
-		mark = sDim.Render(fmt.Sprintf("%3d", i+1))
 		title := t.Title
-		switch {
+		dur := sDim.Render(fmt.Sprintf("%5s", clock(t.Duration)))
+		switch playing := t.ID != "" && t.ID == m.state.ID; {
 		case playing:
-			mark = sPlays.Render(m.miniEQ())
 			title = sPlays.Bold(sel).Render(t.Title)
+			dur = sPlays.Render(m.miniEQ()) + " " + dur
 		case sel:
 			title = sBold.Render(t.Title)
 		}
 		text = title + "  " + sDim.Render(t.Artist)
-		detail = sDim.Render(fmt.Sprintf("%5s", clock(t.Duration)))
+		detail = dur
 	} else {
 		it := r.item
 		icon := map[string]string{apple.KindPlaylist: icPlaylist, apple.KindAlbum: icAlbum, apple.KindArtist: icArtist}[it.Kind]
-		mark = "  " + sDim.Render(icon)
-		name := it.Name
+		name := sDim.Render(icon) + "  " + it.Name
 		if sel {
-			mark = "  " + sHere.Render(icon)
-			name = sBold.Render(name)
+			name = sHere.Render(icon) + "  " + sBold.Render(it.Name)
 		}
 		text = name
 		if it.Artist != "" {
@@ -273,19 +279,19 @@ func (m *Model) row(v *view, i, w int) string {
 			detail = sPlays.Render("♪")
 		}
 	}
-	avail := w - 2 - 3 - 2 - 2 - lipgloss.Width(detail)
+	avail := w - 2 - 2 - lipgloss.Width(detail)
 	if sel {
 		text = marquee(text, avail, m.frame-v.selAt)
 	} else {
 		text = ansi.Truncate(text, avail, "…")
 	}
-	return gutter + mark + "  " + pad(text, avail) + "  " + detail
+	return gutter + pad(text, avail) + "  " + detail
 }
 
 // miniEQ is a three-bar level meter for the playing row.
 func (m *Model) miniEQ() string {
 	if !m.state.Playing || len(m.spec) == 0 {
-		return " ♪ "
+		return "  ♪"
 	}
 	ramp := []rune("▁▂▃▄▅▆▇█")
 	var sb strings.Builder
@@ -321,37 +327,33 @@ type stageLine struct {
 
 func (m *Model) stage(colW, coverH, h, x, y int) string {
 	st := m.state
-	var lines []stageLine
-	add := func(s string) { lines = append(lines, stageLine{text: s}) }
+	var top, bottom []stageLine
+	add := func(s string) { top = append(top, stageLine{text: s}) }
+	playing := st.Title != "" || st.Preview != nil
 	switch {
 	case m.help:
-		lines = m.helpLines()
+		top = m.helpLines()
 	case st.Status == ipc.StatusLoggedOut:
 		add(sHere.Render("ʕ•ᴥ•ʔ"))
 		add("")
 		add(sBold.Render("Sign in to Apple Music"))
 		add(sDim.Render("press ") + sKey.Render("L") + sDim.Render(" to open the sign-in page"))
-	case st.Title == "":
+	case !playing:
 		add(sHere.Render("ʕ-ᴥ-ʔ zZ"))
 		add("")
 		add(sBold.Render("nothing playing"))
 		add(sDim.Render("pick something and press ") + sKey.Render("enter"))
 	default:
-		lines = m.nowPlaying(colW, coverH)
+		top, bottom = m.nowPlaying(colW, coverH)
 	}
 
 	out := make([]string, h)
 	for i := range out {
 		out[i] = strings.Repeat(" ", colW)
 	}
-	top := 1 // align with the tabs row
-	if st.Title == "" && !m.help {
-		top = max(1, (h-len(lines))/2)
-	}
-	for i, l := range lines {
-		row := top + i
-		if row >= h {
-			break
+	put := func(row int, l stageLine) {
+		if row < 0 || row >= h {
+			return
 		}
 		text := ansi.Truncate(l.text, colW, "…")
 		left := 0
@@ -363,55 +365,77 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 			l.hit(x+left, y+row)
 		}
 	}
+	if bottom == nil {
+		// Idle and help: centered in the stage.
+		start := max(0, (h-len(top))/2)
+		if m.help {
+			start = 1
+		}
+		for i, l := range top {
+			put(start+i, l)
+		}
+	} else {
+		// Playing: the cover's top meets the panel's top border, the
+		// controls sit on its bottom border.
+		for i, l := range top {
+			put(i, l)
+		}
+		for i, l := range bottom {
+			put(h-len(bottom)+i, l)
+		}
+	}
 	return strings.Join(out, "\n")
 }
 
-func (m *Model) nowPlaying(colW, coverH int) []stageLine {
+// nowPlaying returns the stage in two parts: the cover (top-anchored) and
+// the title, spectrum, progress and controls (bottom-anchored).
+func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 	st := m.state
-	var out []stageLine
-	add := func(s string) { out = append(out, stageLine{text: s}) }
+	add := func(s string) { bottom = append(bottom, stageLine{text: s}) }
 
 	if coverH >= 6 {
 		coverW := min(colW, int(math.Round(float64(coverH)*m.cellAspect)))
 		for _, l := range m.coverLines(art.Size{Width: coverW, Height: coverH}) {
-			out = append(out, stageLine{text: l, center: true})
+			top = append(top, stageLine{text: l, center: true})
 		}
-		add("")
 	}
-	add(sBold.Render(st.Title))
-	meta := st.Artist
-	if st.Album != "" && st.Album != st.Title {
-		meta += sDim.Render("  ·  " + st.Album)
+	title, artist, album := st.Title, st.Artist, st.Album
+	if p := st.Preview; p != nil {
+		title, artist, album = p.Title, p.Artist, ""
+	}
+	if st.Preview != nil {
+		add(sPill.Render(" preview ") + "  " + sBold.Render(title))
+	} else {
+		add(sBold.Render(title))
+	}
+	meta := artist
+	if album != "" && album != title {
+		meta += sDim.Render("  ·  " + album)
 	}
 	add(meta)
 	add("")
-	for _, l := range m.spectrum(colW, 3) {
+	for _, l := range m.spectrum(colW, specRows) {
 		add(l)
 	}
-
+	add("")
 	left, right := clock(m.position())+"  ", "  "+clock(st.Dur)
 	barLen := colW - lipgloss.Width(left) - lipgloss.Width(right)
-	out = append(out, stageLine{text: m.progress(colW), hit: func(x, y int) {
+	bottom = append(bottom, stageLine{text: m.progress(colW), hit: func(x, y int) {
 		m.geo.bar = rect{x + lipgloss.Width(left), y, x + lipgloss.Width(left) + barLen, y + 1}
 	}})
 	add("")
-	out = append(out, m.controls(colW))
-	return out
+	bottom = append(bottom, m.controls(colW))
+	return top, bottom
 }
 
-// controls: transport on the left with play as the one filled button,
-// the playback modes on the right, lit when on.
+// controls: shuffle, previous, play, next and repeat centered under the
+// cover, play the one filled button; volume at the right edge.
 func (m *Model) controls(w int) stageLine {
 	st := m.state
 	playIcon := icPlay
 	if st.Playing {
 		playIcon = icPause
 	}
-	prev := sDim.Render(" " + icPrev + " ")
-	play := sPlays.Render("") + sPill.Render(" "+playIcon+" ") + sPlays.Render("")
-	next := sDim.Render(" " + icNext + " ")
-	transport := prev + " " + play + " " + next
-
 	lit := func(on bool, s string) string {
 		if on {
 			return s
@@ -426,20 +450,26 @@ func (m *Model) controls(w int) stageLine {
 	if st.Volume == 0 {
 		volIcon = icMuted
 	}
-	shuffle := lit(st.Shuffle, icShuffle)
-	repeat := lit(st.Repeat != 0, repeatIcon)
+	const gap = "   "
+	play := sPlays.Render("") + sPill.Render(" "+playIcon+" ") + sPlays.Render("")
+	group := lit(st.Shuffle, icShuffle) + gap + icPrev + gap + play + gap + icNext + gap + lit(st.Repeat != 0, repeatIcon)
+	gw := lipgloss.Width(group)
 	volume := sDim.Render(fmt.Sprintf("%s %d", volIcon, int(math.Round(st.Volume*100))))
-	modes := shuffle + "   " + repeat + "   " + volume
-
-	gap := max(2, w-lipgloss.Width(transport)-lipgloss.Width(modes))
-	return stageLine{text: transport + strings.Repeat(" ", gap) + modes, hit: func(x, y int) {
-		m.geo.prev = rect{x, y, x + 3, y + 1}
-		m.geo.play = rect{x + 4, y, x + 9, y + 1}
-		m.geo.next = rect{x + 10, y, x + 13, y + 1}
-		mx := x + lipgloss.Width(transport) + gap
-		m.geo.shuffle = rect{mx - 1, y, mx + 2, y + 1}
-		m.geo.repeat = rect{mx + 3, y, mx + 6, y + 1}
-		m.geo.volume = rect{mx + 7, y, mx + 7 + lipgloss.Width(volume), y + 1}
+	start := max(0, (w-gw)/2)
+	line := strings.Repeat(" ", start) + group
+	if room := w - lipgloss.Width(line) - lipgloss.Width(volume); room >= 2 {
+		line += strings.Repeat(" ", room) + volume
+	}
+	return stageLine{text: line, hit: func(x, y int) {
+		// Cells: shuffle 0, prev 4, play 8–12, next 16, repeat 20.
+		x += start
+		m.geo.shuffle = rect{x - 1, y, x + 2, y + 1}
+		m.geo.prev = rect{x + 3, y, x + 6, y + 1}
+		m.geo.play = rect{x + 7, y, x + 14, y + 1}
+		m.geo.next = rect{x + 15, y, x + 18, y + 1}
+		m.geo.repeat = rect{x + 19, y, x + 22, y + 1}
+		vx := x - start + w - lipgloss.Width(volume)
+		m.geo.volume = rect{vx, y, vx + lipgloss.Width(volume), y + 1}
 	}}
 }
 
@@ -499,17 +529,18 @@ func (m *Model) spectrum(w, rows int) []string {
 	return out
 }
 
+// progress is one rule in two colors — played and to come — with the
+// times at its ends, like a meter in btop rather than a web slider.
 func (m *Model) progress(w int) string {
 	pos, dur := m.position(), m.state.Dur
 	left, right := clock(pos)+"  ", "  "+clock(dur)
 	bar := w - lipgloss.Width(left) - lipgloss.Width(right)
 	done := 0
 	if dur > 0 {
-		done = int(float64(bar-1) * pos / dur)
+		done = min(bar, int(math.Round(float64(bar)*pos/dur)))
 	}
-	return sDim.Render(left) +
-		sHere.Render(strings.Repeat("━", done)+"●") +
-		sDim.Render(strings.Repeat("─", max(0, bar-done-1))+right)
+	return sDim.Render(left) + sHere.Render(strings.Repeat("━", done)) +
+		sDim.Render(strings.Repeat("━", bar-done)+right)
 }
 
 func (m *Model) helpLines() []stageLine {
@@ -517,9 +548,9 @@ func (m *Model) helpLines() []stageLine {
 		name string
 		keys [][2]string
 	}{
-		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"1–5 tab", "sections"}, {"/", "search"}, {"c", "go to what's playing"}}},
-		{"play", [][2]string{{"space", "play / pause"}, {"n p", "next / previous"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
-		{"brumm", [][2]string{{"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}}},
+		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"1–5 tab", "sections"}, {"/", "search"}, {"a", "go to the song's album"}, {"c", "go to what's playing"}}},
+		{"play", [][2]string{{"space", "play / pause"}, {"hold space", "preview the selected song"}, {"n p", "next / previous"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
+		{"brumm", [][2]string{{"f", "fullscreen visualizer (v: next)"}, {"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}}},
 	}
 	var out []stageLine
 	for i, g := range groups {
@@ -528,7 +559,7 @@ func (m *Model) helpLines() []stageLine {
 		}
 		out = append(out, stageLine{text: sBold.Render(g.name)})
 		for _, kv := range g.keys {
-			out = append(out, stageLine{text: sKey.Render(fmt.Sprintf("%-9s", kv[0])) + "  " + sDim.Render(kv[1])})
+			out = append(out, stageLine{text: sKey.Render(fmt.Sprintf("%-11s", kv[0])) + "  " + sDim.Render(kv[1])})
 		}
 	}
 	return append(out, stageLine{}, stageLine{text: sDim.Render("mouse: click to open or play, right click to go back")})
@@ -552,6 +583,7 @@ func (m *Model) miniPlayer(w int) []string {
 
 // box draws a rounded panel of exactly w×h cells: the breadcrumb set into
 // the top border (all but its last part dimmed) and a label in the bottom.
+// Lines start right after the left border; they carry their own gutter.
 func box(title string, crumbed bool, label string, lines []string, w, h int) string {
 	b := sDim
 	t := ansi.Truncate(title, max(1, w-8), "…")
@@ -562,21 +594,22 @@ func box(title string, crumbed bool, label string, lines []string, w, h int) str
 	}
 	top := b.Render("╭─ ") + t + " "
 	out := []string{top + b.Render(strings.Repeat("─", max(0, w-1-lipgloss.Width(top)))+"╮")}
+	inner := w - 3
 	for i := range h - 2 {
 		line := ""
 		if i < len(lines) {
 			line = lines[i]
 		}
-		out = append(out, b.Render("│")+"  "+pad(ansi.Truncate(line, w-6, "…"), w-6)+"  "+b.Render("│"))
+		out = append(out, b.Render("│")+pad(ansi.Truncate(line, inner, "…"), inner)+" "+b.Render("│"))
 	}
-	bottom := b.Render("╰")
+	bottom := "╰" + strings.Repeat("─", w-2) + "╯"
 	if label != "" {
-		lab := " " + sDim.Render(label) + " "
-		bottom += b.Render(strings.Repeat("─", max(0, w-4-lipgloss.Width(lab)))) + lab + b.Render("─╯")
-	} else {
-		bottom += b.Render(strings.Repeat("─", w-2) + "╯")
+		lab := " " + label + " "
+		fill := max(0, w-3-lipgloss.Width(lab))
+		out = append(out, b.Render("╰"+strings.Repeat("─", fill))+sDim.Render(lab)+b.Render("─╯"))
+		return strings.Join(out, "\n")
 	}
-	return strings.Join(append(out, bottom), "\n")
+	return strings.Join(append(out, b.Render(bottom)), "\n")
 }
 
 func pad(s string, w int) string {
@@ -602,4 +635,30 @@ func scroll(sel, off, rows int) int {
 func clock(sec float64) string {
 	s := int(sec)
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
+}
+
+// fullscreen is the visualizer over the whole terminal with one quiet line
+// of what is playing.
+func (m *Model) fullscreen() string {
+	// The stage's spectrum is tuned hot for a few rows; spread it out so
+	// full-height bars mean loud, not merely audible.
+	if len(m.vizSpec) != len(m.spec) {
+		m.vizSpec = make([]float64, len(m.spec))
+	}
+	for i, v := range m.spec {
+		m.vizSpec[i] = v * v * v
+	}
+	lines := m.viz.render(m.vizStyle, m.vizSpec, m.wave, m.width, m.height-1, m.frame, m.state.Playing)
+	st := m.state
+	info := sDim.Render("nothing playing")
+	if st.Title != "" {
+		info = sBold.Render(st.Title) + sDim.Render("  "+st.Artist+"  ·  "+clock(m.position())+" / "+clock(st.Dur))
+	}
+	hint := sDim.Render(vizNames[m.vizStyle]+"  ") + sKey.Render("v") + sDim.Render(" next  ") + sKey.Render("f") + sDim.Render(" close")
+	if m.flash != "" {
+		hint = sDim.Render(m.flash+"   ") + hint
+	}
+	gap := max(1, m.width-4-lipgloss.Width(info)-lipgloss.Width(hint))
+	status := "  " + ansi.Truncate(info+strings.Repeat(" ", gap)+hint, m.width-4, "…")
+	return strings.Join(append(lines, status), "\n")
 }

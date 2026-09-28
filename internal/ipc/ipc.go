@@ -24,6 +24,8 @@ const (
 	CmdOpen      = "open"      // Item → Tracks (playlist, album) or Items (artist)
 	CmdSearch    = "search"    // Query → Results
 	CmdPlay      = "play"      // IDs, Start, Source
+	CmdAlbum     = "album"     // Start: a song id → Items: its album
+	CmdPreview   = "preview"   // Start: a song id; Value 0 stops the preview
 	CmdToggle    = "toggle"
 	CmdNext      = "next"
 	CmdPrev      = "prev"
@@ -54,6 +56,7 @@ type Request struct {
 	Source string      `json:"source,omitempty"`
 	Value  float64     `json:"value,omitempty"`
 	Bands  int         `json:"bands,omitempty"`
+	Wave   int         `json:"wave,omitempty"` // waveform samples wanted per frame
 }
 
 // Status is the daemon's lifecycle phase.
@@ -80,6 +83,7 @@ type Message struct {
 	Results  *apple.Results `json:"results,omitempty"`
 	State    *State         `json:"state,omitempty"`
 	Spectrum []int          `json:"spectrum,omitempty"`
+	Wave     []int          `json:"wave,omitempty"`
 	Library  bool           `json:"library,omitempty"` // the cached library changed
 }
 
@@ -127,7 +131,7 @@ func (c *Client) read() {
 			}
 			continue
 		}
-		if m.Spectrum != nil && m.State == nil {
+		if (m.Spectrum != nil || m.Wave != nil) && m.State == nil {
 			select {
 			case c.events <- m:
 			default: // a busy reader drops spectrum frames, never state

@@ -41,6 +41,14 @@ type State struct {
 	Volume    float64 `json:"volume"`
 	Shuffle   bool    `json:"shuffle"`
 	Repeat    int     `json:"repeat"` // 0 off, 1 one, 2 all
+	Preview   *Clip   `json:"preview,omitempty"`
+}
+
+// Clip is a song being previewed.
+type Clip struct {
+	Title   string `json:"title"`
+	Artist  string `json:"artist"`
+	Artwork string `json:"artwork"`
 }
 
 type Engine struct {
@@ -155,14 +163,25 @@ func (e *Engine) Spectrum(n int) ([]int, error) {
 	return bands, err
 }
 
-// PlayIDs queues songs by id and starts at startID; source names the list
-// they came from so clients can mark it.
-func (e *Engine) PlayIDs(ids []string, startID, source string) error {
+// Wave returns n waveform samples, -100…100.
+func (e *Engine) Wave(n int) ([]int, error) {
+	var samples []int
+	err := e.eval(fmt.Sprintf(`window.brumm && brumm.wave ? brumm.wave(%d) : []`, n), &samples)
+	return samples, err
+}
+
+// Preview plays a song's 30-second clip over a paused queue.
+func (e *Engine) Preview(id string) error { return e.call(`brumm.preview(%q)`, id) }
+func (e *Engine) StopPreview() error      { return e.call(`brumm.stopPreview()`) }
+
+// PlayIDs queues songs by id and starts at startID, startAt seconds in;
+// source names the list they came from so clients can mark it.
+func (e *Engine) PlayIDs(ids []string, startID, source string, startAt float64) error {
 	list, err := json.Marshal(ids)
 	if err != nil {
 		return err
 	}
-	return e.call(`brumm.playIds(%s, %q, %q)`, list, startID, source)
+	return e.call(`brumm.playIds(%s, %q, %q, %f)`, list, startID, source, startAt)
 }
 
 // Alive reports whether Chrome is still there.

@@ -232,6 +232,26 @@ func (c *Client) ArtistAlbums(it Item) ([]Item, error) {
 	return items(rs, KindAlbum, it.Catalog), err
 }
 
+// AlbumOf finds the album a song belongs to: in the library for library
+// songs, in the catalog otherwise.
+func (c *Client) AlbumOf(songID string) (Item, error) {
+	id := url.PathEscape(songID)
+	catalog := !strings.HasPrefix(songID, "i.")
+	path := "/v1/me/library/songs/" + id + "/albums"
+	if catalog {
+		path = "/v1/catalog/" + c.Storefront() + "/songs/" + id + "/albums"
+	}
+	var p page
+	found, err := c.get(path, &p)
+	if err != nil {
+		return Item{}, err
+	}
+	if !found || len(p.Data) == 0 {
+		return Item{}, errors.New("no album for this song")
+	}
+	return items(p.Data[:1], KindAlbum, catalog)[0], nil
+}
+
 // Results are a catalog search's hits.
 type Results struct {
 	Songs     []Track `json:"songs"`

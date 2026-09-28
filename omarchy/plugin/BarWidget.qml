@@ -50,7 +50,7 @@ BarWidget {
     spacing: Style.space(6)
 
     Text {
-      id: bear
+      id: icon
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: root.playing ? "󰝚" : "󰏤"
@@ -63,7 +63,7 @@ BarWidget {
       id: clip
       anchors.verticalCenter: parent.verticalCenter
       width: Math.min(Style.space(180), label.implicitWidth)
-      height: bear.height
+      height: icon.height
       clip: true
       visible: root.hasTrack && !root.bar.vertical
 
@@ -76,12 +76,20 @@ BarWidget {
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
 
-        NumberAnimation on x {
+        // Rest, glide slowly to the end, rest, snap back — only when the
+        // title does not fit.
+        SequentialAnimation on x {
           running: label.implicitWidth > clip.width && !root.popupOpen
           loops: Animation.Infinite
-          duration: Math.max(6000, label.implicitWidth * 25)
-          from: clip.width
-          to: -label.implicitWidth
+          onRunningChanged: if (!running) label.x = 0
+          PauseAnimation { duration: 2500 }
+          NumberAnimation {
+            from: 0
+            to: clip.width - label.implicitWidth
+            duration: Math.max(1, label.implicitWidth - clip.width) * 55
+          }
+          PauseAnimation { duration: 1800 }
+          NumberAnimation { to: 0; duration: 350; easing.type: Easing.OutCubic }
         }
       }
     }

@@ -40,6 +40,7 @@ type conn struct {
 	nc    net.Conn
 	enc   *json.Encoder
 	bands int // spectrum bands wanted; 0 = none
+	wave  int // waveform samples wanted; 0 = none
 	sub   bool
 }
 
@@ -54,6 +55,7 @@ type Daemon struct {
 	version string
 	mpris   *mpris.Server
 	lib     *library
+	resume  *resume // last queue and song; guarded by mu
 
 	mu         sync.Mutex
 	eng        *engine.Engine
@@ -79,6 +81,7 @@ func Run(version string) error {
 		version: version,
 		state:   ipc.State{Status: ipc.StatusStarting, Message: "starting"},
 		lib:     loadLibrary(),
+		resume:  loadResume(),
 		conns:   map[*conn]bool{},
 		quit:    make(chan struct{}),
 	}
@@ -98,6 +101,9 @@ func Run(version string) error {
 	}
 	_ = ln.Close()
 	d.mu.Lock()
+	if d.resume != nil {
+		d.resume.save()
+	}
 	if d.eng != nil {
 		d.eng.Close()
 	}
@@ -216,9 +222,16 @@ func (d *Daemon) loop() {
 			go d.boot()
 			continue
 		}
-		if bands := d.maxBands(); bands > 0 && d.playing() {
-			if spec, err := eng.Spectrum(bands); err == nil {
-				d.broadcast(ipc.Message{Spectrum: spec})
+		if bands, wave := d.wants(); d.playing() {
+			if bands > 0 {
+				if spec, err := eng.Spectrum(bands); err == nil {
+					d.broadcast(ipc.Message{Spectrum: spec})
+				}
+			}
+			if wave > 0 {
+				if w, err := eng.Wave(wave); err == nil {
+					d.broadcast(ipc.Message{Wave: w})
+				}
 			}
 		}
 		if n%stateEvery != 0 {
@@ -250,6 +263,13 @@ func (d *Daemon) apply(es engine.State) {
 		status, msg = ipc.StatusError, es.Err
 	}
 	d.mu.Lock()
+	if r := d.resume; r != nil {
+		if es.Title == "" && es.Preview == nil {
+			es = r.overlay(es) // idle: show the saved song, paused
+		} else {
+			r.track(es)
+		}
+	}
 	next := ipc.State{Status: status, Message: msg, State: es}
 	changed := !reflect.DeepEqual(next, d.state)
 	d.state = next
@@ -262,14 +282,14 @@ func (d *Daemon) apply(es engine.State) {
 	}
 }
 
-func (d *Daemon) maxBands() int {
+// wants is the most spectrum bands and waveform samples any client asks for.
+func (d *Daemon) wants() (bands, wave int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	n := 0
 	for c := range d.conns {
-		n = max(n, c.bands)
+		bands, wave = max(bands, c.bands), max(wave, c.wave)
 	}
-	return n
+	return bands, wave
 }
 
 // broadcast pushes to subscribers; spectrum frames only to those that want
@@ -278,7 +298,7 @@ func (d *Daemon) broadcast(m ipc.Message) {
 	d.mu.Lock()
 	var targets []*conn
 	for c := range d.conns {
-		if c.sub && (m.Spectrum == nil || c.bands > 0) {
+		if c.sub && (m.Spectrum == nil || c.bands > 0) && (m.Wave == nil || c.wave > 0) {
 			targets = append(targets, c)
 		}
 	}
@@ -336,7 +356,7 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 	switch r.Cmd {
 	case ipc.CmdSubscribe:
 		d.mu.Lock()
-		c.sub, c.bands = true, min(r.Bands, 256)
+		c.sub, c.bands, c.wave = true, min(r.Bands, 256), min(r.Wave, 1024)
 		st := d.state
 		d.mu.Unlock()
 		reply.State = &st
@@ -359,6 +379,17 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		}
 		reply.Results = &res
 		return nil
+	case ipc.CmdAlbum:
+		api, err := d.client()
+		if err != nil {
+			return err
+		}
+		album, err := api.AlbumOf(r.Start)
+		if err != nil {
+			return d.authCheck(err)
+		}
+		reply.Items = []apple.Item{album}
+		return nil
 	case ipc.CmdReload:
 		go d.reload()
 		return nil
@@ -373,8 +404,17 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 	}
 	switch r.Cmd {
 	case ipc.CmdPlay:
-		return eng.PlayIDs(r.IDs, r.Start, r.Source)
+		d.mu.Lock()
+		if d.resume == nil {
+			d.resume = &resume{}
+		}
+		d.resume.IDs, d.resume.Source = r.IDs, r.Source
+		d.mu.Unlock()
+		return eng.PlayIDs(r.IDs, r.Start, r.Source, 0)
 	case ipc.CmdToggle:
+		if d.resumeIfIdle(eng) {
+			return nil
+		}
 		return eng.Toggle()
 	case ipc.CmdNext:
 		return eng.Next()
@@ -384,6 +424,11 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		return eng.Seek(r.Value)
 	case ipc.CmdVolume:
 		return eng.SetVolume(r.Value)
+	case ipc.CmdPreview:
+		if r.Value == 0 {
+			return eng.StopPreview()
+		}
+		return eng.Preview(r.Start)
 	case ipc.CmdShuffle:
 		return eng.SetShuffle(r.Value != 0)
 	case ipc.CmdRepeat:
@@ -543,13 +588,37 @@ func (d *Daemon) refresh() {
 	changed()
 }
 
+// resumeIfIdle starts the saved queue where it stopped when nothing is
+// loaded yet, as after a restart. It reports whether it did.
+func (d *Daemon) resumeIfIdle(eng *engine.Engine) bool {
+	d.mu.Lock()
+	r, idle := d.resume, d.state.Status == ipc.StatusReady && !d.state.Playing
+	d.mu.Unlock()
+	if r == nil || !idle || len(r.IDs) == 0 {
+		return false
+	}
+	es, err := eng.State()
+	if err != nil || es.Title != "" {
+		return false // something is loaded: a plain toggle resumes it
+	}
+	return eng.PlayIDs(r.IDs, r.ID, r.Source, r.Pos) == nil
+}
+
 // mpris.Controller
 
-func (d *Daemon) Play()   { d.do((*engine.Engine).Play) }
-func (d *Daemon) Pause()  { d.do((*engine.Engine).Pause) }
-func (d *Daemon) Toggle() { d.do((*engine.Engine).Toggle) }
-func (d *Daemon) Next()   { d.do((*engine.Engine).Next) }
-func (d *Daemon) Prev()   { d.do((*engine.Engine).Prev) }
+func (d *Daemon) Play() {
+	if eng := d.engine(); eng != nil && !d.resumeIfIdle(eng) {
+		_ = eng.Play()
+	}
+}
+func (d *Daemon) Pause() { d.do((*engine.Engine).Pause) }
+func (d *Daemon) Toggle() {
+	if eng := d.engine(); eng != nil && !d.resumeIfIdle(eng) {
+		_ = eng.Toggle()
+	}
+}
+func (d *Daemon) Next() { d.do((*engine.Engine).Next) }
+func (d *Daemon) Prev() { d.do((*engine.Engine).Prev) }
 func (d *Daemon) Seek(sec float64) {
 	d.do(func(e *engine.Engine) error { return e.Seek(sec) })
 }

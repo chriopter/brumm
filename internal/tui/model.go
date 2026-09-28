@@ -95,10 +95,18 @@ type (
 		url string
 		img image.Image
 	}
+	albumMsg struct {
+		item apple.Item
+		err  error
+	}
 	loginMsg struct{ err error }
 	errMsg   struct{ err error }
 	tickMsg  struct{}
+	holdMsg  struct{ seq int } // space is still down after holdDelay
 )
+
+// Holding space this long previews the selected song instead of pausing.
+const holdDelay = 280 * time.Millisecond
 
 type Model struct {
 	client *ipc.Client
@@ -129,6 +137,17 @@ type Model struct {
 	resumed bool
 	lastVol float64
 	geo     geometry
+
+	releases   bool // the terminal reports key releases (kitty protocol)
+	spaceDown  bool
+	spaceSeq   int
+	previewing bool
+
+	full     bool // fullscreen visualizer
+	vizStyle int
+	viz      visualizer
+	vizSpec  []float64
+	wave     []float64
 }
 
 func newModel(client *ipc.Client, initial ipc.State) *Model {
@@ -245,6 +264,9 @@ func fill(v *view, reply ipc.Message) {
 
 func (m *Model) maybeFetchCover() tea.Cmd {
 	url := m.state.Artwork
+	if p := m.state.Preview; p != nil && p.Artwork != "" {
+		url = p.Artwork
+	}
 	if url == m.coverURL {
 		return nil
 	}
@@ -295,6 +317,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.url == m.coverURL {
 			m.cover = msg.img
 		}
+	case albumMsg:
+		if msg.err != nil {
+			m.setFlash(msg.err.Error())
+			return m, nil
+		}
+		it := msg.item
+		return m, m.push(&view{title: it.Name, key: it.Key(), item: &it})
 	case loginMsg:
 		if msg.err != nil {
 			m.setFlash("sign-in failed: " + msg.err.Error())
@@ -304,9 +333,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.send(ipc.Request{Cmd: ipc.CmdReload})
 	case errMsg:
 		m.setFlash(msg.err.Error())
+	case tea.KeyboardEnhancementsMsg:
+		m.releases = msg.SupportsEventTypes()
+	case holdMsg:
+		return m, m.hold(msg.seq)
+	case tea.KeyReleaseMsg:
+		if msg.String() == "space" || msg.String() == " " {
+			return m, m.spaceUp()
+		}
 	case tea.KeyPressMsg:
 		if m.searching {
 			return m, m.searchKey(msg)
+		}
+		if k := msg.String(); k == "space" || k == " " {
+			return m, m.spaceDownKey(msg.IsRepeat)
+		}
+		if m.full {
+			if cmd, ok := m.fullKey(msg.String()); ok {
+				return m, cmd
+			}
 		}
 		return m, m.key(msg.String())
 	case tea.MouseClickMsg:
@@ -336,6 +381,14 @@ func (m *Model) event(msg ipc.Message) tea.Cmd {
 	}
 	if msg.Spectrum != nil {
 		m.feedSpectrum(msg.Spectrum)
+	}
+	if msg.Wave != nil {
+		if len(m.wave) != len(msg.Wave) {
+			m.wave = make([]float64, len(msg.Wave))
+		}
+		for i, v := range msg.Wave {
+			m.wave[i] = float64(v) / 100
+		}
 	}
 	if msg.Library {
 		// Refreshed in the background: reload what is on screen, keeping
@@ -418,6 +471,97 @@ func (m *Model) activate() tea.Cmd {
 	i := at[v.sel]
 	lo, hi := max(0, i-queueBefore), min(len(ids), i+queueAfter)
 	return m.send(ipc.Request{Cmd: ipc.CmdPlay, IDs: ids[lo:hi], Start: r.track.ID, Source: v.key})
+}
+
+// spaceDownKey starts a tap-or-hold: a tap toggles playback on release, a
+// hold previews the selected song until release. Terminals that do not
+// report releases just toggle.
+func (m *Model) spaceDownKey(repeat bool) tea.Cmd {
+	if !m.releases {
+		return m.send(ipc.Request{Cmd: ipc.CmdToggle})
+	}
+	if repeat || m.spaceDown {
+		return nil
+	}
+	m.spaceDown = true
+	m.spaceSeq++
+	seq := m.spaceSeq
+	return tea.Tick(holdDelay, func(time.Time) tea.Msg { return holdMsg{seq} })
+}
+
+func (m *Model) hold(seq int) tea.Cmd {
+	if !m.spaceDown || seq != m.spaceSeq {
+		return nil
+	}
+	v := m.cur()
+	if v.sel >= len(v.rows) || v.rows[v.sel].track == nil {
+		return nil // nothing to preview: release will toggle
+	}
+	m.previewing = true
+	return m.send(ipc.Request{Cmd: ipc.CmdPreview, Start: v.rows[v.sel].track.ID, Value: 1})
+}
+
+func (m *Model) spaceUp() tea.Cmd {
+	if !m.spaceDown {
+		return nil
+	}
+	m.spaceDown = false
+	if m.previewing {
+		m.previewing = false
+		return m.send(ipc.Request{Cmd: ipc.CmdPreview})
+	}
+	return m.send(ipc.Request{Cmd: ipc.CmdToggle})
+}
+
+// toggleFull switches the fullscreen visualizer, asking the daemon for
+// waveform data only while it shows.
+func (m *Model) toggleFull() tea.Cmd {
+	m.full = !m.full
+	wave := 0
+	if m.full {
+		wave = max(64, m.width*2)
+	}
+	return m.send(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands, Wave: wave})
+}
+
+// fullKey handles the keys that mean something else in fullscreen.
+func (m *Model) fullKey(k string) (tea.Cmd, bool) {
+	n := len(vizNames)
+	switch k {
+	case "esc", "f", "q":
+		return m.toggleFull(), true
+	case "v", "tab", "down", "j":
+		m.vizStyle = (m.vizStyle + 1) % n
+	case "V", "shift+tab", "up", "k":
+		m.vizStyle = (m.vizStyle + n - 1) % n
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0":
+		i := int(k[0]-'0') - 1
+		if k == "0" {
+			i = 9
+		}
+		if i < n {
+			m.vizStyle = i
+		}
+	default:
+		return nil, false
+	}
+	return nil, true
+}
+
+// openAlbum opens the album of the selected song.
+func (m *Model) openAlbum() tea.Cmd {
+	v := m.cur()
+	if v.sel >= len(v.rows) || v.rows[v.sel].track == nil {
+		return nil
+	}
+	id, client := v.rows[v.sel].track.ID, m.client
+	return func() tea.Msg {
+		reply, err := client.Do(ipc.Request{Cmd: ipc.CmdAlbum, Start: id})
+		if err != nil || len(reply.Items) == 0 {
+			return albumMsg{err: fmt.Errorf("no album found for this song")}
+		}
+		return albumMsg{item: reply.Items[0]}
+	}
 }
 
 // jumpToPlaying shows the list the current song was started from with the
@@ -503,8 +647,8 @@ func (m *Model) key(k string) tea.Cmd {
 		return m.switchTo((m.section + 4) % 5)
 	case "/":
 		m.section, m.searching, m.help = secSearch, true, false
-	case "space", " ":
-		return m.send(ipc.Request{Cmd: ipc.CmdToggle})
+	case "f":
+		return m.toggleFull()
 	case "n":
 		return m.send(ipc.Request{Cmd: ipc.CmdNext})
 	case "p", "b":
@@ -540,6 +684,8 @@ func (m *Model) key(k string) tea.Cmd {
 		return m.send(ipc.Request{Cmd: ipc.CmdRepeat, Value: float64(next)})
 	case "c":
 		return m.jumpToPlaying()
+	case "a":
+		return m.openAlbum()
 	case "esc", "h", "backspace":
 		if m.help {
 			m.help = false

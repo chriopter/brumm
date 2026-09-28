@@ -11,7 +11,7 @@
 //
 // The host substitutes the configuration object for the CFG placeholder.
 const CFG = __BRUMM_CFG__;
-const B = window.brumm = { ready: false, err: '', needsAuth: false, m: null, source: '', gen: 0 };
+const B = window.brumm = { ready: false, err: '', needsAuth: false, m: null, source: '', gen: 0, pending: null, pv: null, pgen: 0 };
 
 window.addEventListener('error', (e) => { if (!B.ready) B.err = 'page: ' + (e.message || 'script error'); });
 
@@ -45,6 +45,8 @@ document.addEventListener('musickitloaded', async () => {
     });
     B.m = m;
     B.ready = true;
+    // A play asked for while MusicKit was still loading runs now.
+    if (B.pending) { const p = B.pending; B.pending = null; B.playIds(...p); }
   } catch (e) {
     B.err = 'musickit: ' + errText(e);
     if (isAuthError(e)) B.needsAuth = true;
@@ -119,9 +121,9 @@ function analyser() {
 Object.assign(B, {
   // playIds queues songs and starts at startId. A newer call supersedes an
   // older one still resolving, so rapid clicks never interleave queues.
-  async playIds(ids, startId, source) {
+  async playIds(ids, startId, source, startAt) {
     const m = B.m;
-    if (!m) return;
+    if (!m) { B.pending = [ids, startId, source, startAt]; return; }
     const gen = ++B.gen;
     B.err = '';
     try {
@@ -139,6 +141,7 @@ Object.assign(B, {
       if (gen !== B.gen) return;
       B.source = source;
       await play(m);
+      if (gen === B.gen && startAt > 1) await m.seekToTime(startAt);
     } catch (e) {
       if (gen !== B.gen) return;
       B.err = 'play: ' + errText(e);
@@ -158,6 +161,48 @@ Object.assign(B, {
   volume(v) { if (B.m) B.m.volume = Math.max(0, Math.min(1, v)); },
   shuffle(on) { if (B.m) B.m.shuffleMode = on ? 1 : 0; },
   repeat(mode) { if (B.m) B.m.repeatMode = mode; }, // 0 off, 1 one, 2 all
+  // preview plays Apple's 30-second clip of a song while the current one
+  // pauses; stopPreview ends it and resumes what was playing.
+  async preview(id) {
+    const m = B.m;
+    if (!m) return;
+    const gen = ++B.pgen;
+    try {
+      let song;
+      if (id.startsWith('i.')) {
+        const r = await m.api.music(`/v1/me/library/songs/${encodeURIComponent(id)}`, { include: 'catalog' });
+        const lib = r.data.data[0];
+        song = (lib.relationships && lib.relationships.catalog && lib.relationships.catalog.data[0]) || lib;
+      } else {
+        const r = await m.api.music(`/v1/catalog/${m.storefrontId || 'us'}/songs/${encodeURIComponent(id)}`);
+        song = r.data.data[0];
+      }
+      if (gen !== B.pgen) return;
+      const a = song.attributes || {};
+      const url = a.previews && a.previews[0] && a.previews[0].url;
+      if (!url) { B.err = 'no preview for this song'; return; }
+      const resume = (B.pv && B.pv.resume) || m.isPlaying;
+      B.pv = { title: a.name || '', artist: a.artistName || '', resume,
+               artwork: a.artwork ? MusicKit.formatArtworkURL(a.artwork, 600, 600) : '' };
+      if (m.isPlaying) await m.pause();
+      if (gen !== B.pgen) return;
+      // A plain element, outside Web Audio: the clips come from another
+      // origin without CORS, which Web Audio would turn into silence.
+      viz.clip = viz.clip || new Audio();
+      viz.clip.src = url;
+      viz.clip.volume = m.volume;
+      await viz.clip.play();
+    } catch (e) {
+      if (gen === B.pgen) B.err = 'preview: ' + errText(e);
+    }
+  },
+  stopPreview() {
+    B.pgen++;
+    if (viz.clip) viz.clip.pause();
+    const pv = B.pv;
+    B.pv = null;
+    if (pv && pv.resume && B.m) play(B.m).catch(() => {});
+  },
   setToken(t) { if (B.m) { B.m.musicUserToken = t; B.needsAuth = false; B.err = ''; } },
 
   state() {
@@ -166,6 +211,7 @@ Object.assign(B, {
       ready: B.ready, err: B.err, needsAuth: B.needsAuth, playing: false,
       title: '', artist: '', album: '', artwork: '', pos: 0, dur: 0,
       index: -1, length: 0, source: B.source, volume: 1, id: '', shuffle: false, repeat: 0,
+      preview: B.pv ? { title: B.pv.title, artist: B.pv.artist, artwork: B.pv.artwork } : null,
     };
     if (!m) return JSON.stringify(s);
     const it = m.nowPlayingItem;
@@ -187,6 +233,19 @@ Object.assign(B, {
       if (art && art.url) s.artwork = MusicKit.formatArtworkURL(art, 600, 600);
     }
     return JSON.stringify(s);
+  },
+
+  // wave returns n samples of the waveform, -100…100, for the oscilloscope.
+  wave(n) {
+    const out = new Array(n).fill(0);
+    if (!B.m || !B.m.isPlaying) return out;
+    const an = analyser();
+    if (!an) return out;
+    viz.td = viz.td || new Float32Array(an.fftSize);
+    an.getFloatTimeDomainData(viz.td);
+    const step = Math.max(1, Math.floor(Math.min(viz.td.length, 2048) / n));
+    for (let i = 0; i < n; i++) out[i] = Math.round(100 * viz.td[i * step]);
+    return out;
   },
 
   // n log-spaced bands from 40 Hz to 16 kHz, each 0–255. Music carries far
