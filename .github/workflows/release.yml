@@ -19,6 +19,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write      # build attestation (Sigstore)
+  attestations: write
 
 jobs:
   release:
@@ -70,11 +72,30 @@ jobs:
             -o dist/brumm/brumm .
           cp -r omarchy LICENSE README.md dist/brumm/
           tar -C dist -czf brumm-linux-amd64.tar.gz brumm
+          cp bin/install install.sh
+
+      # brumm's updater installs only releases whose SHA256SUMS carries a
+      # valid signature from this key; the public half is in the program.
+      - name: Sign
+        if: steps.version.outputs.tag != ''
+        env:
+          BRUMM_SIGNING_KEY: ${{ secrets.BRUMM_SIGNING_KEY }}
+        run: |
+          sha256sum brumm-linux-amd64.tar.gz install.sh > SHA256SUMS
+          go run ./tools/sign SHA256SUMS > SHA256SUMS.sig
+
+      # Provenance anyone can check: gh attestation verify <file> -R chriopter/brumm
+      - uses: actions/attest-build-provenance@v2
+        if: steps.version.outputs.tag != ''
+        with:
+          subject-path: |
+            brumm-linux-amd64.tar.gz
+            install.sh
 
       - name: Publish
         if: steps.version.outputs.tag != ''
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh release create "$TAG" brumm-linux-amd64.tar.gz \
+          gh release create "$TAG" brumm-linux-amd64.tar.gz install.sh SHA256SUMS SHA256SUMS.sig \
             --target "$GITHUB_SHA" --title "$TAG" --generate-notes

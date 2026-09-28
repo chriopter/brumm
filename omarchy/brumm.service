@@ -10,3 +10,5 @@ After=graphical-session.target
 ExecStart=%h/.local/bin/brumm daemon
 Restart=on-failure
 RestartSec=2
+# 75: the program was updated; start the new one.
+RestartForceExitStatus=75

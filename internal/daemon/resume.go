@@ -22,6 +22,9 @@ type resume struct {
 	Artist  string   `json:"artist"`
 	Album   string   `json:"album"`
 	Artwork string   `json:"artwork"`
+	// Autoplay continues playback after a restart for an update, which
+	// happens between songs while music plays.
+	Autoplay bool `json:"autoplay,omitempty"`
 
 	savedAt time.Time
 }

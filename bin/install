@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Install brumm from the latest release:
+#   curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
+# Checks the download against the release's checksums (and its build
+# attestation, when the GitHub CLI is signed in), then installs into your
+# home. brumm keeps itself up to date from then on.
+set -euo pipefail
+
+repo=chriopter/brumm
+base="https://github.com/$repo/releases/latest/download"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+cd "$tmp"
+
+echo "downloading brumm"
+curl -fsSLO "$base/brumm-linux-amd64.tar.gz"
+curl -fsSLO "$base/SHA256SUMS"
+sha256sum --quiet --check --ignore-missing SHA256SUMS
+if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+  gh attestation verify brumm-linux-amd64.tar.gz -R "$repo" >/dev/null
+  echo "verified: built by $repo's release workflow"
+fi
+
+tar -xzf brumm-linux-amd64.tar.gz
+./brumm/brumm setup ./brumm
+echo
+echo "next: brumm login — then run brumm, or click the widget in the bar"

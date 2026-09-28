@@ -2,11 +2,14 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // DevToken is the Apple Music developer token (an ES256 JWT, valid at most
@@ -87,4 +90,23 @@ func (c Config) Developer() string {
 		return c.DeveloperToken
 	}
 	return DevToken
+}
+
+// Expires is when the developer token stops working (zero if unknown).
+func (c Config) Expires() time.Time {
+	parts := strings.Split(c.Developer(), ".")
+	if len(parts) != 3 {
+		return time.Time{}
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if json.Unmarshal(raw, &claims) != nil || claims.Exp == 0 {
+		return time.Time{}
+	}
+	return time.Unix(claims.Exp, 0)
 }

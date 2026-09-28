@@ -64,6 +64,7 @@ type Daemon struct {
 	conns      map[*conn]bool
 	booting    bool
 	refreshing bool
+	expiresIn  int // days until the developer token expires, when under 45
 
 	quit     chan struct{}
 	quitOnce sync.Once
@@ -92,6 +93,8 @@ func Run(version string) error {
 	go d.accept(ln)
 	go d.boot()
 	go d.loop()
+	go d.autoUpdate()
+	go d.watchSelf()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -171,6 +174,11 @@ func (d *Daemon) boot() {
 	}
 	d.mu.Lock()
 	d.api = apple.New(cfg.Developer(), cfg.UserToken)
+	if exp := cfg.Expires(); !exp.IsZero() {
+		if days := int(time.Until(exp).Hours() / 24); days < 45 {
+			d.expiresIn = max(days, 0)
+		}
+	}
 	d.mu.Unlock()
 	go d.refresh()
 
@@ -263,6 +271,14 @@ func (d *Daemon) apply(es engine.State) {
 		status, msg = ipc.StatusError, es.Err
 	}
 	d.mu.Lock()
+	if r := d.resume; r != nil && r.Autoplay && es.Ready {
+		r.Autoplay = false
+		go func() {
+			if eng := d.engine(); eng != nil {
+				_ = eng.PlayIDs(r.IDs, r.ID, r.Source, r.Pos)
+			}
+		}()
+	}
 	if r := d.resume; r != nil {
 		if es.Title == "" && es.Preview == nil {
 			es = r.overlay(es) // idle: show the saved song, paused
@@ -270,7 +286,7 @@ func (d *Daemon) apply(es engine.State) {
 			r.track(es)
 		}
 	}
-	next := ipc.State{Status: status, Message: msg, State: es}
+	next := ipc.State{Status: status, Message: msg, State: es, ExpiresIn: d.expiresIn}
 	changed := !reflect.DeepEqual(next, d.state)
 	d.state = next
 	d.mu.Unlock()

@@ -72,6 +72,9 @@ const (
 type State struct {
 	Status  Status `json:"status"`
 	Message string `json:"message,omitempty"` // progress or error text
+	// ExpiresIn is set when this build's Apple Music access runs out soon
+	// (days left); an update brings a fresh one.
+	ExpiresIn int `json:"expiresIn,omitempty"`
 	engine.State
 }
 

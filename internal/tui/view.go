@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -94,30 +95,29 @@ func (m *Model) render() string {
 	inner := m.width - 2*margin
 	bodyH := m.height - bodyTop - 2 // blank line + footer
 
-	// The list takes its share of the width (2/5 unless dragged); the
-	// stage centers a column as wide as the cover in the rest.
+	// The list gets at least its share of the width (2/5 unless dragged).
+	// The stage is one column as wide as the cover, which is as large as
+	// the rest of the width and the height allow; any width the cover
+	// cannot use goes back to the list, so nothing floats in a gap.
 	gapW := 2 + 2*stagePad
 	navW := int(math.Round(float64(inner) * m.split))
 	navW = max(navMin, min(navW, inner-gapW-colMin))
-	stageW := inner - navW - gapW
+	room := inner - navW - gapW
 
 	var body string
-	if stageW < colMin || navW < navMin {
+	if room < colMin || navW < navMin {
 		mini := m.miniPlayer(inner)
 		body = lipgloss.JoinVertical(lipgloss.Left, append([]string{m.nav(inner, bodyH-len(mini), margin, bodyTop)}, mini...)...)
 	} else {
 		coverH := max(0, bodyH-1-stageBelow)
-		coverH = min(coverH, int(float64(stageW)/m.cellAspect))
-		colW := max(colMin, min(stageW, int(math.Round(float64(coverH)*m.cellAspect))))
-		inset := (stageW - colW) / 2
-		stageX := margin + navW + gapW + inset
+		coverH = min(coverH, int(float64(room)/m.cellAspect))
+		colW := max(colMin, min(room, int(math.Round(float64(coverH)*m.cellAspect))))
+		navW = inner - gapW - colW
+		stageX := margin + navW + gapW
 		m.geo.divider = rect{margin + navW - 1, bodyTop, margin + navW + gapW, bodyTop + bodyH}
-		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop), "\n")
-		for i := range stage {
-			stage[i] = strings.Repeat(" ", inset) + stage[i] + strings.Repeat(" ", stageW-colW-inset)
-		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			m.nav(navW, bodyH, margin, bodyTop), strings.Repeat(" ", gapW), strings.Join(stage, "\n"))
+			m.nav(navW, bodyH, margin, bodyTop), strings.Repeat(" ", gapW),
+			m.stage(colW, coverH, bodyH, stageX, bodyTop))
 	}
 	pad := strings.Repeat(" ", margin)
 	lines := strings.Split(body, "\n")
@@ -149,6 +149,8 @@ func (m *Model) footer() string {
 
 	right := sHere.Render(m.bear())
 	switch {
+	case m.state.ExpiresIn > 0 && m.flash == "":
+		right = sErr.Render(fmt.Sprintf("Apple Music access in this build ends in %d days: run brumm update", m.state.ExpiresIn)) + "   " + right
 	case m.flash != "":
 		right = sDim.Render(m.flash) + "   " + right
 	case m.state.Status == ipc.StatusLoggedOut:
@@ -381,13 +383,21 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 			put(start+i, l)
 		}
 	} else {
-		// Playing: the cover's top meets the panel's top border, the
-		// controls sit on its bottom border.
-		for i, l := range top {
-			put(i, l)
+		// Playing: title and artist above the cover, spectrum, progress
+		// and controls below, the group centered vertically. When the
+		// cover fills the height, the group spans the panel exactly.
+		head, rest := bottom, []stageLine(nil)
+		if len(bottom) > 3 {
+			head, rest = bottom[:3], bottom[3:] // title, meta, gap
 		}
-		for i, l := range bottom {
-			put(h-len(bottom)+i, l)
+		group := append(append([]stageLine{}, head...), top...)
+		if len(top) > 0 {
+			group = append(group, stageLine{})
+		}
+		group = append(group, rest...)
+		start := max(0, (h-len(group))/2)
+		for i, l := range group {
+			put(start+i, l)
 		}
 	}
 	return strings.Join(out, "\n")
@@ -518,7 +528,14 @@ func (m *Model) fullscreen() string {
 	for i, v := range m.spec {
 		m.vizSpec[i] = v * v * v
 	}
-	lines := m.viz.render(m.vizStyle, m.vizSpec, m.wave, m.width, m.height-1, m.frame, m.state.Playing)
+	h := m.height - 1
+	lines := m.viz.render(m.vizStyle, m.vizSpec, m.wave, m.width, h, m.frame, m.state.Playing)
+	if f := float64(time.Since(m.vizAt)) / float64(vizFade); m.vizPrev >= 0 && f < 1 {
+		old := m.viz.render(m.vizPrev, m.vizSpec, m.wave, m.width, h, m.frame, m.state.Playing)
+		lines = dissolve(old, lines, m.width, f)
+	} else {
+		m.vizPrev = -1
+	}
 	st := m.state
 	info := sDim.Render("nothing playing")
 	if st.Title != "" {
@@ -531,4 +548,31 @@ func (m *Model) fullscreen() string {
 	gap := max(1, m.width-4-lipgloss.Width(info)-lipgloss.Width(hint))
 	status := "  " + ansi.Truncate(info+strings.Repeat(" ", gap)+hint, m.width-4, "…")
 	return strings.Join(append(lines, status), "\n")
+}
+
+// dissolve blends two frames: the screen is cut into blocks, each switching
+// from a to b once f passes its own threshold, so the new picture appears
+// as a scatter of tiles that fills in.
+func dissolve(a, b []string, w int, f float64) []string {
+	const bw, bh = 6, 2 // block size in cells
+	out := make([]string, len(b))
+	for y := range b {
+		if y >= len(a) {
+			out[y] = b[y]
+			continue
+		}
+		var sb strings.Builder
+		for x := 0; x < w; x += bw {
+			src := a[y]
+			// A fixed pseudo-random threshold per block.
+			hsh := uint32(x/bw)*2654435761 ^ uint32(y/bh)*2246822519
+			hsh ^= hsh >> 15
+			if float64(hsh%1000)/1000 < f {
+				src = b[y]
+			}
+			sb.WriteString(ansi.Cut(src, x, min(w, x+bw)))
+		}
+		out[y] = sb.String()
+	}
+	return out
 }

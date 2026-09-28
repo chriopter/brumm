@@ -1,0 +1,12 @@
+# Keeps dependencies current — and keeps the repository active, which GitHub
+# requires for the scheduled release workflow to keep running.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

@@ -149,6 +149,8 @@ type Model struct {
 
 	full     bool // fullscreen visualizer
 	vizStyle int
+	vizPrev  int       // style fading out, -1 when none
+	vizAt    time.Time // when the current style came in
 	viz      visualizer
 	vizSpec  []float64
 	wave     []float64
@@ -164,6 +166,8 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		cellAspect: cellAspect(),
 		lastVol:    1,
 		split:      loadSplit(),
+		vizStyle:   vizOpening,
+		vizPrev:    -1,
 	}
 	for s := secPlaylists; s <= secSongs; s++ {
 		m.stacks[s] = []*view{{title: sectionNames[s], key: "list:" + sectionLists[s]}}
@@ -295,6 +299,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cellAspect = cellAspect()
 	case tickMsg:
 		m.frame++
+		if m.full && time.Since(m.vizAt) > vizEvery {
+			m.showViz((m.vizStyle + 1) % len(vizNames))
+		}
 		if m.flash != "" && time.Since(m.flashAt) > 4*time.Second {
 			m.flash = ""
 		}
@@ -544,6 +551,7 @@ func (m *Model) toggleFull() tea.Cmd {
 	wave := 0
 	if m.full {
 		wave = max(64, m.width*2)
+		m.vizStyle, m.vizPrev, m.vizAt = vizOpening, -1, time.Now()
 	}
 	return m.send(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands, Wave: wave})
 }
@@ -555,21 +563,33 @@ func (m *Model) fullKey(k string) (tea.Cmd, bool) {
 	case "esc", "f", "q":
 		return m.toggleFull(), true
 	case "v", "tab", "down", "j":
-		m.vizStyle = (m.vizStyle + 1) % n
+		m.showViz((m.vizStyle + 1) % n)
 	case "V", "shift+tab", "up", "k":
-		m.vizStyle = (m.vizStyle + n - 1) % n
+		m.showViz((m.vizStyle + n - 1) % n)
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0":
 		i := int(k[0]-'0') - 1
 		if k == "0" {
 			i = 9
 		}
-		if i < n {
-			m.vizStyle = i
+		if i < n && i != m.vizStyle {
+			m.showViz(i)
 		}
 	default:
 		return nil, false
 	}
 	return nil, true
+}
+
+// Fullscreen opens on the showpiece and moves on every minute, dissolving
+// from one style into the next.
+const (
+	vizOpening = 9 // milkdrop
+	vizEvery   = time.Minute
+	vizFade    = 1500 * time.Millisecond
+)
+
+func (m *Model) showViz(style int) {
+	m.vizPrev, m.vizStyle, m.vizAt = m.vizStyle, style, time.Now()
 }
 
 // openAlbum opens the album of the selected song.
