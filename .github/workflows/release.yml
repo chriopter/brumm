@@ -1,0 +1,42 @@
+name: release
+
+# Tag a version (git tag v0.1.0 && git push origin v0.1.0) to publish a
+# release. The Apple Music developer token is signed fresh from the MusicKit
+# key in the repository secrets and embedded in the binary; it is valid for
+# six months, so cut a release at least that often.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_PRIVATE_KEY: ${{ secrets.APPLE_PRIVATE_KEY }}
+        run: |
+          token=$(go run ./tools/devtoken)
+          echo "::add-mask::$token"
+          mkdir -p dist/brumm
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X main.version=$GITHUB_REF_NAME -X github.com/chriopter/brumm/internal/config.DevToken=$token" \
+            -o dist/brumm/brumm .
+          cp -r omarchy LICENSE README.md dist/brumm/
+          tar -C dist -czf brumm-linux-amd64.tar.gz brumm
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" brumm-linux-amd64.tar.gz --title "$GITHUB_REF_NAME" --generate-notes
