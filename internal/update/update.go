@@ -170,10 +170,8 @@ func checksum(url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pub, _ := base64.StdEncoding.DecodeString(publicKey)
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
-	if err != nil || len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, list, raw) {
-		return "", errors.New("release signature is invalid; not installing")
+	if err := verify(list, sig); err != nil {
+		return "", err
 	}
 	sc := bufio.NewScanner(strings.NewReader(string(list)))
 	for sc.Scan() {
@@ -182,6 +180,16 @@ func checksum(url string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s lists no checksum for %s", sums, asset)
+}
+
+// verify checks a base64 Ed25519 signature of data against publicKey.
+func verify(data, sig []byte) error {
+	pub, _ := base64.StdEncoding.DecodeString(publicKey)
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
+	if err != nil || len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, data, raw) {
+		return errors.New("release signature is invalid; not installing")
+	}
+	return nil
 }
 
 func fetch(url string) ([]byte, error) {
