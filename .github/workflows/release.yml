@@ -25,15 +25,18 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
+    # Actions are pinned to commits: this job holds the signing key.
+    # Dependabot proposes updates.
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0   # tags and history for the release notes
+          persist-credentials: false
 
       - name: Pick version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ $GITHUB_EVENT_NAME == push ]]; then
             echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
@@ -53,7 +56,7 @@ jobs:
           IFS=. read -r major minor patch <<<"${tag#v}"
           echo "tag=v$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: steps.version.outputs.tag != ''
         with:
           go-version-file: go.mod
@@ -90,7 +93,7 @@ jobs:
           go run ./tools/sign SHA256SUMS > SHA256SUMS.sig
 
       # Provenance anyone can check: gh attestation verify <file> -R chriopter/brumm
-      - uses: actions/attest-build-provenance@v4
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: steps.version.outputs.tag != ''
         with:
           subject-path: |
@@ -100,6 +103,7 @@ jobs:
       - name: Publish
         if: steps.version.outputs.tag != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           # Commits go straight to main, so list their titles; GitHub's

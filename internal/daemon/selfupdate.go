@@ -17,22 +17,30 @@ import (
 const ExitUpdated = 75
 
 // checkUpdates looks for a newer release right after start, daily, and
-// whenever a client opens (checkNow), and offers it to clients. It installs on its own only when this
-// build's Apple Music access is about to run out, so playback never simply
-// stops. Development builds never update.
+// whenever a client opens (checkNow, at most every 10 minutes), and offers
+// it to clients. It installs on its own only when this build's Apple Music
+// access is about to run out, so playback never simply stops. Development
+// builds never update.
 func (d *Daemon) checkUpdates() {
 	if !update.Managed(d.version) {
 		return
 	}
 	t := time.NewTimer(5 * time.Second)
+	var last time.Time
 	for {
 		select {
 		case <-d.quit:
 			return
 		case <-t.C:
 		case <-d.checkNow:
+			// Opening brumm asks each time; GitHub allows 60 anonymous
+			// requests an hour. An offer found earlier is still shown.
+			if time.Since(last) < 10*time.Minute {
+				continue
+			}
 		}
 		t.Reset(24 * time.Hour)
+		last = time.Now()
 		tag, err := update.Latest()
 		if err != nil {
 			log.Printf("update check: %v", err)

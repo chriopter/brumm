@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/sys/unix"
 
+	"github.com/chriopter/brumm/internal/art"
 	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/ipc"
 )
@@ -25,6 +26,7 @@ func Run() error {
 		return err
 	}
 	defer client.Close()
+	go art.Prune(filepath.Join(config.CacheDir(), "covers"), 200<<20)
 	r, err := client.Do(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands})
 	if err != nil {
 		return err
@@ -72,8 +74,8 @@ func loadSplit() float64 {
 }
 
 func saveSplit(f float64) {
-	_ = os.MkdirAll(config.CacheDir(), 0o755)
-	_ = os.WriteFile(splitPath(), []byte(strconv.FormatFloat(f, 'f', 3, 64)), 0o644)
+	_ = os.MkdirAll(config.CacheDir(), 0o700)
+	_ = os.WriteFile(splitPath(), []byte(strconv.FormatFloat(f, 'f', 3, 64)), 0o600)
 }
 
 func connect() (*ipc.Client, error) {
@@ -104,7 +106,7 @@ func startDaemon() error {
 		return err
 	}
 	logPath := filepath.Join(config.CacheDir(), "daemon.log")
-	if err := os.MkdirAll(config.CacheDir(), 0o755); err != nil {
+	if err := os.MkdirAll(config.CacheDir(), 0o700); err != nil {
 		return err
 	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)

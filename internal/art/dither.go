@@ -4,12 +4,11 @@
 package art
 
 import (
+	"fmt"
 	"image"
 	"image/draw"
 	"math"
 	"strings"
-
-	"charm.land/lipgloss/v2"
 )
 
 // ditherColors is the palette size the cover is reduced to before
@@ -52,11 +51,12 @@ func RenderDithered(img image.Image, size Size) []string {
 				sub[i] = out[(row*3+i/2)*gw+col*2+i%2]
 			}
 			fg, bg, mask := fitPair(sub[:])
-			sb.WriteString(lipgloss.NewStyle().
-				Foreground(lipgloss.Color(hexOf(fg))).
-				Background(lipgloss.Color(hexOf(bg))).
-				Render(string(sextantRune(mask))))
+			// Plain truecolor SGR: building a style per cell cost more than
+			// the dithering itself. The program adapts colors to the terminal.
+			f, k := u8(fg), u8(bg)
+			fmt.Fprintf(&sb, "\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm%c", f[0], f[1], f[2], k[0], k[1], k[2], sextantRune(mask))
 		}
+		sb.WriteString("\x1b[m")
 		lines[row] = sb.String()
 	}
 	return lines
@@ -280,7 +280,7 @@ func sextantRune(mask uint8) rune {
 	return r
 }
 
-func hexOf(c rgb) string {
+func u8(c rgb) [3]uint8 {
 	u := func(v float64) uint8 { return uint8(min(255, max(0, math.Round(v)))) }
-	return hexColor(u(c[0]), u(c[1]), u(c[2]))
+	return [3]uint8{u(c[0]), u(c[1]), u(c[2])}
 }

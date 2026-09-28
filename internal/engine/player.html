@@ -39,6 +39,14 @@ document.addEventListener('musickitloaded', async () => {
     m.addEventListener('authorizationStatusDidChange', () => {
       if (!m.isAuthorized) B.needsAuth = true;
     });
+    // The visualizer's AudioContext idles with the music: a running one
+    // keeps Chrome's audio thread streaming silence while paused. Resumed
+    // before sound plays, since the audio element is routed through it.
+    m.addEventListener('playbackStateDidChange', () => {
+      if (!viz.ctx) return;
+      if (m.isPlaying) viz.ctx.resume();
+      else if (viz.ctx.state === 'running') viz.ctx.suspend();
+    });
     m.addEventListener('mediaPlaybackError', (e) => {
       B.err = 'playback: ' + errText(e && (e.error || e));
       if (isAuthError(e && (e.error || e))) B.needsAuth = true;

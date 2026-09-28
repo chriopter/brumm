@@ -21,6 +21,7 @@ base="https://github.com/$repo/releases/download/$tag"
 
 work="${XDG_CACHE_HOME:-$HOME/.cache}/brumm/install"
 rm -rf "$work"
+mkdir -p -m 700 "${work%/install}"
 mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
 cd "$work"

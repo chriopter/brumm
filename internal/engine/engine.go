@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -138,20 +139,37 @@ func Start(developerToken, userToken, version string) (*Engine, error) {
 		cancel:  func() { ctxCancel(); allocCancel() },
 	}
 	url := "http://" + host + pagePath
-	// Launch the browser on the long-lived context, then navigate on a
+	// Launch the browser on the long-lived context — a timeout on it would
+	// end the browser too, so the wait is bounded here — then navigate on a
 	// bounded one so a dead network cannot hang startup forever.
-	if err := chromedp.Run(ctx); err != nil {
-		e.Close()
-		return nil, fmt.Errorf("chrome: %w", err)
+	launched := make(chan error, 1)
+	go func() { launched <- chromedp.Run(ctx) }()
+	select {
+	case err := <-launched:
+		if err != nil {
+			// The browser never came up. chromedp's cancel then waits for
+			// it indefinitely, so only that runs in the background.
+			go e.cancel()
+			_ = srv.Close()
+			_ = os.RemoveAll(profile)
+			return nil, fmt.Errorf("chrome: %w", err)
+		}
+	case <-time.After(launchTimeout):
+		e.cancel()
+		go e.Close()
+		return nil, errors.New("chrome did not start")
 	}
 	navCtx, navCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer navCancel()
 	if err := chromedp.Run(navCtx, chromedp.Navigate(url)); err != nil {
-		e.Close()
+		go e.Close()
 		return nil, fmt.Errorf("chrome: %w", err)
 	}
 	return e, nil
 }
+
+// launchTimeout bounds how long Chrome may take to come up.
+const launchTimeout = 30 * time.Second
 
 func (e *Engine) eval(js string, out any) error {
 	ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)

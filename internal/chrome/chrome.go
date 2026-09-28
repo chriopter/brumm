@@ -7,6 +7,9 @@ package chrome
 
 import (
 	"bytes"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +24,18 @@ import (
 	"github.com/chriopter/brumm/internal/config"
 )
 
-const debURL = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+// repo is Google's apt repository. Its InRelease file is signed with
+// Google's Linux package key and lists the checksum of the package index,
+// which lists the checksum of the .deb: a chain from the pinned key to the
+// program brumm runs.
+const repo = "https://dl.google.com/linux/chrome/deb/"
+
+// googleKey is Google's Linux package signing key (from
+// dl.google.com/linux/linux_signing_key.pub), primary key fingerprint
+// EB4C 1BFD 4F04 2F6D DDCC EC91 7721 F63B D38B 4796.
+//
+//go:embed google-linux.gpg
+var googleKey []byte
 
 func installDir() string { return filepath.Join(config.CacheDir(), "chrome") }
 
@@ -66,30 +80,18 @@ const (
 )
 
 func install() error {
-	client := &http.Client{Timeout: downloadTimeout}
-	resp, err := client.Get(debURL)
-	if err != nil {
+	if err := os.MkdirAll(config.CacheDir(), 0o700); err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: %s", resp.Status)
-	}
-	deb, err := io.ReadAll(io.LimitReader(resp.Body, maxDeb+1))
+	deb, err := download(&http.Client{Timeout: downloadTimeout})
 	if err != nil {
 		return err
-	}
-	if len(deb) > maxDeb {
-		return errors.New("download: Chrome package larger than expected")
 	}
 	name, data, err := arMember(deb, "data.tar")
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(config.CacheDir(), 0o755); err != nil {
-		return err
-	}
 	// Extract next to the final location so the rename below stays on one
 	// filesystem.
 	tmpDir, err := os.MkdirTemp(config.CacheDir(), "chrome-install-")
@@ -111,6 +113,120 @@ func install() error {
 	}
 	_ = os.RemoveAll(installDir())
 	return os.Rename(root, installDir())
+}
+
+// download fetches the current google-chrome-stable package and checks it
+// against the signed repository metadata before returning it.
+func download(client *http.Client) ([]byte, error) {
+	dir, err := os.MkdirTemp(config.CacheDir(), "chrome-verify-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	inRelease, err := get(client, repo+"dists/stable/InRelease", 1<<20)
+	if err != nil {
+		return nil, err
+	}
+	keyring, signed := filepath.Join(dir, "google.gpg"), filepath.Join(dir, "InRelease")
+	if err := os.WriteFile(keyring, googleKey, 0o600); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(signed, inRelease, 0o600); err != nil {
+		return nil, err
+	}
+	// gpgv exits non-zero unless the signature is good, and writes out only
+	// the signed text, so nothing unsigned is read below.
+	var stderr bytes.Buffer
+	cmd := exec.Command("gpgv", "--keyring", keyring, "--output", "-", signed)
+	cmd.Stderr = &stderr
+	release, err := cmd.Output()
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, errors.New("gpgv is missing (install gnupg) — it checks Google's signature on Chrome")
+		}
+		return nil, fmt.Errorf("Chrome repository signature did not verify: %v %s", err, bytes.TrimSpace(stderr.Bytes()))
+	}
+
+	index := "main/binary-amd64/Packages"
+	want := listedHash(release, index)
+	if want == "" {
+		return nil, errors.New("Chrome repository: no checksum for the package index")
+	}
+	packages, err := get(client, repo+"dists/stable/"+index, 8<<20)
+	if err != nil {
+		return nil, err
+	}
+	if !hashIs(packages, want) {
+		return nil, errors.New("Chrome repository: package index does not match its signed checksum")
+	}
+	file, sum := stanza(packages, "google-chrome-stable")
+	if !strings.HasPrefix(file, "pool/") || strings.Contains(file, "..") || sum == "" {
+		return nil, errors.New("Chrome repository: google-chrome-stable not listed")
+	}
+	deb, err := get(client, repo+file, maxDeb)
+	if err != nil {
+		return nil, err
+	}
+	if !hashIs(deb, sum) {
+		return nil, errors.New("Chrome package does not match its signed checksum")
+	}
+	return deb, nil
+}
+
+func get(client *http.Client, url string, limit int) ([]byte, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s: %s", url, resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > limit {
+		return nil, fmt.Errorf("download %s: larger than expected", url)
+	}
+	return b, nil
+}
+
+func hashIs(b []byte, want string) bool {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]) == strings.ToLower(want)
+}
+
+// listedHash finds path's SHA256 in a Release file.
+func listedHash(release []byte, path string) string {
+	in := false
+	for _, l := range strings.Split(string(release), "\n") {
+		if !strings.HasPrefix(l, " ") {
+			in = strings.TrimSpace(l) == "SHA256:"
+			continue
+		}
+		if f := strings.Fields(l); in && len(f) == 3 && f[2] == path {
+			return f[0]
+		}
+	}
+	return ""
+}
+
+// stanza returns the Filename and SHA256 of a package in a Packages index.
+func stanza(packages []byte, name string) (file, sum string) {
+	for _, st := range strings.Split(string(packages), "\n\n") {
+		fields := map[string]string{}
+		for _, l := range strings.Split(st, "\n") {
+			if k, v, ok := strings.Cut(l, ": "); ok {
+				fields[k] = strings.TrimSpace(v)
+			}
+		}
+		if fields["Package"] == name {
+			return fields["Filename"], fields["SHA256"]
+		}
+	}
+	return "", ""
 }
 
 // arMember returns the first member of a Debian ar archive whose name starts

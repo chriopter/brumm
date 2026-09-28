@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"syscall"
@@ -28,8 +29,11 @@ import (
 
 const (
 	frame      = 40 * time.Millisecond // spectrum cadence (25 fps)
-	stateEvery = 5                     // poll state every 5th frame (200 ms)
-	staleAfter = 10 * time.Second      // no answer from the page this long: restart Chrome
+	statePlay  = 200 * time.Millisecond
+	stateIdle  = time.Second      // paused: the page changes only when told to
+	staleAfter = 10 * time.Second // no answer from the page this long: restart Chrome
+	retryFirst = 2 * time.Second  // after a failed player start, doubling
+	retryMax   = time.Minute
 	sendWithin = 200 * time.Millisecond
 )
 
@@ -73,6 +77,11 @@ type Daemon struct {
 	quit     chan struct{}
 	quitOnce sync.Once
 	checkNow chan struct{} // ask checkUpdates to look now
+	nudge    chan struct{} // a command ran: poll the page now
+
+	retryAt time.Time     // when to start the player again after a failure
+	retry   time.Duration // the wait after the next failure
+	booted  bool          // the library was loaded once; restarts skip it
 }
 
 // Run serves until SIGTERM, SIGINT or a quit request.
@@ -92,6 +101,7 @@ func Run(version string) error {
 		conns:    map[*conn]bool{},
 		quit:     make(chan struct{}),
 		checkNow: make(chan struct{}, 1),
+		nudge:    make(chan struct{}, 1),
 	}
 	if d.mpris, err = mpris.Start(d); err != nil {
 		log.Printf("mpris disabled: %v", err)
@@ -127,7 +137,12 @@ func Run(version string) error {
 // listen claims the socket, clearing a stale one left by a crash but
 // refusing to start next to a live daemon.
 func listen() (net.Listener, error) {
+	// Older versions made the cache directory world-readable.
+	_ = os.Chmod(config.CacheDir(), 0o700)
 	path := config.Socket()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
 	if c, err := net.DialTimeout("unix", path, 300*time.Millisecond); err == nil {
 		c.Close()
 		return nil, errors.New("brumm daemon is already running")
@@ -187,17 +202,21 @@ func (d *Daemon) boot() {
 			d.expiresIn = max(days, 0)
 		}
 	}
+	first := !d.booted
+	d.booted = true
 	d.mu.Unlock()
-	go d.refresh()
+	if first {
+		go d.refresh()
+	}
 
 	if err := chrome.Ensure(func(msg string) { d.setStatus(ipc.StatusStarting, msg) }); err != nil {
-		d.setStatus(ipc.StatusError, err.Error())
+		d.failed(err)
 		return
 	}
 	d.setStatus(ipc.StatusStarting, "starting player")
 	eng, err := engine.Start(cfg.Developer(), cfg.UserToken, d.version)
 	if err != nil {
-		d.setStatus(ipc.StatusError, err.Error())
+		d.failed(err)
 		return
 	}
 	d.mu.Lock()
@@ -208,6 +227,26 @@ func (d *Daemon) boot() {
 	d.mu.Unlock()
 }
 
+// failed shows why the player did not start and schedules another try,
+// waiting longer each time so a broken Chrome is not restarted in a loop.
+func (d *Daemon) failed(err error) {
+	d.mu.Lock()
+	d.retry = min(max(d.retry*2, retryFirst), retryMax)
+	d.retryAt = time.Now().Add(d.retry)
+	wait := d.retry
+	d.mu.Unlock()
+	d.setStatus(ipc.StatusError, fmt.Sprintf("%v (trying again in %s)", err, wait.Round(time.Second)))
+}
+
+// poke wakes the loop to read the page now, so a pause shows at once
+// even while the loop polls slowly.
+func (d *Daemon) poke() {
+	select {
+	case d.nudge <- struct{}{}:
+	default:
+	}
+}
+
 func (d *Daemon) engine() *engine.Engine {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -215,51 +254,93 @@ func (d *Daemon) engine() *engine.Engine {
 }
 
 // loop polls the page: the spectrum every frame while music plays and
-// someone watches, the player state every stateEvery frames, pushing state
-// only when it changed. A dead or unresponsive page is restarted.
+// someone watches it, the player state every 200 ms while playing and
+// every second while paused, pushing state only when it changed. A dead or
+// unresponsive page is restarted, with growing waits if it keeps failing.
 func (d *Daemon) loop() {
-	t := time.NewTicker(frame)
+	t := time.NewTimer(frame)
 	defer t.Stop()
-	lastOK := time.Now()
-	for n := 0; ; n++ {
+	lastOK, lastState := time.Now(), time.Time{}
+	for {
 		select {
 		case <-d.quit:
 			return
+		case <-d.nudge:
+			lastState = time.Time{}
+			if !t.Stop() {
+				select {
+				case <-t.C:
+				default:
+				}
+			}
 		case <-t.C:
 		}
-		eng := d.engine()
-		if eng == nil {
-			lastOK = time.Now()
-			continue
-		}
-		if !eng.Alive() || time.Since(lastOK) > staleAfter {
-			lastOK = time.Now()
-			d.setStatus(ipc.StatusStarting, "restarting player")
-			go d.boot()
-			continue
-		}
-		if bands, wave := d.wants(); d.playing() {
-			if bands > 0 {
-				if spec, err := eng.Spectrum(bands); err == nil {
-					d.broadcast(ipc.Message{Spectrum: spec})
-				}
-			}
-			if wave > 0 {
-				if w, err := eng.Wave(wave); err == nil {
-					d.broadcast(ipc.Message{Wave: w})
-				}
-			}
-		}
-		if n%stateEvery != 0 {
-			continue
-		}
-		es, err := eng.State()
-		if err != nil {
-			continue
-		}
-		lastOK = time.Now()
-		d.apply(es)
+		next := d.step(&lastOK, &lastState)
+		t.Reset(next)
 	}
+}
+
+// step does one round of the loop and says when to run the next.
+func (d *Daemon) step(lastOK, lastState *time.Time) time.Duration {
+	eng := d.engine()
+	if eng == nil {
+		*lastOK = time.Now()
+		d.mu.Lock()
+		due := !d.retryAt.IsZero() && time.Now().After(d.retryAt)
+		if due {
+			d.retryAt = time.Time{}
+		}
+		d.mu.Unlock()
+		if due {
+			go d.boot()
+		}
+		return stateIdle
+	}
+	if !eng.Alive() || time.Since(*lastOK) > staleAfter {
+		// Drop the dead player so this runs once; boot starts a new one.
+		d.mu.Lock()
+		if d.eng == eng {
+			d.eng = nil
+		}
+		d.mu.Unlock()
+		go eng.Close() // a hung page may take a while to close
+		d.setStatus(ipc.StatusStarting, "restarting player")
+		go d.boot()
+		return stateIdle
+	}
+	playing := d.playing()
+	bands, wave := d.wants()
+	if playing && bands > 0 {
+		if spec, err := eng.Spectrum(bands); err == nil {
+			d.broadcast(ipc.Message{Spectrum: spec})
+		}
+	}
+	if playing && wave > 0 {
+		if w, err := eng.Wave(wave); err == nil {
+			d.broadcast(ipc.Message{Wave: w})
+		}
+	}
+	every := stateIdle
+	if playing {
+		every = statePlay
+	}
+	if time.Since(*lastState) >= every {
+		if es, err := eng.State(); err == nil {
+			*lastOK, *lastState = time.Now(), time.Now()
+			d.mu.Lock()
+			d.retry = 0 // the player works: the next failure waits briefly again
+			d.mu.Unlock()
+			d.apply(es)
+			playing = es.Playing
+		}
+	}
+	switch {
+	case playing && (bands > 0 || wave > 0):
+		return frame
+	case playing:
+		return statePlay
+	}
+	return stateIdle
 }
 
 func (d *Daemon) playing() bool {
@@ -372,6 +453,7 @@ func (d *Daemon) serve(nc net.Conn) {
 			if err := d.handle(c, r, &reply); err != nil {
 				reply.Error = err.Error()
 			}
+			d.poke()
 			if c.send(reply) != nil {
 				_ = nc.Close()
 			}
@@ -629,6 +711,10 @@ func (d *Daemon) reload() {
 		go d.refresh()
 		return
 	}
+	d.mu.Lock()
+	d.booted = false // a new sign-in: load the library again
+	d.retryAt = time.Time{}
+	d.mu.Unlock()
 	d.boot()
 }
 
@@ -713,12 +799,14 @@ func (d *Daemon) Play() {
 	if eng := d.engine(); eng != nil && !d.resumeIfIdle(eng) {
 		_ = eng.Play()
 	}
+	d.poke()
 }
 func (d *Daemon) Pause() { d.do((*engine.Engine).Pause) }
 func (d *Daemon) Toggle() {
 	if eng := d.engine(); eng != nil && !d.resumeIfIdle(eng) {
 		_ = eng.Toggle()
 	}
+	d.poke()
 }
 func (d *Daemon) Next() { d.do((*engine.Engine).Next) }
 func (d *Daemon) Prev() { d.do((*engine.Engine).Prev) }
@@ -746,5 +834,6 @@ func (d *Daemon) Raise() {
 func (d *Daemon) do(f func(*engine.Engine) error) {
 	if eng := d.engine(); eng != nil {
 		_ = f(eng)
+		d.poke()
 	}
 }

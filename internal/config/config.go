@@ -46,7 +46,8 @@ func CacheDir() string {
 func Socket() string {
 	dir := os.Getenv("XDG_RUNTIME_DIR")
 	if dir == "" {
-		dir = os.TempDir()
+		// Not the shared /tmp, where another user could claim the name.
+		dir = CacheDir()
 	}
 	return filepath.Join(dir, "brumm.sock")
 }

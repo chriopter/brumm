@@ -323,6 +323,17 @@ func Install(from string) error {
 		return fmt.Errorf("stage program: %w", err)
 	}
 	defer os.Remove(bin)
+	// The unit and launcher entry too, so the commit below only renames.
+	unit, err := stage(filepath.Join(staged, "brumm.service"), unitPath(), 0o644)
+	if err != nil {
+		return fmt.Errorf("stage service: %w", err)
+	}
+	defer os.Remove(unit)
+	desktop, err := stage(filepath.Join(staged, "brumm.desktop"), desktopPath(), 0o644)
+	if err != nil {
+		return fmt.Errorf("stage launcher: %w", err)
+	}
+	defer os.Remove(desktop)
 
 	// Commit: Omarchy files, then the program; undo the files if needed.
 	old := staged + ".old"
@@ -342,10 +353,11 @@ func Install(from string) error {
 	}
 	os.RemoveAll(old)
 
-	if err := replace(filepath.Join(shareDir(), "brumm.service"), unitPath(), 0o644); err != nil {
+	// Renames in the same directories; the program is already in place.
+	if err := os.Rename(unit, unitPath()); err != nil {
 		return err
 	}
-	if err := replace(filepath.Join(shareDir(), "brumm.desktop"), desktopPath(), 0o644); err != nil {
+	if err := os.Rename(desktop, desktopPath()); err != nil {
 		return err
 	}
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
