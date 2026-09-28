@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -15,10 +14,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
-
-	"github.com/chromedp/chromedp"
 
 	"github.com/chriopter/brumm/internal/apple"
 	"github.com/chriopter/brumm/internal/chrome"
@@ -57,10 +55,13 @@ type Clip struct {
 }
 
 type Engine struct {
-	ctx     context.Context
-	cancel  func()
-	srv     *http.Server
-	profile string
+	cmd       *exec.Cmd
+	cdp       *cdp
+	session   string        // the playback page
+	exited    chan struct{} // closed when Chrome has exited
+	srv       *http.Server
+	profile   string
+	closeOnce sync.Once
 }
 
 // Start launches Chrome on the playback page. The Chrome process dies with
@@ -112,69 +113,147 @@ func Start(developerToken, userToken, version string) (*Engine, error) {
 		return nil, err
 	}
 
-	opts := []chromedp.ExecAllocatorOption{
-		chromedp.ExecPath(chrome.Path()),
-		chromedp.UserDataDir(profile),
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.ModifyCmdFunc(func(cmd *exec.Cmd) {
-			cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
-		}),
+	// Chrome talks DevTools over two pipes (fd 3 in, fd 4 out) and opens
+	// no debugging port another local user could connect to.
+	toChrome, ourW, err := os.Pipe()
+	if err != nil {
+		_ = srv.Close()
+		_ = os.RemoveAll(profile)
+		return nil, err
 	}
-	for _, arg := range chrome.Args() {
-		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
-		if hasValue {
-			opts = append(opts, chromedp.Flag(name, value))
-		} else {
-			opts = append(opts, chromedp.Flag(name, true))
-		}
+	ourR, fromChrome, err := os.Pipe()
+	if err != nil {
+		toChrome.Close()
+		ourW.Close()
+		_ = srv.Close()
+		_ = os.RemoveAll(profile)
+		return nil, err
 	}
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	ctx, ctxCancel := chromedp.NewContext(allocCtx)
-
-	e := &Engine{
-		ctx:     ctx,
-		srv:     srv,
-		profile: profile,
-		cancel:  func() { ctxCancel(); allocCancel() },
-	}
-	url := "http://" + host + pagePath
-	// Launch the browser on the long-lived context — a timeout on it would
-	// end the browser too, so the wait is bounded here — then navigate on a
-	// bounded one so a dead network cannot hang startup forever.
-	launched := make(chan error, 1)
-	go func() { launched <- chromedp.Run(ctx) }()
-	select {
-	case err := <-launched:
-		if err != nil {
-			// The browser never came up. chromedp's cancel then waits for
-			// it indefinitely, so only that runs in the background.
-			go e.cancel()
-			_ = srv.Close()
-			_ = os.RemoveAll(profile)
-			return nil, fmt.Errorf("chrome: %w", err)
-		}
-	case <-time.After(launchTimeout):
-		e.cancel()
-		go e.Close()
-		return nil, errors.New("chrome did not start")
-	}
-	navCtx, navCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer navCancel()
-	if err := chromedp.Run(navCtx, chromedp.Navigate(url)); err != nil {
-		go e.Close()
+	args := append(chrome.Args(),
+		"--remote-debugging-pipe",
+		"--user-data-dir="+profile,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	)
+	cmd := exec.Command(chrome.Path(), args...)
+	cmd.ExtraFiles = []*os.File{toChrome, fromChrome}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	err = cmd.Start()
+	toChrome.Close() // Chrome holds its own copies now
+	fromChrome.Close()
+	if err != nil {
+		ourW.Close()
+		ourR.Close()
+		_ = srv.Close()
+		_ = os.RemoveAll(profile)
 		return nil, fmt.Errorf("chrome: %w", err)
 	}
+	e := &Engine{
+		cmd:     cmd,
+		cdp:     newCDP(ourW, ourR),
+		exited:  make(chan struct{}),
+		srv:     srv,
+		profile: profile,
+	}
+	go func() {
+		_ = cmd.Wait()
+		close(e.exited)
+	}()
+
+	if err := e.open("http://" + host + pagePath); err != nil {
+		e.Close()
+		return nil, err
+	}
 	return e, nil
+}
+
+// open attaches to Chrome's tab and loads url in it, bounded so a Chrome
+// that never comes up or a dead network cannot hang startup.
+func (e *Engine) open(url string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), launchTimeout)
+	defer cancel()
+	var targets struct {
+		Infos []struct {
+			ID   string `json:"targetId"`
+			Type string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := e.cdp.call(ctx, "", "Target.getTargets", nil, &targets); err != nil {
+		return err
+	}
+	id := ""
+	for _, t := range targets.Infos {
+		if t.Type == "page" {
+			id = t.ID
+			break
+		}
+	}
+	if id == "" {
+		var created struct {
+			ID string `json:"targetId"`
+		}
+		if err := e.cdp.call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}, &created); err != nil {
+			return err
+		}
+		id = created.ID
+	}
+	var attached struct {
+		Session string `json:"sessionId"`
+	}
+	if err := e.cdp.call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": id, "flatten": true}, &attached); err != nil {
+		return err
+	}
+	e.session = attached.Session
+	var nav struct {
+		ErrorText string `json:"errorText"`
+	}
+	if err := e.cdp.call(ctx, e.session, "Page.navigate", map[string]any{"url": url}, &nav); err != nil {
+		return err
+	}
+	if nav.ErrorText != "" {
+		return fmt.Errorf("chrome: loading the player: %s", nav.ErrorText)
+	}
+	return nil
 }
 
 // launchTimeout bounds how long Chrome may take to come up.
 const launchTimeout = 30 * time.Second
 
+// eval runs js in the page and decodes its value into out.
 func (e *Engine) eval(js string, out any) error {
-	ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return chromedp.Run(ctx, chromedp.Evaluate(js, out))
+	var r struct {
+		Result struct {
+			Type  string          `json:"type"`
+			Value json.RawMessage `json:"value"`
+		} `json:"result"`
+		Exception *struct {
+			Text      string `json:"text"`
+			Exception struct {
+				Description string `json:"description"`
+			} `json:"exception"`
+		} `json:"exceptionDetails"`
+	}
+	err := e.cdp.call(ctx, e.session, "Runtime.evaluate", map[string]any{
+		"expression":    js,
+		"returnByValue": true,
+	}, &r)
+	if err != nil {
+		return err
+	}
+	if x := r.Exception; x != nil {
+		msg := x.Exception.Description
+		if msg == "" {
+			msg = x.Text
+		}
+		return fmt.Errorf("page: %s", msg)
+	}
+	if r.Result.Value == nil {
+		return fmt.Errorf("page: %s result", r.Result.Type)
+	}
+	return json.Unmarshal(r.Result.Value, out)
 }
 
 // call runs a command without awaiting any promise it returns.
@@ -250,7 +329,16 @@ func (e *Engine) Enqueue(ids []string, next bool) error {
 }
 
 // Alive reports whether Chrome is still there.
-func (e *Engine) Alive() bool { return e.ctx.Err() == nil }
+func (e *Engine) Alive() bool {
+	select {
+	case <-e.exited:
+		return false
+	case <-e.cdp.gone:
+		return false
+	default:
+		return true
+	}
+}
 
 func (e *Engine) Toggle() error               { return e.call(`brumm.toggle()`) }
 func (e *Engine) Play() error                 { return e.call(`brumm.play()`) }
@@ -263,13 +351,24 @@ func (e *Engine) SetUserToken(t string) error { return e.call(`brumm.setToken(%q
 func (e *Engine) SetShuffle(on bool) error    { return e.call(`brumm.shuffle(%t)`, on) }
 func (e *Engine) SetRepeat(mode int) error    { return e.call(`brumm.repeat(%d)`, mode) }
 
-// Close ends Chrome — waiting for it to exit, so its profile is not still
-// being written — and removes the profile.
+// Close ends Chrome — asking first, killing it if it does not exit within
+// a few seconds — waits for it so its profile is not still being written,
+// and removes the profile. It never blocks longer than that.
 func (e *Engine) Close() {
-	_ = chromedp.Cancel(e.ctx) // closes the browser and waits for it
-	e.cancel()
-	_ = e.srv.Close()
-	_ = os.RemoveAll(e.profile)
+	e.closeOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = e.cdp.call(ctx, "", "Browser.close", nil, nil)
+		cancel()
+		select {
+		case <-e.exited:
+		case <-time.After(5 * time.Second):
+			_ = e.cmd.Process.Kill()
+			<-e.exited
+		}
+		e.cdp.close()
+		_ = e.srv.Close()
+		_ = os.RemoveAll(e.profile)
+	})
 }
 
 // profileRoot keeps Chrome's throwaway profiles in the user's runtime
