@@ -100,6 +100,10 @@ type (
 		url string
 		img image.Image
 	}
+	thumbMsg struct {
+		key   string
+		lines []string
+	}
 	albumMsg struct {
 		item apple.Item
 		err  error
@@ -153,6 +157,11 @@ type Model struct {
 	coverLRU []string
 	fetching map[string]bool
 	thumbs   map[string][]string // rendered preview-card covers by address and size
+	// The preview card the last render wanted but did not have. Dithering
+	// takes ~20 ms, too slow for every row a held arrow key passes, so it
+	// runs in the background at most once per tick.
+	thumbWant thumbReq
+	thumbBusy bool
 
 	flash   string
 	flashAt time.Time
@@ -389,9 +398,25 @@ func (m *Model) keepCover(url string, img image.Image) {
 		delete(m.covers, m.coverLRU[0])
 		m.coverLRU = m.coverLRU[1:]
 	}
-	if len(m.thumbs) > 40 {
-		m.thumbs = map[string][]string{}
+}
+
+type thumbReq struct {
+	key, url string
+	size     art.Size
+}
+
+// renderThumb dithers the wanted preview card off the event loop.
+func (m *Model) renderThumb() tea.Cmd {
+	w := m.thumbWant
+	img := m.covers[w.url]
+	if m.thumbBusy || w.key == "" || img == nil {
+		return nil
 	}
+	if _, ok := m.thumbs[w.key]; ok {
+		return nil
+	}
+	m.thumbBusy = true
+	return func() tea.Msg { return thumbMsg{w.key, art.RenderDithered(img, w.size)} }
 }
 
 // prefetchCovers loads the covers of the rows on screen and just beyond,
@@ -442,7 +467,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.flash != "" && time.Since(m.flashAt) > 4*time.Second {
 			m.flash = ""
 		}
-		return m, tick()
+		return m, tea.Batch(tick(), m.renderThumb())
+	case thumbMsg:
+		m.thumbBusy = false
+		if len(m.thumbs) > 60 {
+			m.thumbs = map[string][]string{}
+		}
+		m.thumbs[msg.key] = msg.lines
+		return m, m.renderThumb()
 	case eventMsg:
 		return m, m.event(ipc.Message(msg))
 	case closedMsg:
@@ -1033,9 +1065,9 @@ func (m *Model) key(k string) tea.Cmd {
 		return func() tea.Msg { return loginMsg{login.Run(context.Background(), func(string) {})} }
 	case "1", "2", "3", "4", "5", "6":
 		return m.switchTo(section(k[0] - '1'))
-	case "tab":
+	case "tab", "right":
 		return m.switchTo((m.section + 1) % numSections)
-	case "shift+tab":
+	case "shift+tab", "left":
 		return m.switchTo((m.section + numSections - 1) % numSections)
 	case "/":
 		m.section, m.searching, m.help = secSearch, true, false
@@ -1045,9 +1077,9 @@ func (m *Model) key(k string) tea.Cmd {
 		return m.send(ipc.Request{Cmd: ipc.CmdNext})
 	case "p", "b":
 		return m.send(ipc.Request{Cmd: ipc.CmdPrev})
-	case "left", "right":
+	case "shift+left", "shift+right":
 		delta := 10.0
-		if k == "left" {
+		if k == "shift+left" {
 			delta = -10
 		}
 		return m.seek(m.position() + delta)

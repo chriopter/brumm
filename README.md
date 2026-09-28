@@ -26,6 +26,8 @@ Then run `brumm`, or click the music widget in the bar. You need an Apple Music 
 
 brumm checks for a new version every time it starts; press <kbd>U</kbd> when it offers one. Or run `brumm update`.
 
+Updates are signed: brumm and the installer only install a release whose checksums carry this project's Ed25519 signature for that exact version. Every build also has a GitHub attestation (`gh attestation verify brumm-linux-amd64.tar.gz -R chriopter/brumm`).
+
 Inspired by [vibez](https://github.com/simonepelosi/vibez).
 
 ## Development

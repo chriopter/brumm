@@ -117,8 +117,22 @@ func (m *Model) render() string {
 		for i := range stage {
 			stage[i] = strings.Repeat(" ", inset) + stage[i] + strings.Repeat(" ", room-colW-inset)
 		}
-		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			m.nav(navW, bodyH, margin, bodyTop), strings.Repeat(" ", gapW), strings.Join(stage, "\n"))
+		// Both sides are exactly as wide as their column, so rows join
+		// without measuring the long colored cover lines again.
+		nav := strings.Split(m.nav(navW, bodyH, margin, bodyTop), "\n")
+		gap := strings.Repeat(" ", gapW)
+		rows := make([]string, max(len(nav), len(stage)))
+		for i := range rows {
+			l, r := strings.Repeat(" ", navW), strings.Repeat(" ", room)
+			if i < len(nav) {
+				l = nav[i]
+			}
+			if i < len(stage) {
+				r = stage[i]
+			}
+			rows[i] = l + gap + r
+		}
+		body = strings.Join(rows, "\n")
 	}
 	pad := strings.Repeat(" ", margin)
 	lines := strings.Split(body, "\n")
@@ -203,6 +217,7 @@ func (m *Model) nav(w, h, x, y int) string {
 		top += 2
 	}
 
+	head := -1
 	msg := func(s string) []string { return centered(s, inner, rows) }
 	switch {
 	case v.err != nil && len(v.rows) == 0:
@@ -216,14 +231,15 @@ func (m *Model) nav(w, h, x, y int) string {
 	case len(v.rows) == 0:
 		lines = append(lines, msg(sDim.Render("nothing here"))...)
 	default:
+		head = len(lines) // list rows below are fitted as they are built
 		v.off = scroll(v.sel, v.off, rows)
 		m.geo.list = rect{x + 1, top, x + w - 1, top + rows}
 		// Lists of playlists, albums and artists are short names with room
 		// to spare: the right side shows a card for the selected one.
-		card := m.previewCard(v, inner, rows)
+		card, cw := m.previewCard(v, inner, rows)
 		listW := inner
 		if card != nil {
-			listW = inner - lipgloss.Width(card[0]) - 3
+			listW = inner - cw - 3
 		}
 		for i := v.off; i < v.off+rows; i++ {
 			line := ""
@@ -237,7 +253,12 @@ func (m *Model) nav(w, h, x, y int) string {
 				if j := i - v.off; j < len(card) {
 					c = card[j]
 				}
-				line = pad(line, listW) + "   " + c
+				if c == "" {
+					c = strings.Repeat(" ", cw)
+				}
+				line = fit(line, listW) + "   " + c // card lines are cw wide
+			} else {
+				line = fit(line, inner)
 			}
 			lines = append(lines, line)
 		}
@@ -257,6 +278,12 @@ func (m *Model) nav(w, h, x, y int) string {
 	if n := len(v.rows); n > 0 && v.loaded {
 		pos = fmt.Sprintf("%d of %d", v.sel+1, n)
 	}
+	if head < 0 {
+		head = len(lines)
+	}
+	for i := range head {
+		lines[i] = fit(lines[i], inner)
+	}
 	return box(title, len(crumb) > 1, pos, lines, w, h)
 }
 
@@ -274,27 +301,24 @@ func (m *Model) searchBox(w int) string {
 
 // previewCard is the selected item's cover with its name under it, for
 // lists of items wide enough to hold it; nil otherwise.
-func (m *Model) previewCard(v *view, inner, rows int) []string {
+func (m *Model) previewCard(v *view, inner, rows int) ([]string, int) {
 	if v.sel >= len(v.rows) || v.rows[v.sel].item == nil || inner < 70 || rows < 12 {
-		return nil
+		return nil, 0
 	}
 	it := v.rows[v.sel].item
 	cw := min(inner*2/5, 44)
 	chh := min(rows-3, int(float64(cw)/m.cellAspect))
 	cw = int(math.Round(float64(chh) * m.cellAspect))
 	if chh < 6 {
-		return nil
+		return nil, 0
 	}
 	var out []string
 	size := art.Size{Width: cw, Height: chh}
 	key := fmt.Sprintf("%s@%dx%d", it.Artwork, cw, chh)
 	if lines, ok := m.thumbs[key]; ok {
 		out = append(out, lines...)
-	} else if img := m.covers[it.Artwork]; img != nil {
-		lines := art.RenderDithered(img, size)
-		m.thumbs[key] = lines
-		out = append(out, lines...)
 	} else {
+		m.thumbWant = thumbReq{key, it.Artwork, size}
 		icon := map[string]string{apple.KindPlaylist: icPlaylist, apple.KindAlbum: icAlbum, apple.KindArtist: icArtist}[it.Kind]
 		for i := range chh {
 			l := strings.Repeat("░", cw)
@@ -304,14 +328,12 @@ func (m *Model) previewCard(v *view, inner, rows int) []string {
 			out = append(out, sDim.Render(l))
 		}
 	}
-	out = append(out, "", sBold.Render(ansi.Truncate(it.Name, cw, "…")))
+	// Every line is cw wide: the cover by construction, the rest padded.
+	out = append(out, strings.Repeat(" ", cw), fit(sBold.Render(ansi.Truncate(it.Name, cw, "…")), cw))
 	if it.Artist != "" {
-		out = append(out, sDim.Render(ansi.Truncate(it.Artist, cw, "…")))
+		out = append(out, fit(sDim.Render(ansi.Truncate(it.Artist, cw, "…")), cw))
 	}
-	for i := range out {
-		out[i] = pad(out[i], cw)
-	}
-	return out
+	return out, cw
 }
 
 // row renders one list line: the selection gutter, the text (the
@@ -401,6 +423,7 @@ type stageLine struct {
 	text   string
 	center bool
 	hit    func(x, y int)
+	width  int // known display width; skips measuring long colored lines
 }
 
 func (m *Model) stage(colW, coverH, h, x, y int) string {
@@ -433,12 +456,16 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 		if row < 0 || row >= h {
 			return
 		}
-		text := ansi.Truncate(l.text, colW, "…")
+		text, w := l.text, l.width
+		if w == 0 || w > colW {
+			text = ansi.Truncate(l.text, colW, "…")
+			w = lipgloss.Width(text)
+		}
 		left := 0
 		if l.center {
-			left = max(0, (colW-lipgloss.Width(text))/2)
+			left = max(0, (colW-w)/2)
 		}
-		out[row] = pad(strings.Repeat(" ", left)+text, colW)
+		out[row] = strings.Repeat(" ", left) + text + strings.Repeat(" ", max(0, colW-left-w))
 		if l.hit != nil {
 			l.hit(x+left, y+row)
 		}
@@ -498,8 +525,8 @@ func (m *Model) helpLines() []stageLine {
 		name string
 		keys [][2]string
 	}{
-		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"1–5 tab", "sections"}, {"/", "search (paste a music.apple.com link to open it)"}, {"6", "queue"}, {"a A", "the song's album / artist"}, {"c", "go to what's playing"}}},
-		{"play", [][2]string{{"space", "play / pause"}, {"hold space  o", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"z Z", "add to queue / play next"}, {"*", "favorite ♥"}, {"y", "copy the song's link"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
+		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"← → 1–6", "sections"}, {"/", "search (paste a music.apple.com link to open it)"}, {"6", "queue"}, {"a A", "the song's album / artist"}, {"c", "go to what's playing"}}},
+		{"play", [][2]string{{"space", "play / pause"}, {"hold space  o", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"z Z", "add to queue / play next"}, {"*", "favorite ♥"}, {"y", "copy the song's link"}, {"shift ← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
 		{"brumm", [][2]string{{"f", "fullscreen visualizer (v: next)"}, {"[ ]", "narrower / wider list"}, {"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}, {"U", "install an available update"}}},
 	}
 	var out []stageLine
@@ -550,7 +577,10 @@ func box(title string, crumbed bool, label string, lines []string, w, h int) str
 		if i < len(lines) {
 			line = lines[i]
 		}
-		out = append(out, b.Render("│")+pad(ansi.Truncate(line, inner, "…"), inner)+" "+b.Render("│"))
+		if line == "" {
+			line = strings.Repeat(" ", inner)
+		}
+		out = append(out, b.Render("│")+line+" "+b.Render("│")) // lines come fitted to inner
 	}
 	bottom := "╰" + strings.Repeat("─", w-2) + "╯"
 	if label != "" {
@@ -560,6 +590,11 @@ func box(title string, crumbed bool, label string, lines []string, w, h int) str
 		return strings.Join(out, "\n")
 	}
 	return strings.Join(append(out, b.Render(bottom)), "\n")
+}
+
+// fit truncates or pads s to exactly w cells.
+func fit(s string, w int) string {
+	return pad(ansi.Truncate(s, w, "…"), w)
 }
 
 func pad(s string, w int) string {
