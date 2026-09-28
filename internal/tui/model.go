@@ -143,6 +143,10 @@ type Model struct {
 	spaceSeq   int
 	previewing bool
 
+	split    float64 // the list's share of the width
+	dragging bool    // the divider is being dragged
+	reexec   bool    // the binary was updated: restart into it on quit
+
 	full     bool // fullscreen visualizer
 	vizStyle int
 	viz      visualizer
@@ -159,6 +163,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		rendered:   map[art.Size][]string{},
 		cellAspect: cellAspect(),
 		lastVol:    1,
+		split:      loadSplit(),
 	}
 	for s := secPlaylists; s <= secSongs; s++ {
 		m.stacks[s] = []*view{{title: sectionNames[s], key: "list:" + sectionLists[s]}}
@@ -297,6 +302,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventMsg:
 		return m, m.event(ipc.Message(msg))
 	case closedMsg:
+		// The daemon went away. After an update it restarts with a new
+		// binary; restart the TUI into it too.
+		if binaryUpdated() {
+			m.reexec = true
+			return m, tea.Quit
+		}
 		m.state.Status, m.state.Message = ipc.StatusStarting, "reconnecting"
 		return m, reconnect()
 	case connectedMsg:
@@ -355,7 +366,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.key(msg.String())
 	case tea.MouseClickMsg:
+		if ms := msg.Mouse(); ms.Button == tea.MouseLeft && m.geo.divider.has(ms.X, ms.Y) {
+			m.dragging = true
+			return m, nil
+		}
 		return m, m.click(msg.Mouse())
+	case tea.MouseMotionMsg:
+		if m.dragging {
+			m.setSplit(float64(msg.X-margin) / float64(max(1, m.width-2*margin)))
+		}
+	case tea.MouseReleaseMsg:
+		if m.dragging {
+			m.dragging = false
+			saveSplit(m.split)
+		}
 	case tea.MouseWheelMsg:
 		if msg.Button == tea.MouseWheelUp {
 			return m, m.move("up")
@@ -682,6 +706,13 @@ func (m *Model) key(k string) tea.Cmd {
 		m.state.Repeat = next
 		m.setFlash([...]string{"repeat off", "repeat one", "repeat all"}[next])
 		return m.send(ipc.Request{Cmd: ipc.CmdRepeat, Value: float64(next)})
+	case "[", "]":
+		delta := 0.05
+		if k == "[" {
+			delta = -0.05
+		}
+		m.setSplit(m.split + delta)
+		saveSplit(m.split)
 	case "c":
 		return m.jumpToPlaying()
 	case "a":
@@ -699,6 +730,8 @@ func (m *Model) key(k string) tea.Cmd {
 	}
 	return nil
 }
+
+func (m *Model) setSplit(f float64) { m.split = min(0.75, max(0.2, f)) }
 
 func (m *Model) setVolume(v float64) tea.Cmd {
 	v = min(1, max(0, v))

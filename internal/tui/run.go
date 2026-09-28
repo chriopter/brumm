@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,8 +29,51 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	_, err = tea.NewProgram(newModel(client, *r.State)).Run()
-	return err
+	final, err := tea.NewProgram(newModel(client, *r.State)).Run()
+	if err != nil {
+		return err
+	}
+	if m, ok := final.(*Model); ok && m.reexec {
+		// The binary changed under us (an update): continue in the new one.
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		return syscall.Exec(self, os.Args, os.Environ())
+	}
+	return nil
+}
+
+var started = time.Now()
+
+// binaryUpdated reports whether the executable was replaced since start.
+func binaryUpdated() bool {
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	fi, err := os.Stat(self)
+	return err == nil && fi.ModTime().After(started)
+}
+
+func splitPath() string { return filepath.Join(config.CacheDir(), "split") }
+
+// loadSplit is the list's remembered share of the width, 2/5 by default.
+func loadSplit() float64 {
+	b, err := os.ReadFile(splitPath())
+	if err != nil {
+		return 0.4
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
+	if err != nil || f < 0.2 || f > 0.75 {
+		return 0.4
+	}
+	return f
+}
+
+func saveSplit(f float64) {
+	_ = os.MkdirAll(config.CacheDir(), 0o755)
+	_ = os.WriteFile(splitPath(), []byte(strconv.FormatFloat(f, 'f', 3, 64)), 0o644)
 }
 
 func connect() (*ipc.Client, error) {

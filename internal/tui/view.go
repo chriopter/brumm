@@ -56,10 +56,6 @@ const (
 	stagePad = 2
 	listTop  = 3 // list rows start this far below the panel's top border
 
-	// Stage lines under the cover: title, meta, gap, spectrum, gap,
-	// progress, gap, controls.
-	specRows   = 4
-	stageBelow = 3 + specRows + 4
 )
 
 // rect is a clickable screen area, x1/y1 exclusive.
@@ -69,7 +65,7 @@ func (r rect) has(x, y int) bool { return x >= r.x0 && x < r.x1 && y >= r.y0 && 
 
 // geometry records where things were drawn, for mouse hit-testing.
 type geometry struct {
-	list, crumb, search                            rect
+	list, crumb, search, divider                   rect
 	tabs                                           [5]rect
 	prev, play, next, shuffle, repeat, volume, bar rect
 }
@@ -98,25 +94,30 @@ func (m *Model) render() string {
 	inner := m.width - 2*margin
 	bodyH := m.height - bodyTop - 2 // blank line + footer
 
-	// The stage is one column as wide as the cover; the list gets the rest.
-	coverH := max(0, bodyH-1-stageBelow)
-	colW := int(math.Round(float64(coverH) * m.cellAspect))
-	if maxCol := inner - navMin - 2 - 2*stagePad; colW > maxCol {
-		colW = maxCol
-		coverH = int(float64(colW) / m.cellAspect)
-	}
-	colW = max(colW, colMin)
-	navW := inner - colW - 2*stagePad - 2
+	// The list takes its share of the width (2/5 unless dragged); the
+	// stage centers a column as wide as the cover in the rest.
+	gapW := 2 + 2*stagePad
+	navW := int(math.Round(float64(inner) * m.split))
+	navW = max(navMin, min(navW, inner-gapW-colMin))
+	stageW := inner - navW - gapW
 
 	var body string
-	if navW < navMin {
+	if stageW < colMin || navW < navMin {
 		mini := m.miniPlayer(inner)
 		body = lipgloss.JoinVertical(lipgloss.Left, append([]string{m.nav(inner, bodyH-len(mini), margin, bodyTop)}, mini...)...)
 	} else {
-		stageX := margin + navW + 2 + stagePad
+		coverH := max(0, bodyH-1-stageBelow)
+		coverH = min(coverH, int(float64(stageW)/m.cellAspect))
+		colW := max(colMin, min(stageW, int(math.Round(float64(coverH)*m.cellAspect))))
+		inset := (stageW - colW) / 2
+		stageX := margin + navW + gapW + inset
+		m.geo.divider = rect{margin + navW - 1, bodyTop, margin + navW + gapW, bodyTop + bodyH}
+		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop), "\n")
+		for i := range stage {
+			stage[i] = strings.Repeat(" ", inset) + stage[i] + strings.Repeat(" ", stageW-colW-inset)
+		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			m.nav(navW, bodyH, margin, bodyTop), strings.Repeat(" ", 2+stagePad),
-			m.stage(colW, coverH, bodyH, stageX, bodyTop))
+			m.nav(navW, bodyH, margin, bodyTop), strings.Repeat(" ", gapW), strings.Join(stage, "\n"))
 	}
 	pad := strings.Repeat(" ", margin)
 	lines := strings.Split(body, "\n")
@@ -169,7 +170,12 @@ func (m *Model) nav(w, h, x, y int) string {
 	tx0 := x + 3   // text column: under the breadcrumb, after the gutter
 	v := m.cur()
 
-	// Tabs: the active one where-you-are colored, the rest dim.
+	// Tabs: the active one where-you-are colored, the rest dim; spaced
+	// tighter when the list is narrow.
+	sep := 3
+	if total := len(strings.Join(sectionNames, "")) + sep*(len(sectionNames)-1); total > inner-2 {
+		sep = 2
+	}
 	var tabs []string
 	tx := tx0
 	for i, name := range sectionNames {
@@ -179,9 +185,9 @@ func (m *Model) nav(w, h, x, y int) string {
 		}
 		m.geo.tabs[i] = rect{tx, y + 1, tx + len(name), y + 2}
 		tabs = append(tabs, label)
-		tx += len(name) + 3
+		tx += len(name) + sep
 	}
-	lines := []string{"  " + strings.Join(tabs, "   "), ""}
+	lines := []string{"  " + strings.Join(tabs, strings.Repeat(" ", sep)), ""}
 
 	rows := h - 2 - len(lines) - 1
 	top := y + 1 + len(lines)
@@ -387,92 +393,6 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 	return strings.Join(out, "\n")
 }
 
-// nowPlaying returns the stage in two parts: the cover (top-anchored) and
-// the title, spectrum, progress and controls (bottom-anchored).
-func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
-	st := m.state
-	add := func(s string) { bottom = append(bottom, stageLine{text: s}) }
-
-	if coverH >= 6 {
-		coverW := min(colW, int(math.Round(float64(coverH)*m.cellAspect)))
-		for _, l := range m.coverLines(art.Size{Width: coverW, Height: coverH}) {
-			top = append(top, stageLine{text: l, center: true})
-		}
-	}
-	title, artist, album := st.Title, st.Artist, st.Album
-	if p := st.Preview; p != nil {
-		title, artist, album = p.Title, p.Artist, ""
-	}
-	if st.Preview != nil {
-		add(sPill.Render(" preview ") + "  " + sBold.Render(title))
-	} else {
-		add(sBold.Render(title))
-	}
-	meta := artist
-	if album != "" && album != title {
-		meta += sDim.Render("  ·  " + album)
-	}
-	add(meta)
-	add("")
-	for _, l := range m.spectrum(colW, specRows) {
-		add(l)
-	}
-	add("")
-	left, right := clock(m.position())+"  ", "  "+clock(st.Dur)
-	barLen := colW - lipgloss.Width(left) - lipgloss.Width(right)
-	bottom = append(bottom, stageLine{text: m.progress(colW), hit: func(x, y int) {
-		m.geo.bar = rect{x + lipgloss.Width(left), y, x + lipgloss.Width(left) + barLen, y + 1}
-	}})
-	add("")
-	bottom = append(bottom, m.controls(colW))
-	return top, bottom
-}
-
-// controls: shuffle, previous, play, next and repeat centered under the
-// cover, play the one filled button; volume at the right edge.
-func (m *Model) controls(w int) stageLine {
-	st := m.state
-	playIcon := icPlay
-	if st.Playing {
-		playIcon = icPause
-	}
-	lit := func(on bool, s string) string {
-		if on {
-			return s
-		}
-		return sDim.Render(s)
-	}
-	repeatIcon := icRepeat
-	if st.Repeat == 1 {
-		repeatIcon = icRepeatOne
-	}
-	volIcon := icVolume
-	if st.Volume == 0 {
-		volIcon = icMuted
-	}
-	const gap = "   "
-	play := sPlays.Render("") + sPill.Render(" "+playIcon+" ") + sPlays.Render("")
-	group := lit(st.Shuffle, icShuffle) + gap + icPrev + gap + play + gap + icNext + gap + lit(st.Repeat != 0, repeatIcon)
-	gw := lipgloss.Width(group)
-	volume := sDim.Render(fmt.Sprintf("%s %d", volIcon, int(math.Round(st.Volume*100))))
-	start := max(0, (w-gw)/2)
-	line := strings.Repeat(" ", start) + group
-	if room := w - lipgloss.Width(line) - lipgloss.Width(volume); room >= 2 {
-		line += strings.Repeat(" ", room) + volume
-	}
-	return stageLine{text: line, hit: func(x, y int) {
-		// Cells: shuffle 0, prev 4, play 8–12, next 16, repeat 20.
-		x += start
-		m.geo.shuffle = rect{x - 1, y, x + 2, y + 1}
-		m.geo.prev = rect{x + 3, y, x + 6, y + 1}
-		m.geo.play = rect{x + 7, y, x + 14, y + 1}
-		m.geo.next = rect{x + 15, y, x + 18, y + 1}
-		m.geo.repeat = rect{x + 19, y, x + 22, y + 1}
-		vx := x - start + w - lipgloss.Width(volume)
-		m.geo.volume = rect{vx, y, vx + lipgloss.Width(volume), y + 1}
-	}}
-}
-
 func (m *Model) coverLines(size art.Size) []string {
 	if lines, ok := m.rendered[size]; ok {
 		return lines
@@ -493,56 +413,6 @@ func (m *Model) coverLines(size art.Size) []string {
 	return lines
 }
 
-// spectrum draws the live bands as solid bars, eighth-block precise, with
-// a resting baseline so the shape stays visible when quiet.
-func (m *Model) spectrum(w, rows int) []string {
-	levels := make([]float64, w)
-	if n := len(m.spec); n > 0 {
-		for i := range levels {
-			x := float64(i) * float64(n-1) / float64(max(1, w-1))
-			lo := int(x)
-			hi := min(lo+1, n-1)
-			f := x - float64(lo)
-			levels[i] = m.spec[lo]*(1-f) + m.spec[hi]*f
-		}
-	}
-	ramp := []rune(" ▁▂▃▄▅▆▇█")
-	out := make([]string, rows)
-	for r := range rows {
-		row := rows - 1 - r // 0 is the bottom row
-		var sb strings.Builder
-		for _, lv := range levels {
-			fill := lv*float64(rows*8) - float64(row*8)
-			ch := ' '
-			switch {
-			case fill >= 8:
-				ch = '█'
-			case fill >= 0.5:
-				ch = ramp[int(math.Round(fill))]
-			case row == 0:
-				ch = '▁'
-			}
-			sb.WriteRune(ch)
-		}
-		out[r] = sMusic.Render(sb.String())
-	}
-	return out
-}
-
-// progress is one rule in two colors — played and to come — with the
-// times at its ends, like a meter in btop rather than a web slider.
-func (m *Model) progress(w int) string {
-	pos, dur := m.position(), m.state.Dur
-	left, right := clock(pos)+"  ", "  "+clock(dur)
-	bar := w - lipgloss.Width(left) - lipgloss.Width(right)
-	done := 0
-	if dur > 0 {
-		done = min(bar, int(math.Round(float64(bar)*pos/dur)))
-	}
-	return sDim.Render(left) + sHere.Render(strings.Repeat("━", done)) +
-		sDim.Render(strings.Repeat("━", bar-done)+right)
-}
-
 func (m *Model) helpLines() []stageLine {
 	groups := []struct {
 		name string
@@ -550,7 +420,7 @@ func (m *Model) helpLines() []stageLine {
 	}{
 		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"1–5 tab", "sections"}, {"/", "search"}, {"a", "go to the song's album"}, {"c", "go to what's playing"}}},
 		{"play", [][2]string{{"space", "play / pause"}, {"hold space", "preview the selected song"}, {"n p", "next / previous"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
-		{"brumm", [][2]string{{"f", "fullscreen visualizer (v: next)"}, {"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}}},
+		{"brumm", [][2]string{{"f", "fullscreen visualizer (v: next)"}, {"[ ]", "narrower / wider list"}, {"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}}},
 	}
 	var out []stageLine
 	for i, g := range groups {
