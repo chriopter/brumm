@@ -34,7 +34,7 @@
     btn.disabled = true;
     try {
       const token = await MusicKit.getInstance().authorize();
-      const r = await fetch('/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+      const r = await fetch('token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
       if (!r.ok) throw new Error('brumm did not accept the token');
       say('Signed in. You can close this tab.');
       btn.textContent = 'Done';

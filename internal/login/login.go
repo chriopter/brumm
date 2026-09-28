@@ -8,7 +8,9 @@ package login
 
 import (
 	"context"
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/chriopter/brumm/internal/config"
@@ -44,13 +47,28 @@ func Run(ctx context.Context, status func(string)) error {
 	if err != nil {
 		return fmt.Errorf("login: %w (is another login open?)", err)
 	}
+	// A secret per login: the page lives at /<secret>/ and posts the token
+	// back with it, so nothing else — a local process, another web page —
+	// can plant a token of its own. The origin must be this page's.
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	secret := hex.EncodeToString(raw)
+	origin := "http://" + addr
 	tokens := make(chan string, 1)
+	var once sync.Once
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /"+secret+"/{$}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		_ = pageTmpl.Execute(w, map[string]string{"DeveloperToken": cfg.Developer()})
 	})
-	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /"+secret+"/token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != origin || r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		var body struct {
 			Token string `json:"token"`
 		}
@@ -58,17 +76,14 @@ func Run(ctx context.Context, status func(string)) error {
 			http.Error(w, "missing token", http.StatusBadRequest)
 			return
 		}
-		select {
-		case tokens <- body.Token:
-		default:
-		}
+		once.Do(func() { tokens <- body.Token })
 		w.WriteHeader(http.StatusNoContent)
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
-	url := "http://" + addr + "/"
+	url := origin + "/" + secret + "/"
 	status("opening Apple Music sign-in in your browser…")
 	if err := exec.Command("xdg-open", url).Start(); err != nil {
 		status("open " + url + " to sign in")

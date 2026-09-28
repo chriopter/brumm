@@ -4,9 +4,14 @@
 
 ![brumm](docs/screenshot.png)
 
-- Playlists, albums, artists, songs, a live catalog search and the queue, with keyboard and mouse
-- Hold <kbd>space</kbd> on a song to preview it, <kbd>f</kbd> for a fullscreen visualizer
-- Opens where you left off, and updates itself with signed releases
+## Features
+
+- **Everything in Apple Music:** playlists, albums, artists, your songs, a catalog search that answers as you type, and the queue. Paste a music.apple.com link to open it.
+- **Keyboard and mouse:** click to open or play, drag the divider, click the bar to seek; <kbd>?</kbd> lists every key.
+- **Preview:** hold <kbd>space</kbd> (or press <kbd>o</kbd>) on a song to hear it; your music continues after.
+- **Visualizer:** <kbd>f</kbd> for fullscreen, ten styles from Winamp bars to a MilkDrop ring.
+- **Favorites and queue:** <kbd>*</kbd> to love a song, <kbd>z</kbd> to queue it, <kbd>Z</kbd> to play it next.
+- **At home in Omarchy:** your theme's colors, media keys, a widget in the bar; music keeps playing when the window closes and picks up where you left off.
 
 ## Install
 

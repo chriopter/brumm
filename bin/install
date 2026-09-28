@@ -1,25 +1,43 @@
 #!/usr/bin/env bash
 # Install brumm from the latest release:
 #   curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
-# Checks the download against the release's checksums (and its build
-# attestation, when the GitHub CLI is signed in), then installs into your
-# home. brumm keeps itself up to date from then on.
+# Refuses to install unless the release is signed by brumm's release key —
+# the same key brumm checks its own updates with.
 set -euo pipefail
 
 repo=chriopter/brumm
-base="https://github.com/$repo/releases/latest/download"
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-cd "$tmp"
+pubkey="b75tAkLgE9PbLq7BKUf3akF3BDBBcamcqS/fCKxwao4=" # Ed25519, raw, base64
 
-echo "downloading brumm"
-curl -fsSLO "$base/brumm-linux-amd64.tar.gz"
-curl -fsSLO "$base/SHA256SUMS"
-sha256sum --quiet --check --ignore-missing SHA256SUMS
-if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
-  gh attestation verify brumm-linux-amd64.tar.gz -R "$repo" >/dev/null
-  echo "verified: built by $repo's release workflow"
-fi
+[[ $(uname -m) == x86_64 ]] || { echo "brumm is built for x86_64 only" >&2; exit 1; }
+for tool in curl tar openssl sha256sum base64; do
+  command -v "$tool" >/dev/null || { echo "the installer needs $tool" >&2; exit 1; }
+done
+
+# Resolve the release once, so every file comes from the same one.
+tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest")
+tag=${tag##*/}
+[[ $tag == v* ]] || { echo "could not find the latest release" >&2; exit 1; }
+base="https://github.com/$repo/releases/download/$tag"
+
+work="${XDG_CACHE_HOME:-$HOME/.cache}/brumm/install"
+rm -rf "$work"
+mkdir -p "$work"
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+
+echo "downloading brumm $tag"
+for f in brumm-linux-amd64.tar.gz SHA256SUMS SHA256SUMS.sig; do
+  curl -fsSLO "$base/$f"
+done
+
+# The checksums must carry the release key's signature and name this version.
+{ printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'; printf %s "$pubkey" | base64 -d; } > key.der
+openssl pkey -pubin -inform DER -in key.der -out key.pem
+base64 -d SHA256SUMS.sig > sig.bin
+openssl pkeyutl -verify -pubin -inkey key.pem -rawin -in SHA256SUMS -sigfile sig.bin >/dev/null   || { echo "the release signature does not check out; not installing" >&2; exit 1; }
+grep -qx "version $tag" SHA256SUMS || { echo "the release is signed for another version; not installing" >&2; exit 1; }
+grep ' brumm-linux-amd64.tar.gz$' SHA256SUMS | sha256sum --check --quiet --strict
+echo "verified: signed by the brumm release key"
 
 tar -xzf brumm-linux-amd64.tar.gz
 ./brumm/brumm setup ./brumm

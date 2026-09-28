@@ -3,13 +3,16 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -77,17 +80,32 @@ func Start(developerToken, userToken, version string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The page carries the user's Apple Music token. It is served only at an
+	// unguessable path and only to requests addressed to this loopback port,
+	// so other local users cannot read it.
+	secret := make([]byte, 16)
+	if _, err := rand.Read(secret); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	pagePath := "/" + hex.EncodeToString(secret)
+	host := ln.Addr().String()
 	srv := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != pagePath || r.Host != host {
+				http.NotFound(w, r)
+				return
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Referrer-Policy", "no-referrer")
 			_, _ = w.Write([]byte(html))
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() { _ = srv.Serve(ln) }()
 
-	profile, err := os.MkdirTemp("", "brumm-chrome-")
+	profile, err := os.MkdirTemp(profileRoot(), "brumm-chrome-")
 	if err != nil {
 		_ = srv.Close()
 		return nil, err
@@ -119,7 +137,7 @@ func Start(developerToken, userToken, version string) (*Engine, error) {
 		profile: profile,
 		cancel:  func() { ctxCancel(); allocCancel() },
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/", ln.Addr().(*net.TCPAddr).Port)
+	url := "http://" + host + pagePath
 	// Launch the browser on the long-lived context, then navigate on a
 	// bounded one so a dead network cannot hang startup forever.
 	if err := chromedp.Run(ctx); err != nil {
@@ -227,8 +245,29 @@ func (e *Engine) SetUserToken(t string) error { return e.call(`brumm.setToken(%q
 func (e *Engine) SetShuffle(on bool) error    { return e.call(`brumm.shuffle(%t)`, on) }
 func (e *Engine) SetRepeat(mode int) error    { return e.call(`brumm.repeat(%d)`, mode) }
 
+// Close ends Chrome — waiting for it to exit, so its profile is not still
+// being written — and removes the profile.
 func (e *Engine) Close() {
+	_ = chromedp.Cancel(e.ctx) // closes the browser and waits for it
 	e.cancel()
 	_ = e.srv.Close()
 	_ = os.RemoveAll(e.profile)
+}
+
+// profileRoot keeps Chrome's throwaway profiles in the user's runtime
+// directory: private to the user and cleared at logout.
+func profileRoot() string {
+	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+		return d
+	}
+	return os.TempDir()
+}
+
+// SweepProfiles removes profiles a killed daemon left behind. Call it
+// before starting Chrome.
+func SweepProfiles() {
+	old, _ := filepath.Glob(filepath.Join(profileRoot(), "brumm-chrome-*"))
+	for _, dir := range old {
+		_ = os.RemoveAll(dir)
+	}
 }

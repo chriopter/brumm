@@ -1,0 +1,33 @@
+package engine
+
+import (
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// TestPageDefinesCalls makes sure every brumm.<name>(…) the engine calls
+// exists on the playback page — a missing one fails silently in Chrome.
+func TestPageDefinesCalls(t *testing.T) {
+	src, err := os.ReadFile("engine.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := map[string]bool{}
+	for _, m := range regexp.MustCompile(`brumm\.([a-zA-Z]+)\(`).FindAllStringSubmatch(string(src), -1) {
+		called[m[1]] = true
+	}
+	if len(called) < 10 {
+		t.Fatalf("found only %d calls; the pattern is off", len(called))
+	}
+	for name := range called {
+		def := regexp.MustCompile(`(?m)^\s+(async\s+)?` + name + `\(`)
+		if !def.MatchString(page) {
+			t.Errorf("player.html does not define brumm.%s", name)
+		}
+	}
+	if !strings.Contains(page, "__BRUMM_CFG__") {
+		t.Error("player.html lost its config placeholder")
+	}
+}

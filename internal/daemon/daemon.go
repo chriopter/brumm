@@ -57,15 +57,18 @@ type Daemon struct {
 	lib     *library
 	resume  *resume // last queue and song; guarded by mu
 
-	mu         sync.Mutex
-	eng        *engine.Engine
-	api        *apple.Client
-	state      ipc.State
-	conns      map[*conn]bool
-	booting    bool
-	refreshing bool
-	expiresIn  int    // days until the developer token expires, when under 45
-	update     string // a newer release, when one is available
+	mu          sync.Mutex
+	eng         *engine.Engine
+	api         *apple.Client
+	state       ipc.State
+	conns       map[*conn]bool
+	booting     bool
+	refreshing  bool
+	refreshNext bool      // another refresh was asked for during one
+	expiresIn   int       // days until the developer token expires, when under 45
+	expires     time.Time // when the developer token expires
+	update      string    // a newer release, when one is available
+	installed   string    // a release installed but not yet restarted into
 
 	quit     chan struct{}
 	quitOnce sync.Once
@@ -80,6 +83,7 @@ func Run(version string) error {
 	}
 	defer os.Remove(config.Socket())
 
+	engine.SweepProfiles() // left behind by crashes
 	d := &Daemon{
 		version:  version,
 		state:    ipc.State{Status: ipc.StatusStarting, Message: "starting"},
@@ -178,6 +182,7 @@ func (d *Daemon) boot() {
 	d.mu.Lock()
 	d.api = apple.New(cfg.Developer(), cfg.UserToken)
 	if exp := cfg.Expires(); !exp.IsZero() {
+		d.expires = exp
 		if days := int(time.Until(exp).Hours() / 24); days < 45 {
 			d.expiresIn = max(days, 0)
 		}
@@ -352,6 +357,7 @@ func (d *Daemon) serve(nc net.Conn) {
 	}()
 	sc := bufio.NewScanner(nc)
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	busy := make(chan struct{}, 8) // at most 8 requests in flight per client
 	for sc.Scan() {
 		var r ipc.Request
 		if json.Unmarshal(sc.Bytes(), &r) != nil {
@@ -359,7 +365,9 @@ func (d *Daemon) serve(nc net.Conn) {
 		}
 		// Requests may be slow (network); answer them concurrently so a
 		// search does not hold up a pause.
+		busy <- struct{}{}
 		go func() {
+			defer func() { <-busy }()
 			reply := ipc.Message{ID: r.ID}
 			if err := d.handle(c, r, &reply); err != nil {
 				reply.Error = err.Error()
@@ -542,6 +550,9 @@ func (d *Daemon) fetchList(api *apple.Client, name string, reply *ipc.Message) e
 	default:
 		return fmt.Errorf("unknown list %q", name)
 	}
+	if errors.Is(err, apple.ErrPartial) && len(reply.Items)+len(reply.Tracks) > 0 {
+		return nil // show what arrived, but do not cache an incomplete list
+	}
 	if err != nil {
 		return err
 	}
@@ -576,7 +587,11 @@ func (d *Daemon) open(it apple.Item, reply *ipc.Message) error {
 		d.lib.setItems(key, reply.Items)
 		return nil
 	}
-	if reply.Tracks, err = api.Tracks(it); err != nil {
+	reply.Tracks, err = api.Tracks(it)
+	if errors.Is(err, apple.ErrPartial) {
+		return nil // show, don't cache
+	}
+	if err != nil {
 		return d.authCheck(err)
 	}
 	d.lib.setTracks(key, reply.Tracks)
@@ -622,15 +637,27 @@ func (d *Daemon) reload() {
 func (d *Daemon) refresh() {
 	d.mu.Lock()
 	api, busy := d.api, d.refreshing
+	if busy {
+		d.refreshNext = true // e.g. a new login: refresh again with its client
+		d.mu.Unlock()
+		return
+	}
 	d.refreshing = true
 	d.mu.Unlock()
-	if api == nil || busy {
+	if api == nil {
+		d.mu.Lock()
+		d.refreshing = false
+		d.mu.Unlock()
 		return
 	}
 	defer func() {
 		d.mu.Lock()
-		d.refreshing = false
+		again := d.refreshNext
+		d.refreshing, d.refreshNext = false, false
 		d.mu.Unlock()
+		if again {
+			go d.refresh()
+		}
 	}()
 
 	changed := func() {
@@ -650,6 +677,9 @@ func (d *Daemon) refresh() {
 	playlists, _ := d.lib.items(ipc.ListPlaylists)
 	for _, p := range playlists {
 		tracks, err := api.Tracks(p)
+		if errors.Is(err, apple.ErrPartial) {
+			continue // keep the cached full list rather than a cut one
+		}
 		if errors.Is(err, apple.ErrUnauthorized) {
 			_ = d.authCheck(err)
 			return

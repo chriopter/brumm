@@ -123,7 +123,7 @@ func Dial() (*Client, error) {
 		conn:    conn,
 		enc:     json.NewEncoder(conn),
 		pending: map[int]chan Message{},
-		events:  make(chan Message, 64),
+		events:  make(chan Message, 256),
 	}
 	go c.read()
 	return c, nil
@@ -147,14 +147,12 @@ func (c *Client) read() {
 			}
 			continue
 		}
-		if (m.Spectrum != nil || m.Wave != nil) && m.State == nil {
-			select {
-			case c.events <- m:
-			default: // a busy reader drops spectrum frames, never state
-			}
-			continue
+		// Never block here: replies share this reader. A client that falls
+		// this far behind loses frames, and state catches up with the next.
+		select {
+		case c.events <- m:
+		default:
 		}
-		c.events <- m
 	}
 	close(c.events)
 	c.mu.Lock()

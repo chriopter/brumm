@@ -13,6 +13,7 @@ package update
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -28,6 +29,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -43,7 +45,14 @@ const (
 	pluginID = "chriopter.brumm"
 )
 
-var client = &http.Client{Timeout: 2 * time.Minute}
+// client bounds connecting and waiting for an answer, not the whole body,
+// so a slow line still finishes a download.
+var client = &http.Client{Transport: &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	TLSHandshakeTimeout:   15 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
+	IdleConnTimeout:       30 * time.Second,
+}}
 
 func home() string { h, _ := os.UserHomeDir(); return h }
 
@@ -96,24 +105,35 @@ func Latest() (string, error) {
 	return rel.Tag, nil
 }
 
-// Newer reports whether tag a is a later version than b (vMAJOR.MINOR.PATCH).
+// Newer reports whether tag a is a later version than b
+// (vMAJOR.MINOR.PATCH, optionally -PRERELEASE, which ranks below its
+// release).
 func Newer(a, b string) bool {
-	pa, pb := parse(a), parse(b)
-	for i := range pa {
-		if pa[i] != pb[i] {
-			return pa[i] > pb[i]
+	na, pa := parse(a)
+	nb, pb := parse(b)
+	if na != nb {
+		for i := range na {
+			if na[i] != nb[i] {
+				return na[i] > nb[i]
+			}
 		}
 	}
-	return false
+	// Same numbers: a release beats its pre-release, nothing else is newer.
+	return pa == "" && pb != ""
 }
 
-func parse(tag string) [3]int {
-	var v [3]int
-	for i, part := range strings.SplitN(strings.TrimPrefix(tag, "v"), ".", 3) {
-		n, _ := strconv.Atoi(strings.TrimFunc(part, func(r rune) bool { return r < '0' || r > '9' }))
-		v[i] = n
+func parse(tag string) (nums [3]int, pre string) {
+	v := strings.TrimPrefix(tag, "v")
+	if i := strings.IndexAny(v, "+"); i >= 0 {
+		v = v[:i]
 	}
-	return v
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		v, pre = v[:i], v[i+1:]
+	}
+	for i, part := range strings.SplitN(v, ".", 3) {
+		nums[i], _ = strconv.Atoi(part)
+	}
+	return nums, pre
 }
 
 // Update installs tag when it is newer than current. It reports whether it
@@ -141,7 +161,7 @@ func download(tag string) (string, error) {
 	if b := testBase(); b != "" {
 		base = b + "/" + tag + "/"
 	}
-	want, err := checksum(base + sums)
+	want, err := checksum(base+sums, tag)
 	if err != nil {
 		return "", err
 	}
@@ -172,8 +192,10 @@ func download(tag string) (string, error) {
 }
 
 // checksum fetches SHA256SUMS and its signature, verifies the signature
-// against publicKey and returns the tarball's checksum from it.
-func checksum(url string) (string, error) {
+// against publicKey and returns the tarball's checksum. The signed list
+// also names its version, so an older signed release cannot be passed off
+// as a newer one.
+func checksum(url, tag string) (string, error) {
 	list, err := fetch(url)
 	if err != nil {
 		return "", err
@@ -185,13 +207,24 @@ func checksum(url string) (string, error) {
 	if err := verify(list, sig); err != nil {
 		return "", err
 	}
-	sc := bufio.NewScanner(strings.NewReader(string(list)))
+	sum, version := "", ""
+	sc := bufio.NewScanner(bytes.NewReader(list))
 	for sc.Scan() {
-		if f := strings.Fields(sc.Text()); len(f) == 2 && strings.TrimPrefix(f[1], "*") == asset {
-			return f[0], nil
+		f := strings.Fields(sc.Text())
+		switch {
+		case len(f) == 2 && f[0] == "version":
+			version = f[1]
+		case len(f) == 2 && strings.TrimPrefix(f[1], "*") == asset:
+			sum = f[0]
 		}
 	}
-	return "", fmt.Errorf("%s lists no checksum for %s", sums, asset)
+	if version != tag {
+		return "", fmt.Errorf("release %s is signed as %q; not installing", tag, version)
+	}
+	if sum == "" {
+		return "", fmt.Errorf("%s lists no checksum for %s", sums, asset)
+	}
+	return sum, nil
 }
 
 // verify checks a base64 Ed25519 signature of data against publicKey.
@@ -217,7 +250,7 @@ func fetch(url string) ([]byte, error) {
 }
 
 func untar(data []byte, dir string) error {
-	gz, err := gzip.NewReader(strings.NewReader(string(data)))
+	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -231,7 +264,7 @@ func untar(data []byte, dir string) error {
 			return err
 		}
 		target := filepath.Join(dir, h.Name)
-		if !strings.HasPrefix(target, filepath.Clean(dir)+string(os.PathSeparator)) {
+		if target != filepath.Clean(dir) && !strings.HasPrefix(target, filepath.Clean(dir)+string(os.PathSeparator)) {
 			return fmt.Errorf("unsafe path in archive: %s", h.Name)
 		}
 		switch h.Typeflag {
@@ -258,23 +291,54 @@ func untar(data []byte, dir string) error {
 
 // Install puts an unpacked release (or a source checkout, for development)
 // in place: the program, the Omarchy files, the unit, the launcher entry
-// and the bar widget. from holds `brumm` and `omarchy/`. Every file is
-// replaced by rename, so a running brumm keeps working until it restarts.
+// and the bar widget. from holds `brumm` and `omarchy/`. Everything is
+// staged and checked first; the program is swapped in last, and the
+// Omarchy files roll back if that fails. Installs never overlap.
 func Install(from string) error {
-	if err := replace(filepath.Join(from, "brumm"), BinPath(), 0o755); err != nil {
-		return fmt.Errorf("install program: %w", err)
+	for _, f := range []string{"brumm", "omarchy/brumm.service", "omarchy/brumm.desktop", "omarchy/plugin/manifest.json"} {
+		if _, err := os.Stat(filepath.Join(from, f)); err != nil {
+			return fmt.Errorf("not a brumm release: %w", err)
+		}
 	}
-	// The Omarchy files: swap the whole directory in.
-	staged := shareDir() + ".new"
-	os.RemoveAll(staged)
+	unlock, err := lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	// Stage: the Omarchy files and the program, next to where they go.
+	if err := os.MkdirAll(filepath.Dir(shareDir()), 0o755); err != nil {
+		return err
+	}
+	staged, err := os.MkdirTemp(filepath.Dir(shareDir()), ".brumm-share-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staged)
 	if err := copyTree(filepath.Join(from, "omarchy"), staged); err != nil {
 		return err
 	}
-	old := shareDir() + ".old"
-	os.RemoveAll(old)
-	_ = os.Rename(shareDir(), old)
+	bin, err := stage(filepath.Join(from, "brumm"), BinPath(), 0o755)
+	if err != nil {
+		return fmt.Errorf("stage program: %w", err)
+	}
+	defer os.Remove(bin)
+
+	// Commit: Omarchy files, then the program; undo the files if needed.
+	old := staged + ".old"
+	hadOld := os.Rename(shareDir(), old) == nil
 	if err := os.Rename(staged, shareDir()); err != nil {
+		if hadOld {
+			_ = os.Rename(old, shareDir())
+		}
 		return err
+	}
+	if err := os.Rename(bin, BinPath()); err != nil {
+		_ = os.RemoveAll(shareDir())
+		if hadOld {
+			_ = os.Rename(old, shareDir())
+		}
+		return fmt.Errorf("install program: %w", err)
 	}
 	os.RemoveAll(old)
 
@@ -288,12 +352,31 @@ func Install(from string) error {
 	return linkPlugin()
 }
 
+// lock serializes installs across processes: the daemon, `brumm update`
+// and bin/setup may otherwise run at once.
+func lock() (func(), error) {
+	path := filepath.Join(filepath.Dir(shareDir()), ".brumm-install.lock")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+}
+
 // linkPlugin points the Omarchy bar widget at the installed files, so it
 // always matches the program, and enables it on first install.
 func linkPlugin() error {
 	target := filepath.Join(shareDir(), "plugin")
 	link := pluginLink()
 	if cur, err := os.Readlink(link); err == nil && cur == target {
+		rescan() // the files behind the link changed
 		return nil
 	}
 	fresh := true
@@ -309,38 +392,65 @@ func linkPlugin() error {
 	if err := os.Symlink(target, link); err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("omarchy-shell"); err == nil {
-		_ = exec.Command("omarchy-shell", "shell", "rescanPlugins").Run()
-		if fresh {
+	rescan()
+	if fresh {
+		if _, err := exec.LookPath("omarchy"); err == nil {
 			_ = exec.Command("omarchy", "plugin", "enable", pluginID).Run()
 		}
 	}
 	return nil
 }
 
+// rescan makes the Omarchy shell load the widget's files again.
+func rescan() {
+	if _, err := exec.LookPath("omarchy-shell"); err == nil {
+		_ = exec.Command("omarchy-shell", "shell", "rescanPlugins").Run()
+	}
+}
+
 // replace copies src next to dst and renames it over dst.
 func replace(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
+	tmp, err := stage(src, dst, mode)
 	if err != nil {
 		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// stage copies src into a uniquely named file in dst's directory, ready to
+// be renamed over dst.
+func stage(src, dst string, mode os.FileMode) (string, error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return "", err
 	}
 	defer in.Close()
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+		return "", err
 	}
-	tmp := dst + ".new"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	out, err := os.CreateTemp(filepath.Dir(dst), ".brumm-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		out.Close()
-		return err
+		os.Remove(out.Name())
+		return "", err
+	}
+	if err := out.Chmod(mode); err != nil {
+		out.Close()
+		os.Remove(out.Name())
+		return "", err
 	}
 	if err := out.Close(); err != nil {
-		return err
+		os.Remove(out.Name())
+		return "", err
 	}
-	return os.Rename(tmp, dst)
+	return out.Name(), nil
 }
 
 func copyTree(src, dst string) error {

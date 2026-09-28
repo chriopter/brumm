@@ -20,6 +20,10 @@ const base = "https://api.music.apple.com"
 // ErrUnauthorized means Apple rejected the session; the user must log in again.
 var ErrUnauthorized = errors.New("apple music: not signed in")
 
+// ErrPartial means a listing stopped after some pages: what came is usable,
+// but it is not the whole list.
+var ErrPartial = errors.New("apple music: listing incomplete")
+
 // Kinds of containers.
 const (
 	KindPlaylist = "playlist"
@@ -55,7 +59,12 @@ type Track struct {
 	Artist   string  `json:"artist"`
 	Album    string  `json:"album"`
 	Duration float64 `json:"duration"` // seconds
+	Artwork  string  `json:"artwork,omitempty"`
 }
+
+// artworkSize is the cover size brumm asks for everywhere, so the same
+// cover always has the same address and caches once.
+const artworkSize = "600"
 
 type Client struct {
 	dev, user string
@@ -81,6 +90,9 @@ type resource struct {
 		PlayParams  *struct {
 			ID string `json:"id"`
 		} `json:"playParams"`
+		Artwork *struct {
+			URL string `json:"url"`
+		} `json:"artwork"`
 	} `json:"attributes"`
 }
 
@@ -163,7 +175,7 @@ func (c *Client) all(path string, maxPages int) ([]resource, error) {
 		found, err := c.get(path, &p)
 		if err != nil {
 			if len(out) > 0 && !errors.Is(err, ErrUnauthorized) {
-				return out, nil // keep what we have rather than lose the list
+				return out, ErrPartial // keep what we have, but say so
 			}
 			return out, err
 		}
@@ -217,7 +229,12 @@ func tracks(rs []resource) []Track {
 		if a.PlayParams != nil && a.PlayParams.ID != "" {
 			id = a.PlayParams.ID
 		}
-		out = append(out, Track{ID: id, Title: a.Name, Artist: a.ArtistName, Album: a.AlbumName, Duration: float64(a.DurationMS) / 1000})
+		art := ""
+		if a.Artwork != nil {
+			art = strings.NewReplacer("{w}", artworkSize, "{h}", artworkSize).Replace(a.Artwork.URL)
+		}
+		out = append(out, Track{ID: id, Title: a.Name, Artist: a.ArtistName, Album: a.AlbumName,
+			Duration: float64(a.DurationMS) / 1000, Artwork: art})
 	}
 	return out
 }

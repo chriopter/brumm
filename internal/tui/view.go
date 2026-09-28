@@ -263,20 +263,22 @@ func (m *Model) row(v *view, i, w int) string {
 
 	var text, detail string
 	if t := r.track; t != nil {
+		// Fixed columns on the right — meter, heart, duration — so hearts
+		// and times line up whatever else a row shows.
 		title := t.Title
-		dur := sDim.Render(fmt.Sprintf("%5s", clock(t.Duration)))
+		meter, heart := "   ", " "
 		switch playing := t.ID != "" && t.ID == m.state.ID; {
 		case playing:
 			title = sPlays.Bold(sel).Render(t.Title)
-			dur = sPlays.Render(m.miniEQ()) + " " + dur
+			meter = sPlays.Render(m.miniEQ())
 		case sel:
 			title = sBold.Render(t.Title)
 		}
-		text = title + "  " + sDim.Render(t.Artist)
 		if m.loved[t.ID] {
-			dur = sErr.Render("♥") + " " + dur
+			heart = sErr.Render("♥")
 		}
-		detail = dur
+		text = title + "  " + sDim.Render(t.Artist)
+		detail = meter + "  " + heart + "  " + sDim.Render(fmt.Sprintf("%5s", clock(t.Duration)))
 	} else {
 		it := r.item
 		icon := map[string]string{apple.KindPlaylist: icPlaylist, apple.KindAlbum: icAlbum, apple.KindArtist: icArtist}[it.Kind]
@@ -388,9 +390,9 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 			put(start+i, l)
 		}
 	} else {
-		// Playing: title and artist above the cover, spectrum, progress
-		// and controls below, the group centered vertically. When the
-		// cover fills the height, the group spans the panel exactly.
+		// Playing: title and artist above the cover, progress and controls
+		// below, the group centered so the cover sits in the middle. When
+		// the cover fills the height, the group spans the panel exactly.
 		head, rest := bottom, []stageLine(nil)
 		if len(bottom) > 3 {
 			head, rest = bottom[:3], bottom[3:] // title, meta, gap
@@ -400,7 +402,7 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 			group = append(group, stageLine{})
 		}
 		group = append(group, rest...)
-		start := max(0, (h-len(group))/2)
+		start := max(0, (h-len(group))/2) // the cover sits in the vertical middle
 		for i, l := range group {
 			put(start+i, l)
 		}
@@ -434,7 +436,7 @@ func (m *Model) helpLines() []stageLine {
 		keys [][2]string
 	}{
 		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"1–5 tab", "sections"}, {"/", "search (paste a music.apple.com link to open it)"}, {"6", "queue"}, {"a A", "the song's album / artist"}, {"c", "go to what's playing"}}},
-		{"play", [][2]string{{"space", "play / pause"}, {"hold space", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"z Z", "add to queue / play next"}, {"*", "favorite ♥"}, {"y", "copy the song's link"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
+		{"play", [][2]string{{"space", "play / pause"}, {"hold space  o", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"z Z", "add to queue / play next"}, {"*", "favorite ♥"}, {"y", "copy the song's link"}, {"← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
 		{"brumm", [][2]string{{"f", "fullscreen visualizer (v: next)"}, {"[ ]", "narrower / wider list"}, {"q", "close, music keeps playing"}, {"Q", "stop brumm"}, {"L", "sign in again"}, {"U", "install an available update"}}},
 	}
 	var out []stageLine
@@ -444,7 +446,7 @@ func (m *Model) helpLines() []stageLine {
 		}
 		out = append(out, stageLine{text: sBold.Render(g.name)})
 		for _, kv := range g.keys {
-			out = append(out, stageLine{text: sKey.Render(fmt.Sprintf("%-11s", kv[0])) + "  " + sDim.Render(kv[1])})
+			out = append(out, stageLine{text: sKey.Render(fmt.Sprintf("%-13s", kv[0])) + "  " + sDim.Render(kv[1])})
 		}
 	}
 	return append(out, stageLine{}, stageLine{text: sDim.Render("mouse: click to open or play, right click to go back")})

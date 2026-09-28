@@ -53,22 +53,22 @@ document.addEventListener('musickitloaded', async () => {
   }
 });
 
-// resolve turns song ids into MusicKit items, in order, in batches of 100:
-// library ids ("i.…") from the library, everything else from the catalog.
-// Ids that no longer resolve are dropped; callers find their start by id.
+// resolve turns song ids into MusicKit items, in order: library ids
+// ("i.…") from the library, everything else from the catalog, 100 per
+// request and all requests at once. Ids that no longer resolve are dropped.
 async function resolve(m, ids) {
   const byId = new Map();
-  const lib = ids.filter((id) => id.startsWith('i.'));
-  const cat = ids.filter((id) => !id.startsWith('i.'));
-  const fetchAll = async (list, path) => {
+  const jobs = [];
+  const fetch = (list, path) => {
     for (let i = 0; i < list.length; i += 100) {
-      const chunk = list.slice(i, i + 100);
-      const resp = await m.api.music(path, { ids: chunk.join(',') });
-      for (const it of ((resp && resp.data && resp.data.data) || [])) byId.set(it.id, it);
+      jobs.push(m.api.music(path, { ids: list.slice(i, i + 100).join(',') }).then((resp) => {
+        for (const it of ((resp && resp.data && resp.data.data) || [])) byId.set(it.id, it);
+      }));
     }
   };
-  if (lib.length) await fetchAll(lib, '/v1/me/library/songs');
-  if (cat.length) await fetchAll(cat, `/v1/catalog/${m.storefrontId || 'us'}/songs`);
+  fetch(ids.filter((id) => id.startsWith('i.')), '/v1/me/library/songs');
+  fetch(ids.filter((id) => !id.startsWith('i.')), `/v1/catalog/${m.storefrontId || 'us'}/songs`);
+  await Promise.all(jobs);
   return ids.map((id) => byId.get(id)).filter(Boolean);
 }
 
@@ -119,29 +119,37 @@ function analyser() {
 }
 
 Object.assign(B, {
-  // playIds queues songs and starts at startId. A newer call supersedes an
-  // older one still resolving, so rapid clicks never interleave queues.
+  // playIds starts startId at once — it alone is looked up before playback
+  // begins — then queues the songs after it in the background. A newer
+  // call supersedes an older one still loading, so presses never interleave.
   async playIds(ids, startId, source, startAt) {
     const m = B.m;
     if (!m) { B.pending = [ids, startId, source, startAt]; return; }
     const gen = ++B.gen;
     B.err = '';
+    const k = Math.max(0, ids.indexOf(startId));
     try {
-      const items = await resolve(m, ids);
+      let first = await resolve(m, [ids[k]]);
+      let rest = ids.slice(k + 1);
+      if (!first.length) {
+        // The chosen song is gone: start with the next one that plays.
+        const all = await resolve(m, rest);
+        first = all.slice(0, 1);
+        rest = all.slice(1).map((it) => it.id);
+      }
       if (gen !== B.gen) return;
-      if (!items.length) { B.err = 'nothing playable here'; return; }
+      if (!first.length) { B.err = 'nothing playable here'; return; }
       await settle(m);
       if (gen !== B.gen) return;
-      // One native queue: MusicKit advances itself with ~20 ms gaps instead
-      // of the ~700 ms a per-track setQueue costs.
-      await m.setQueue({ items });
-      if (gen !== B.gen) return;
-      const start = Math.max(0, items.findIndex((it) => it.id === startId));
-      if (start > 0) await m.changeToMediaAtIndex(start);
+      await m.setQueue({ items: first });
       if (gen !== B.gen) return;
       B.source = source;
       await play(m);
       if (gen === B.gen && startAt > 1) await m.seekToTime(startAt);
+      if (rest.length) {
+        const more = await resolve(m, rest);
+        if (gen === B.gen && more.length) await m.playLater({ items: more });
+      }
     } catch (e) {
       if (gen !== B.gen) return;
       B.err = 'play: ' + errText(e);

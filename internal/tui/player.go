@@ -29,11 +29,9 @@ import (
 // Modes on the left, transport in the middle, volume on the right: three
 // groups, the play button the one filled element.
 
-const (
-	specRows = 4
-	// title, meta, gap, spectrum, gap, meter, times, gap, transport
-	stageBelow = 2 + 1 + specRows + 1 + 2 + 1 + 1
-)
+// Lines besides the cover: title, meta, gap above it; meter, times, gap,
+// transport below (view.go adds the gap between cover and meter).
+const stageBelow = 2 + 1 + 2 + 1 + 1
 
 // Raw SGR for the per-cell spectrum: one escape per color run instead of a
 // lipgloss render per run. Only the 16 theme colors.
@@ -76,10 +74,6 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 		meta += sDim.Render("  ·  " + album)
 	}
 	add(ansi.Truncate(meta, colW, "…"))
-	add("")
-	for _, l := range m.spectrum(colW, specRows) {
-		add(l)
-	}
 	add("")
 	if st.Preview != nil {
 		// The clip's own position is not reported: a sweeping meter says

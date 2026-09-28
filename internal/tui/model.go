@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 	"github.com/chriopter/brumm/internal/apple"
 	"github.com/chriopter/brumm/internal/art"
+	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/ipc"
 	"github.com/chriopter/brumm/internal/login"
 )
@@ -26,11 +28,8 @@ import (
 // bands is how many spectrum bands the TUI asks the daemon for.
 const bands = 48
 
-// A play queues at most this many songs around the chosen one.
-const (
-	queueBefore = 100
-	queueAfter  = 400
-)
+// A play queues the chosen song and at most this many in all.
+const queueAfter = 500
 
 type section int
 
@@ -92,9 +91,10 @@ type (
 	eventMsg  ipc.Message
 	closedMsg struct{}
 	loadedMsg struct {
-		v     *view
-		reply ipc.Message
-		err   error
+		v        *view
+		reply    ipc.Message
+		err      error
+		selectID string // select this song once loaded
 	}
 	coverMsg struct {
 		url string
@@ -149,6 +149,9 @@ type Model struct {
 	coverURL string
 	cover    image.Image
 	rendered map[art.Size][]string
+	covers   map[string]image.Image // recently seen covers by address
+	coverLRU []string
+	fetching map[string]bool
 
 	flash   string
 	flashAt time.Time
@@ -195,6 +198,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 	m.stacks[secSearch] = []*view{{title: "Search", key: "search:", loaded: true}}
 	m.stacks[secQueue] = []*view{{title: "Queue", key: "queue:"}}
 	m.loved = map[string]bool{}
+	m.covers, m.fetching = map[string]image.Image{}, map[string]bool{}
 	return m
 }
 
@@ -270,7 +274,7 @@ func (m *Model) load(v *view) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
 		reply, err := client.Do(req)
-		return loadedMsg{v, reply, err}
+		return loadedMsg{v: v, reply: reply, err: err}
 	}
 }
 
@@ -322,11 +326,29 @@ func (m *Model) fetchLoved(v *view) tea.Cmd {
 	}
 }
 
-func (m *Model) maybeFetchCover() tea.Cmd {
-	url := m.state.Artwork
+// stageArtwork is the cover to show: the preview's, else the playing
+// song's as the library lists it (the same address the list prefetched),
+// else what the player reports.
+func (m *Model) stageArtwork() string {
 	if p := m.state.Preview; p != nil && p.Artwork != "" {
-		url = p.Artwork
+		return p.Artwork
 	}
+	if id := m.state.ID; id != "" {
+		for _, stack := range m.stacks {
+			for _, v := range stack {
+				for _, r := range v.rows {
+					if r.track != nil && r.track.ID == id && r.track.Artwork != "" {
+						return r.track.Artwork
+					}
+				}
+			}
+		}
+	}
+	return m.state.Artwork
+}
+
+func (m *Model) maybeFetchCover() tea.Cmd {
+	url := m.stageArtwork()
 	if url == m.coverURL {
 		return nil
 	}
@@ -334,13 +356,60 @@ func (m *Model) maybeFetchCover() tea.Cmd {
 	if url == "" {
 		return nil
 	}
+	if img, ok := m.covers[url]; ok {
+		m.cover = img
+		return nil
+	}
+	return m.fetchCover(url)
+}
+
+// fetchCover loads a cover through the disk cache, once at a time per address.
+func (m *Model) fetchCover(url string) tea.Cmd {
+	if m.fetching[url] {
+		return nil
+	}
+	m.fetching[url] = true
 	client := m.http
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		img, _ := art.Fetch(ctx, client, url)
+		img, _ := art.Cached(ctx, client, filepath.Join(config.CacheDir(), "covers"), url)
 		return coverMsg{url, img}
 	}
+}
+
+// keepCover remembers a decoded cover, dropping the oldest past 80.
+func (m *Model) keepCover(url string, img image.Image) {
+	if _, ok := m.covers[url]; !ok {
+		m.coverLRU = append(m.coverLRU, url)
+	}
+	m.covers[url] = img
+	for len(m.coverLRU) > 80 {
+		delete(m.covers, m.coverLRU[0])
+		m.coverLRU = m.coverLRU[1:]
+	}
+}
+
+// prefetchCovers loads the covers of the rows on screen and just beyond,
+// so a song's cover is ready the moment it plays.
+func (m *Model) prefetchCovers(v *view) tea.Cmd {
+	var cmds []tea.Cmd
+	seen := map[string]bool{}
+	lo, hi := max(0, v.off-10), min(len(v.rows), v.off+m.listRows()+10)
+	for i := lo; i < hi && len(cmds) < 8; i++ {
+		t := v.rows[i].track
+		if t == nil || t.Artwork == "" || seen[t.Artwork] {
+			continue
+		}
+		seen[t.Artwork] = true
+		if _, ok := m.covers[t.Artwork]; ok {
+			continue
+		}
+		if cmd := m.fetchCover(t.Artwork); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -381,7 +450,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		fill(msg.v, msg.reply)
-		return m, tea.Batch(m.maybeResume(), m.fetchLoved(msg.v))
+		if id := msg.selectID; id != "" {
+			for i, r := range msg.v.rows {
+				if r.track != nil && (r.track.ID == id || strings.HasSuffix(r.track.ID, id)) {
+					msg.v.sel, msg.v.selAt = i, m.frame
+					break
+				}
+			}
+		}
+		return m, tea.Batch(m.maybeResume(), m.fetchLoved(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover())
 	case lovedMsg:
 		for _, id := range msg.ids {
 			m.loved[id] = true
@@ -406,12 +483,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		client, song := m.client, msg.song
 		return m, func() tea.Msg {
 			reply, err := client.Do(ipc.Request{Cmd: ipc.CmdOpen, Item: v.item})
-			for i, t := range reply.Tracks {
-				if song != "" && (t.ID == song || strings.HasSuffix(t.ID, song)) {
-					v.sel = i
-				}
-			}
-			return loadedMsg{v, reply, err}
+			return loadedMsg{v: v, reply: reply, err: err, selectID: song}
 		}
 	case tea.PasteMsg:
 		if m.searching {
@@ -422,6 +494,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.query = strings.TrimSpace(msg.Content)
 		return m, m.runSearch(true)
 	case coverMsg:
+		delete(m.fetching, msg.url)
+		if msg.img != nil {
+			m.keepCover(msg.url, msg.img)
+		}
 		if msg.url == m.coverURL {
 			m.cover = msg.img
 		}
@@ -442,10 +518,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.setFlash(msg.err.Error())
 	case tea.KeyboardEnhancementsMsg:
-		m.releases = msg.SupportsEventTypes()
+		m.releases = m.releases || msg.SupportsEventTypes()
 	case holdMsg:
 		return m, m.hold(msg.seq)
 	case tea.KeyReleaseMsg:
+		// Any release proves the terminal reports them — the startup
+		// answer is not always right — so hold-to-preview can work.
+		m.releases = true
 		if msg.String() == "space" || msg.String() == " " {
 			return m, m.spaceUp()
 		}
@@ -609,13 +688,13 @@ func (m *Model) activate() tea.Cmd {
 	}
 	ids, at := v.songs()
 	i := at[v.sel]
-	lo, hi := max(0, i-queueBefore), min(len(ids), i+queueAfter)
-	window := ids[lo:hi]
+	window := ids[i:min(len(ids), i+queueAfter)]
 	if m.state.Shuffle && len(ids) > len(window) {
 		// Shuffle draws from the whole list, not just the songs around
 		// the chosen one: it first, then a random pick of the rest.
-		window = append([]string{r.track.ID}, sample(ids, r.track.ID, queueBefore+queueAfter-1)...)
+		window = append([]string{r.track.ID}, sample(ids, r.track.ID, queueAfter-1)...)
 	}
+	m.setFlash("▶ " + r.track.Title) // at once: the song itself starts a moment later
 	return m.send(ipc.Request{Cmd: ipc.CmdPlay, IDs: window, Start: r.track.ID, Source: v.key})
 }
 
@@ -774,6 +853,21 @@ func (m *Model) hold(seq int) tea.Cmd {
 	return m.send(ipc.Request{Cmd: ipc.CmdPreview, Start: v.rows[v.sel].track.ID, Value: 1})
 }
 
+// togglePreview starts previewing the selected song, or ends a preview —
+// the same as holding space, for terminals that cannot report releases.
+func (m *Model) togglePreview() tea.Cmd {
+	if m.previewing {
+		m.previewing = false
+		return m.send(ipc.Request{Cmd: ipc.CmdPreview})
+	}
+	v := m.cur()
+	if v.sel >= len(v.rows) || v.rows[v.sel].track == nil {
+		return nil
+	}
+	m.previewing = true
+	return m.send(ipc.Request{Cmd: ipc.CmdPreview, Start: v.rows[v.sel].track.ID, Value: 1})
+}
+
 func (m *Model) spaceUp() tea.Cmd {
 	if !m.spaceDown {
 		return nil
@@ -886,12 +980,7 @@ func (m *Model) jumpToPlaying() tea.Cmd {
 				client := m.client
 				return func() tea.Msg {
 					reply, err := client.Do(ipc.Request{Cmd: ipc.CmdOpen, Item: v.item})
-					for i, t := range reply.Tracks {
-						if t.ID == id {
-							v.sel = i
-						}
-					}
-					return loadedMsg{v, reply, err}
+					return loadedMsg{v: v, reply: reply, err: err, selectID: id}
 				}
 			}
 		}
@@ -977,6 +1066,8 @@ func (m *Model) key(k string) tea.Cmd {
 		saveSplit(m.split)
 	case "c":
 		return m.jumpToPlaying()
+	case "o":
+		return m.togglePreview()
 	case "a":
 		return m.openAlbum()
 	case "A":
@@ -1003,6 +1094,9 @@ func (m *Model) key(k string) tea.Cmd {
 		if m.help {
 			m.help = false
 			return nil
+		}
+		if m.previewing {
+			return m.togglePreview()
 		}
 		m.back()
 	case "enter", "l":
@@ -1126,7 +1220,7 @@ func (m *Model) move(k string) tea.Cmd {
 	if v.sel != prev {
 		v.selAt = m.frame
 	}
-	return nil
+	return m.prefetchCovers(v)
 }
 
 // click maps a mouse click onto the layout recorded by the last render.

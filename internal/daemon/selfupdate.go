@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chriopter/brumm/internal/config"
+	"github.com/chriopter/brumm/internal/ipc"
 	"github.com/chriopter/brumm/internal/update"
 )
 
@@ -36,12 +38,18 @@ func (d *Daemon) checkUpdates() {
 			log.Printf("update check: %v", err)
 			continue
 		}
-		if !update.Newer(tag, d.version) {
+		d.mu.Lock()
+		current := d.version
+		if d.installed != "" {
+			current = d.installed // already installed, waiting to restart
+		}
+		d.mu.Unlock()
+		if !update.Newer(tag, current) {
 			continue
 		}
+		d.offerUpdate(tag)
 		d.mu.Lock()
-		d.update = tag
-		urgent := d.expiresIn > 0 && d.expiresIn < 30
+		urgent := !d.expires.IsZero() && time.Until(d.expires) < 30*24*time.Hour
 		d.mu.Unlock()
 		if urgent {
 			if err := d.installUpdate(); err != nil {
@@ -64,10 +72,22 @@ func (d *Daemon) installUpdate() error {
 	if installed {
 		log.Printf("installed %s; restarting when idle", tag)
 		d.mu.Lock()
-		d.update = ""
+		d.installed = tag
 		d.mu.Unlock()
+		d.offerUpdate("")
 	}
 	return nil
+}
+
+// offerUpdate publishes an available update (or clears it) to clients at
+// once — also while the player is not running, when a fix may be needed most.
+func (d *Daemon) offerUpdate(tag string) {
+	d.mu.Lock()
+	d.update = tag
+	d.state.Update = tag
+	st := d.state
+	d.mu.Unlock()
+	d.broadcast(ipc.Message{State: &st})
 }
 
 // fileID identifies the file behind a path, so a replaced program is
@@ -141,6 +161,7 @@ func (d *Daemon) restartForUpdate(playing bool) {
 	if d.mpris != nil {
 		d.mpris.Close()
 	}
+	_ = os.Remove(config.Socket())
 	log.Printf("restarting into the updated program")
 	os.Exit(ExitUpdated)
 }

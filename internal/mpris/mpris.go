@@ -65,9 +65,13 @@ func Start(ctl Controller) (*Server, error) {
 		"Play":      func() *dbus.Error { ctl.Play(); return nil },
 		"Pause":     func() *dbus.Error { ctl.Pause(); return nil },
 		"PlayPause": func() *dbus.Error { ctl.Toggle(); return nil },
-		"Stop":      func() *dbus.Error { ctl.Pause(); return nil },
-		"Next":      func() *dbus.Error { ctl.Next(); return nil },
-		"Previous":  func() *dbus.Error { ctl.Prev(); return nil },
+		"Stop": func() *dbus.Error { // brumm has no unloaded state: pause at the start
+			ctl.Pause()
+			ctl.Seek(0)
+			return nil
+		},
+		"Next":     func() *dbus.Error { ctl.Next(); return nil },
+		"Previous": func() *dbus.Error { ctl.Prev(); return nil },
 		"Seek": func(offsetUS int64) *dbus.Error {
 			ctl.Seek(s.position() + float64(offsetUS)/1e6)
 			return nil

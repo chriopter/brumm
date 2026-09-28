@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chriopter/brumm/internal/config"
 )
@@ -57,8 +58,16 @@ func Ensure(progress func(string)) error {
 	return nil
 }
 
+// Bounds for the Chrome download: a stalled or runaway response must not
+// hang startup or fill memory.
+const (
+	downloadTimeout = 15 * time.Minute
+	maxDeb          = 400 << 20
+)
+
 func install() error {
-	resp, err := http.Get(debURL)
+	client := &http.Client{Timeout: downloadTimeout}
+	resp, err := client.Get(debURL)
 	if err != nil {
 		return err
 	}
@@ -66,9 +75,12 @@ func install() error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download: %s", resp.Status)
 	}
-	deb, err := io.ReadAll(resp.Body)
+	deb, err := io.ReadAll(io.LimitReader(resp.Body, maxDeb+1))
 	if err != nil {
 		return err
+	}
+	if len(deb) > maxDeb {
+		return errors.New("download: Chrome package larger than expected")
 	}
 	name, data, err := arMember(deb, "data.tar")
 	if err != nil {
@@ -127,10 +139,10 @@ func arMember(ar []byte, prefix string) (string, []byte, error) {
 // Args are the launch flags for audio-only DRM playback.
 func Args() []string {
 	return []string{
-		// The setuid sandbox is unavailable to a binary outside a system path.
-		"--no-sandbox",
+		// The setuid sandbox needs a root-owned helper, which a copy in the
+		// user's cache cannot have; Chrome falls back to its user-namespace
+		// sandbox, which Arch enables. The page stays sandboxed.
 		"--disable-setuid-sandbox",
-		"--no-zygote",
 		// There is never a user gesture in a headless page.
 		"--autoplay-policy=no-user-gesture-required",
 		"--enable-features=MediaCapabilities,WidevineCdm",
