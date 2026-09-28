@@ -58,15 +58,15 @@ func binaryUpdated() bool {
 
 func splitPath() string { return filepath.Join(config.CacheDir(), "split") }
 
-// loadSplit is the list's remembered share of the width, 2/5 by default.
+// loadSplit is the list's remembered share of the width, half by default.
 func loadSplit() float64 {
 	b, err := os.ReadFile(splitPath())
 	if err != nil {
-		return 0.4
+		return 0.5
 	}
 	f, err := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
 	if err != nil || f < 0.2 || f > 0.75 {
-		return 0.4
+		return 0.5
 	}
 	return f
 }

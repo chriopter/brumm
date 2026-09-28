@@ -95,10 +95,8 @@ func (m *Model) render() string {
 	inner := m.width - 2*margin
 	bodyH := m.height - bodyTop - 2 // blank line + footer
 
-	// The list gets at least its share of the width (2/5 unless dragged).
-	// The stage is one column as wide as the cover, which is as large as
-	// the rest of the width and the height allow; any width the cover
-	// cannot use goes back to the list, so nothing floats in a gap.
+	// The list takes its share of the width — half unless dragged — and the
+	// stage the rest, with the cover's column centered in it.
 	gapW := 2 + 2*stagePad
 	navW := int(math.Round(float64(inner) * m.split))
 	navW = max(navMin, min(navW, inner-gapW-colMin))
@@ -112,12 +110,15 @@ func (m *Model) render() string {
 		coverH := max(0, bodyH-1-stageBelow)
 		coverH = min(coverH, int(float64(room)/m.cellAspect))
 		colW := max(colMin, min(room, int(math.Round(float64(coverH)*m.cellAspect))))
-		navW = inner - gapW - colW
-		stageX := margin + navW + gapW
+		inset := (room - colW) / 2
+		stageX := margin + navW + gapW + inset
 		m.geo.divider = rect{margin + navW - 1, bodyTop, margin + navW + gapW, bodyTop + bodyH}
+		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop), "\n")
+		for i := range stage {
+			stage[i] = strings.Repeat(" ", inset) + stage[i] + strings.Repeat(" ", room-colW-inset)
+		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			m.nav(navW, bodyH, margin, bodyTop), strings.Repeat(" ", gapW),
-			m.stage(colW, coverH, bodyH, stageX, bodyTop))
+			m.nav(navW, bodyH, margin, bodyTop), strings.Repeat(" ", gapW), strings.Join(stage, "\n"))
 	}
 	pad := strings.Repeat(" ", margin)
 	lines := strings.Split(body, "\n")
@@ -217,8 +218,28 @@ func (m *Model) nav(w, h, x, y int) string {
 	default:
 		v.off = scroll(v.sel, v.off, rows)
 		m.geo.list = rect{x + 1, top, x + w - 1, top + rows}
-		for i := v.off; i < len(v.rows) && i < v.off+rows; i++ {
-			lines = append(lines, m.row(v, i, inner))
+		// Lists of playlists, albums and artists are short names with room
+		// to spare: the right side shows a card for the selected one.
+		card := m.previewCard(v, inner, rows)
+		listW := inner
+		if card != nil {
+			listW = inner - lipgloss.Width(card[0]) - 3
+		}
+		for i := v.off; i < v.off+rows; i++ {
+			line := ""
+			if i < len(v.rows) {
+				line = m.row(v, i, listW)
+			} else if card == nil {
+				break
+			}
+			if card != nil {
+				c := ""
+				if j := i - v.off; j < len(card) {
+					c = card[j]
+				}
+				line = pad(line, listW) + "   " + c
+			}
+			lines = append(lines, line)
 		}
 	}
 
@@ -249,6 +270,48 @@ func (m *Model) searchBox(w int) string {
 		return sDim.Render(icSearch + "  search Apple Music")
 	}
 	return sHere.Render(icSearch) + "  " + ansi.TruncateLeft(q, max(0, lipgloss.Width(q)-(w-5)), "…") + cursor
+}
+
+// previewCard is the selected item's cover with its name under it, for
+// lists of items wide enough to hold it; nil otherwise.
+func (m *Model) previewCard(v *view, inner, rows int) []string {
+	if v.sel >= len(v.rows) || v.rows[v.sel].item == nil || inner < 70 || rows < 12 {
+		return nil
+	}
+	it := v.rows[v.sel].item
+	cw := min(inner*2/5, 44)
+	chh := min(rows-3, int(float64(cw)/m.cellAspect))
+	cw = int(math.Round(float64(chh) * m.cellAspect))
+	if chh < 6 {
+		return nil
+	}
+	var out []string
+	size := art.Size{Width: cw, Height: chh}
+	key := fmt.Sprintf("%s@%dx%d", it.Artwork, cw, chh)
+	if lines, ok := m.thumbs[key]; ok {
+		out = append(out, lines...)
+	} else if img := m.covers[it.Artwork]; img != nil {
+		lines := art.RenderDithered(img, size)
+		m.thumbs[key] = lines
+		out = append(out, lines...)
+	} else {
+		icon := map[string]string{apple.KindPlaylist: icPlaylist, apple.KindAlbum: icAlbum, apple.KindArtist: icArtist}[it.Kind]
+		for i := range chh {
+			l := strings.Repeat("░", cw)
+			if i == chh/2 {
+				l = strings.Repeat("░", cw/2-1) + " " + icon + " " + strings.Repeat("░", cw-cw/2-2)
+			}
+			out = append(out, sDim.Render(l))
+		}
+	}
+	out = append(out, "", sBold.Render(ansi.Truncate(it.Name, cw, "…")))
+	if it.Artist != "" {
+		out = append(out, sDim.Render(ansi.Truncate(it.Artist, cw, "…")))
+	}
+	for i := range out {
+		out[i] = pad(out[i], cw)
+	}
+	return out
 }
 
 // row renders one list line: the selection gutter, the text (the

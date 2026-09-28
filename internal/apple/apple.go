@@ -40,6 +40,7 @@ type Item struct {
 	Name    string `json:"name"`
 	Artist  string `json:"artist,omitempty"`
 	Catalog bool   `json:"catalog,omitempty"`
+	Artwork string `json:"artwork,omitempty"`
 }
 
 // Key identifies an item across kinds and sources.
@@ -65,6 +66,15 @@ type Track struct {
 // artworkSize is the cover size brumm asks for everywhere, so the same
 // cover always has the same address and caches once.
 const artworkSize = "600"
+
+func artworkURL(a *struct {
+	URL string `json:"url"`
+}) string {
+	if a == nil {
+		return ""
+	}
+	return strings.NewReplacer("{w}", artworkSize, "{h}", artworkSize).Replace(a.URL)
+}
 
 type Client struct {
 	dev, user string
@@ -213,7 +223,7 @@ func items(rs []resource, kind string, catalog bool) []Item {
 		if kind == KindPlaylist {
 			artist = a.CuratorName
 		}
-		out = append(out, Item{Kind: kind, ID: r.ID, Name: a.Name, Artist: artist, Catalog: catalog})
+		out = append(out, Item{Kind: kind, ID: r.ID, Name: a.Name, Artist: artist, Catalog: catalog, Artwork: artworkURL(a.Artwork)})
 	}
 	return out
 }
@@ -229,12 +239,8 @@ func tracks(rs []resource) []Track {
 		if a.PlayParams != nil && a.PlayParams.ID != "" {
 			id = a.PlayParams.ID
 		}
-		art := ""
-		if a.Artwork != nil {
-			art = strings.NewReplacer("{w}", artworkSize, "{h}", artworkSize).Replace(a.Artwork.URL)
-		}
 		out = append(out, Track{ID: id, Title: a.Name, Artist: a.ArtistName, Album: a.AlbumName,
-			Duration: float64(a.DurationMS) / 1000, Artwork: art})
+			Duration: float64(a.DurationMS) / 1000, Artwork: artworkURL(a.Artwork)})
 	}
 	return out
 }

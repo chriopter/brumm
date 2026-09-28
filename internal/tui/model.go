@@ -152,6 +152,7 @@ type Model struct {
 	covers   map[string]image.Image // recently seen covers by address
 	coverLRU []string
 	fetching map[string]bool
+	thumbs   map[string][]string // rendered preview-card covers by address and size
 
 	flash   string
 	flashAt time.Time
@@ -198,7 +199,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 	m.stacks[secSearch] = []*view{{title: "Search", key: "search:", loaded: true}}
 	m.stacks[secQueue] = []*view{{title: "Queue", key: "queue:"}}
 	m.loved = map[string]bool{}
-	m.covers, m.fetching = map[string]image.Image{}, map[string]bool{}
+	m.covers, m.fetching, m.thumbs = map[string]image.Image{}, map[string]bool{}, map[string][]string{}
 	return m
 }
 
@@ -388,6 +389,9 @@ func (m *Model) keepCover(url string, img image.Image) {
 		delete(m.covers, m.coverLRU[0])
 		m.coverLRU = m.coverLRU[1:]
 	}
+	if len(m.thumbs) > 40 {
+		m.thumbs = map[string][]string{}
+	}
 }
 
 // prefetchCovers loads the covers of the rows on screen and just beyond,
@@ -396,16 +400,29 @@ func (m *Model) prefetchCovers(v *view) tea.Cmd {
 	var cmds []tea.Cmd
 	seen := map[string]bool{}
 	lo, hi := max(0, v.off-10), min(len(v.rows), v.off+m.listRows()+10)
-	for i := lo; i < hi && len(cmds) < 8; i++ {
-		t := v.rows[i].track
-		if t == nil || t.Artwork == "" || seen[t.Artwork] {
+	// The selected row first: its preview card shows it.
+	order := []int{v.sel}
+	for i := lo; i < hi; i++ {
+		order = append(order, i)
+	}
+	for _, i := range order {
+		if i < 0 || i >= len(v.rows) || len(cmds) >= 8 {
 			continue
 		}
-		seen[t.Artwork] = true
-		if _, ok := m.covers[t.Artwork]; ok {
+		url := ""
+		if t := v.rows[i].track; t != nil {
+			url = t.Artwork
+		} else if it := v.rows[i].item; it != nil {
+			url = it.Artwork
+		}
+		if url == "" || seen[url] {
 			continue
 		}
-		if cmd := m.fetchCover(t.Artwork); cmd != nil {
+		seen[url] = true
+		if _, ok := m.covers[url]; ok {
+			continue
+		}
+		if cmd := m.fetchCover(url); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
