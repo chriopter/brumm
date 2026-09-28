@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>brumm · sign in</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --dim: #6e6e73; --bg: #fbfbfd; --accent: #fa2d48; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #f5f5f7; --dim: #98989d; --bg: #111113; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  main { text-align: center; padding: 24px; }
+  .bear { font: 40px/1 ui-monospace, monospace; color: var(--accent); }
+  h1 { font-size: 28px; margin: 16px 0 4px; }
+  p { color: var(--dim); margin: 0 0 24px; }
+  button { font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 999px;
+           padding: 12px 28px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 20px; min-height: 1.5em; }
+</style>
+<!-- The listener has to exist before musickit.js runs. -->
+<script>
+  document.addEventListener('musickitloaded', async () => {
+    try {
+      await MusicKit.configure({ developerToken: {{.DeveloperToken}}, app: { name: 'brumm', build: '1' } });
+      document.querySelector('button').disabled = false;
+    } catch (e) {
+      say('Could not start MusicKit: ' + (e.message || e));
+    }
+  });
+  function say(text) { document.getElementById('status').textContent = text; }
+  async function signIn() {
+    const btn = document.querySelector('button');
+    btn.disabled = true;
+    try {
+      const token = await MusicKit.getInstance().authorize();
+      const r = await fetch('/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+      if (!r.ok) throw new Error('brumm did not accept the token');
+      say('Signed in. You can close this tab.');
+      btn.textContent = 'Done';
+    } catch (e) {
+      btn.disabled = false;
+      say('Sign-in failed: ' + (e.message || e));
+    }
+  }
+</script>
+<script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"></script>
+</head>
+<body>
+<main>
+  <div class="bear">ʕ•ᴥ•ʔ</div>
+  <h1>Sign in to Apple Music</h1>
+  <p>brumm needs your Apple Music account to play your library.</p>
+  <button onclick="signIn()" disabled>Continue with Apple</button>
+  <div id="status"></div>
+</main>
+</body>
+</html>

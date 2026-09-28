@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>brumm</title>
+<script>
+// brumm's playback page. Headless Chrome (with Widevine) loads it from a
+// loopback origin — a secure context, which EME requires — and the daemon
+// drives it through Runtime.evaluate. Everything here is synchronous or
+// fire-and-forget; the daemon polls brumm.state() and brumm.spectrum().
+//
+// The host substitutes the configuration object for the CFG placeholder.
+const CFG = __BRUMM_CFG__;
+const B = window.brumm = { ready: false, err: '', needsAuth: false, m: null, playlist: '' };
+
+window.addEventListener('error', (e) => { if (!B.ready) B.err = 'page: ' + (e.message || 'script error'); });
+
+const errText = (e) => String((e && (e.errorCode || e.name || e.message)) || e);
+const isAuthError = (e) => /unauthori|not authorized|401|expired token/i.test(errText(e) + ' ' + (e && e.message));
+
+// The listener must exist before musickit.js runs: MusicKit dispatches this
+// event synchronously while its own script executes.
+document.addEventListener('musickitloaded', async () => {
+  try {
+    // No storefrontId here: forcing one overrides the storefront MusicKit
+    // derives from the user token and breaks every track with
+    // CONTENT_EQUIVALENT for accounts outside that country.
+    const m = await MusicKit.configure({
+      developerToken: CFG.developerToken,
+      app: { name: 'brumm', build: CFG.version },
+    });
+    // Must precede the user token. With empty storage MusicKit guesses an
+    // explicit-content restriction from the storefront country, and setting
+    // the token pins authorization to RESTRICTED for those countries.
+    try { m.restrictedEnabled = false; } catch (_) {}
+    m.musicUserToken = CFG.userToken;
+    try { m.bitrate = MusicKit.PlaybackBitrate.HIGH; } catch (_) {}
+
+    m.addEventListener('authorizationStatusDidChange', () => {
+      if (!m.isAuthorized) B.needsAuth = true;
+    });
+    m.addEventListener('mediaPlaybackError', (e) => {
+      B.err = 'playback: ' + errText(e && (e.error || e));
+      if (isAuthError(e && (e.error || e))) B.needsAuth = true;
+    });
+    B.m = m;
+    B.ready = true;
+  } catch (e) {
+    B.err = 'musickit: ' + errText(e);
+    if (isAuthError(e)) B.needsAuth = true;
+  }
+});
+
+async function libraryTracks(m, id) {
+  const items = [];
+  let url = `/v1/me/library/playlists/${encodeURIComponent(id)}/tracks`;
+  for (let page = 0; url && page < 50; page++) {
+    const resp = await m.api.music(url, page === 0 ? { limit: 100 } : undefined);
+    const body = (resp && resp.data) || {};
+    items.push(...(body.data || []));
+    url = body.next || null;
+  }
+  return items;
+}
+
+// setQueue while MusicKit is mid-seek fails with a spurious
+// CONTENT_EQUIVALENT; give the seek up to 200 ms to settle.
+function settle(m) {
+  const P = MusicKit.PlaybackStates;
+  const busy = [P.seeking, P.seekingForward, P.seekingBackward, P.waiting].filter((s) => s !== undefined);
+  if (!busy.includes(m.playbackState)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => { m.removeEventListener('playbackStateDidChange', done); resolve(); };
+    m.addEventListener('playbackStateDidChange', done);
+    setTimeout(done, 200);
+  });
+}
+
+async function play(m) {
+  try {
+    await m.play();
+  } catch (e) {
+    // CONTENT_EQUIVALENT on resume recovers with stop+play, not a new queue.
+    if (/CONTENT_EQUIVALENT/.test(errText(e))) { await m.stop(); await m.play(); } else throw e;
+  }
+}
+
+// Spectrum: an AnalyserNode spliced between MusicKit's <audio> element and
+// the speakers. Chrome feeds Widevine-decrypted audio through Web Audio, so
+// this reflects the real signal. Built lazily, once per media element.
+const viz = { ctx: null, an: null, wired: new WeakSet(), buf: null };
+
+function analyser() {
+  const el = document.querySelector('audio');
+  if (!el) return null;
+  if (!viz.ctx) {
+    viz.ctx = new AudioContext();
+    viz.an = viz.ctx.createAnalyser();
+    viz.an.fftSize = 4096;
+    viz.an.smoothingTimeConstant = 0.55;
+    viz.an.connect(viz.ctx.destination);
+    viz.buf = new Float32Array(viz.an.frequencyBinCount);
+  }
+  if (!viz.wired.has(el)) {
+    viz.ctx.createMediaElementSource(el).connect(viz.an);
+    viz.wired.add(el);
+  }
+  if (viz.ctx.state === 'suspended') viz.ctx.resume();
+  return viz.an;
+}
+
+Object.assign(B, {
+  async playPlaylist(id, index) {
+    const m = B.m;
+    if (!m) return;
+    B.err = '';
+    try {
+      const items = await libraryTracks(m, id);
+      if (!items.length) { B.err = 'this playlist is empty'; return; }
+      await settle(m);
+      // One native queue: MusicKit advances itself with ~20 ms gaps instead
+      // of the ~700 ms a per-track setQueue costs.
+      await m.setQueue({ items });
+      const start = Math.max(0, Math.min(index | 0, items.length - 1));
+      if (start > 0) await m.changeToMediaAtIndex(start);
+      B.playlist = id;
+      await play(m);
+    } catch (e) {
+      B.err = 'play: ' + errText(e);
+      if (isAuthError(e)) B.needsAuth = true;
+    }
+  },
+  toggle() {
+    const m = B.m;
+    if (!m) return;
+    if (m.isPlaying) m.pause(); else play(m).catch((e) => { B.err = 'play: ' + errText(e); });
+  },
+  play() { if (B.m && !B.m.isPlaying) play(B.m).catch((e) => { B.err = 'play: ' + errText(e); }); },
+  pause() { if (B.m) B.m.pause(); },
+  next() { if (B.m) B.m.skipToNextItem().catch(() => {}); },
+  prev() { if (B.m) B.m.skipToPreviousItem().catch(() => {}); },
+  seek(t) { if (B.m) B.m.seekToTime(Math.max(0, t)).catch(() => {}); },
+  volume(v) { if (B.m) B.m.volume = Math.max(0, Math.min(1, v)); },
+  setToken(t) { if (B.m) { B.m.musicUserToken = t; B.needsAuth = false; B.err = ''; } },
+
+  state() {
+    const m = B.m;
+    const s = {
+      ready: B.ready, err: B.err, needsAuth: B.needsAuth, playing: false,
+      title: '', artist: '', album: '', artwork: '', pos: 0, dur: 0,
+      index: -1, length: 0, playlist: B.playlist, volume: 1,
+    };
+    if (!m) return JSON.stringify(s);
+    const it = m.nowPlayingItem;
+    s.playing = !!m.isPlaying;
+    s.volume = m.volume;
+    s.pos = m.currentPlaybackTime || 0;
+    s.dur = m.currentPlaybackDuration || (it && it.playbackDuration ? it.playbackDuration / 1000 : 0);
+    s.index = typeof m.nowPlayingItemIndex === 'number' ? m.nowPlayingItemIndex : -1;
+    s.length = m.queue && m.queue.items ? m.queue.items.length : 0;
+    if (it) {
+      const a = it.attributes || {};
+      s.title = it.title || a.name || '';
+      s.artist = it.artistName || a.artistName || '';
+      s.album = it.albumName || a.albumName || '';
+      const art = it.artwork || a.artwork;
+      if (art && art.url) s.artwork = MusicKit.formatArtworkURL(art, 600, 600);
+    }
+    return JSON.stringify(s);
+  },
+
+  // n log-spaced bands from 40 Hz to 16 kHz, each 0–255. Music carries far
+  // less energy up high, so a +4.5 dB/octave tilt around 1 kHz levels the
+  // display the way hardware analyzers do; the window is -78…-18 dB.
+  spectrum(n) {
+    const out = new Array(n).fill(0);
+    if (!B.m || !B.m.isPlaying) return out;
+    const an = analyser();
+    if (!an) return out;
+    an.getFloatFrequencyData(viz.buf);
+    const hz = viz.ctx.sampleRate / an.fftSize;
+    const lo = Math.log(40), hi = Math.log(16000);
+    for (let i = 0; i < n; i++) {
+      const f0 = Math.exp(lo + (hi - lo) * i / n), f1 = Math.exp(lo + (hi - lo) * (i + 1) / n);
+      const a = Math.floor(f0 / hz), b = Math.max(a + 1, Math.floor(f1 / hz));
+      let peak = -Infinity;
+      for (let k = a; k < b && k < viz.buf.length; k++) peak = Math.max(peak, viz.buf[k]);
+      const db = peak + 4.5 * Math.log2(Math.sqrt(f0 * f1) / 1000);
+      out[i] = Math.round(255 * Math.max(0, Math.min(1, (db + 78) / 60)));
+    }
+    return out;
+  },
+});
+</script>
+<script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"
+        onerror="window.brumm.err = 'could not load MusicKit JS'"></script>
+</head>
+<body></body>
+</html>

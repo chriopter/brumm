@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "chriopter.brumm",
+  "name": "brumm",
+  "version": "1.0.0",
+  "author": "chriopter",
+  "license": "MIT",
+  "description": "brumm now playing: expand for the cover, seeking, controls and the player.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "brumm",
+    "description": "Apple Music now playing from brumm",
+    "category": "Media",
+    "aliases": ["brumm", "music", "apple music"],
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

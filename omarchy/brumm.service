@@ -1,0 +1,12 @@
+[Unit]
+Description=brumm Apple Music player
+Documentation=https://github.com/chriopter/brumm
+PartOf=graphical-session.target
+After=graphical-session.target
+
+# Started on demand by `brumm`; not enabled at login, so Chrome only runs
+# while you listen.
+[Service]
+ExecStart=%h/.local/bin/brumm daemon
+Restart=on-failure
+RestartSec=2

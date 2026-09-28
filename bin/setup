@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Build brumm and install it into Omarchy: the binary, the systemd user unit,
+# the launcher entry and the bar widget. Safe to re-run.
+#
+# To embed a fresh Apple Music developer token, pass the MusicKit key, e.g.
+# from 1Password:
+#   APPLE_KEY_ID=… APPLE_TEAM_ID=… APPLE_PRIVATE_KEY="$(op read op://…)" bin/setup
+# Without it, brumm uses developer_token from ~/.config/brumm/config.json.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+command -v go >/dev/null || { echo "brumm needs Go: omarchy pkg add go" >&2; exit 1; }
+
+ldflags="-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+if [[ -n ${APPLE_PRIVATE_KEY:-} ]]; then
+  token=$(go run ./tools/devtoken)
+  ldflags+=" -X github.com/chriopter/brumm/internal/config.DevToken=$token"
+  echo "embedded a new developer token (valid six months)"
+fi
+
+echo "building brumm"
+go build -trimpath -ldflags "$ldflags" -o "$HOME/.local/bin/brumm" .
+
+install -Dm644 omarchy/brumm.service "$HOME/.config/systemd/user/brumm.service"
+install -Dm644 omarchy/brumm.desktop "$HOME/.local/share/applications/brumm.desktop"
+systemctl --user daemon-reload
+
+plugin="$HOME/.config/omarchy/plugins/chriopter.brumm"
+mkdir -p "$plugin"
+cp omarchy/plugin/* "$plugin/"
+if command -v omarchy >/dev/null; then
+  omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+  omarchy plugin enable chriopter.brumm >/dev/null 2>&1 || true
+fi
+
+# Pick up the new build if the player is running.
+if systemctl --user is-active --quiet brumm.service; then
+  systemctl --user restart brumm.service
+fi
+
+if ! grep -q '"user_token"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
+  echo "next: sign in with 'brumm login'"
+fi
+echo "done: run 'brumm', or press the bear in the bar"
