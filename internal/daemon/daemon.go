@@ -29,39 +29,42 @@ import (
 const (
 	frame      = 40 * time.Millisecond // spectrum cadence (25 fps)
 	stateEvery = 5                     // poll state every 5th frame (200 ms)
-	maxFails   = 25                    // consecutive failed polls before restarting Chrome
+	staleAfter = 10 * time.Second      // no answer from the page this long: restart Chrome
+	sendWithin = 200 * time.Millisecond
 )
 
-type subscriber struct {
-	conn  *conn
-	bands int
-}
-
+// conn is one client. Writes carry a deadline so a stalled client (say, a
+// suspended TUI) is dropped instead of blocking every other one.
 type conn struct {
-	mu  sync.Mutex
-	enc *json.Encoder
+	mu    sync.Mutex
+	nc    net.Conn
+	enc   *json.Encoder
+	bands int // spectrum bands wanted; 0 = none
+	sub   bool
 }
 
-func (c *conn) send(m ipc.Message) {
+func (c *conn) send(m ipc.Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_ = c.enc.Encode(m)
+	_ = c.nc.SetWriteDeadline(time.Now().Add(sendWithin))
+	return c.enc.Encode(m)
 }
 
 type Daemon struct {
 	version string
 	mpris   *mpris.Server
-
-	lib *library
+	lib     *library
 
 	mu         sync.Mutex
 	eng        *engine.Engine
 	api        *apple.Client
 	state      ipc.State
-	subs       map[*conn]*subscriber
+	conns      map[*conn]bool
+	booting    bool
 	refreshing bool
 
-	quit chan struct{}
+	quit     chan struct{}
+	quitOnce sync.Once
 }
 
 // Run serves until SIGTERM, SIGINT or a quit request.
@@ -76,7 +79,7 @@ func Run(version string) error {
 		version: version,
 		state:   ipc.State{Status: ipc.StatusStarting, Message: "starting"},
 		lib:     loadLibrary(),
-		subs:    map[*conn]*subscriber{},
+		conns:   map[*conn]bool{},
 		quit:    make(chan struct{}),
 	}
 	if d.mpris, err = mpris.Start(d); err != nil {
@@ -127,12 +130,26 @@ func (d *Daemon) setStatus(s ipc.Status, msg string) {
 	d.state.Status, d.state.Message = s, msg
 	st := d.state
 	d.mu.Unlock()
-	d.broadcast(ipc.Message{State: &st}, false)
+	d.broadcast(ipc.Message{State: &st})
 }
 
 // boot connects to Apple Music first — so the library refreshes while
-// Chrome is still being installed — then starts playback.
+// Chrome is still being installed — then starts playback. Only one boot
+// runs at a time.
 func (d *Daemon) boot() {
+	d.mu.Lock()
+	if d.booting {
+		d.mu.Unlock()
+		return
+	}
+	d.booting = true
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		d.booting = false
+		d.mu.Unlock()
+	}()
+
 	cfg, err := config.Load()
 	if err != nil {
 		d.setStatus(ipc.StatusError, err.Error())
@@ -155,11 +172,6 @@ func (d *Daemon) boot() {
 		d.setStatus(ipc.StatusError, err.Error())
 		return
 	}
-	d.startEngine(cfg)
-}
-
-func (d *Daemon) startEngine(cfg config.Config) {
-
 	d.setStatus(ipc.StatusStarting, "starting player")
 	eng, err := engine.Start(cfg.Developer(), cfg.UserToken, d.version)
 	if err != nil {
@@ -180,12 +192,13 @@ func (d *Daemon) engine() *engine.Engine {
 	return d.eng
 }
 
-// loop polls the page: the spectrum every frame while someone watches it,
-// the player state every stateEvery frames, pushing state only on change.
+// loop polls the page: the spectrum every frame while music plays and
+// someone watches, the player state every stateEvery frames, pushing state
+// only when it changed. A dead or unresponsive page is restarted.
 func (d *Daemon) loop() {
 	t := time.NewTicker(frame)
 	defer t.Stop()
-	fails := 0
+	lastOK := time.Now()
 	for n := 0; ; n++ {
 		select {
 		case <-d.quit:
@@ -194,11 +207,18 @@ func (d *Daemon) loop() {
 		}
 		eng := d.engine()
 		if eng == nil {
+			lastOK = time.Now()
 			continue
 		}
-		if bands := d.maxBands(); bands > 0 {
+		if !eng.Alive() || time.Since(lastOK) > staleAfter {
+			lastOK = time.Now()
+			d.setStatus(ipc.StatusStarting, "restarting player")
+			go d.boot()
+			continue
+		}
+		if bands := d.maxBands(); bands > 0 && d.playing() {
 			if spec, err := eng.Spectrum(bands); err == nil {
-				d.broadcast(ipc.Message{Spectrum: spec}, true)
+				d.broadcast(ipc.Message{Spectrum: spec})
 			}
 		}
 		if n%stateEvery != 0 {
@@ -206,16 +226,17 @@ func (d *Daemon) loop() {
 		}
 		es, err := eng.State()
 		if err != nil {
-			if fails++; fails == maxFails {
-				fails = 0
-				d.setStatus(ipc.StatusStarting, "restarting player")
-				go d.boot()
-			}
 			continue
 		}
-		fails = 0
+		lastOK = time.Now()
 		d.apply(es)
 	}
+}
+
+func (d *Daemon) playing() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.state.Playing
 }
 
 func (d *Daemon) apply(es engine.State) {
@@ -237,7 +258,7 @@ func (d *Daemon) apply(es engine.State) {
 		d.mpris.Update(es)
 	}
 	if changed {
-		d.broadcast(ipc.Message{State: &next}, false)
+		d.broadcast(ipc.Message{State: &next})
 	}
 }
 
@@ -245,23 +266,27 @@ func (d *Daemon) maxBands() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	n := 0
-	for _, s := range d.subs {
-		n = max(n, s.bands)
+	for c := range d.conns {
+		n = max(n, c.bands)
 	}
 	return n
 }
 
-func (d *Daemon) broadcast(m ipc.Message, spectrum bool) {
+// broadcast pushes to subscribers; spectrum frames only to those that want
+// them. A client that cannot keep up is disconnected.
+func (d *Daemon) broadcast(m ipc.Message) {
 	d.mu.Lock()
 	var targets []*conn
-	for c, s := range d.subs {
-		if !spectrum || s.bands > 0 {
+	for c := range d.conns {
+		if c.sub && (m.Spectrum == nil || c.bands > 0) {
 			targets = append(targets, c)
 		}
 	}
 	d.mu.Unlock()
 	for _, c := range targets {
-		c.send(m)
+		if err := c.send(m); err != nil {
+			_ = c.nc.Close()
+		}
 	}
 }
 
@@ -276,24 +301,34 @@ func (d *Daemon) accept(ln net.Listener) {
 }
 
 func (d *Daemon) serve(nc net.Conn) {
-	c := &conn{enc: json.NewEncoder(nc)}
+	c := &conn{nc: nc, enc: json.NewEncoder(nc)}
+	d.mu.Lock()
+	d.conns[c] = true
+	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
-		delete(d.subs, c)
+		delete(d.conns, c)
 		d.mu.Unlock()
 		nc.Close()
 	}()
 	sc := bufio.NewScanner(nc)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
 	for sc.Scan() {
 		var r ipc.Request
 		if json.Unmarshal(sc.Bytes(), &r) != nil {
 			continue
 		}
-		reply := ipc.Message{ID: r.ID}
-		if err := d.handle(c, r, &reply); err != nil {
-			reply.Error = err.Error()
-		}
-		c.send(reply)
+		// Requests may be slow (network); answer them concurrently so a
+		// search does not hold up a pause.
+		go func() {
+			reply := ipc.Message{ID: r.ID}
+			if err := d.handle(c, r, &reply); err != nil {
+				reply.Error = err.Error()
+			}
+			if c.send(reply) != nil {
+				_ = nc.Close()
+			}
+		}()
 	}
 }
 
@@ -301,54 +336,44 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 	switch r.Cmd {
 	case ipc.CmdSubscribe:
 		d.mu.Lock()
-		d.subs[c] = &subscriber{conn: c, bands: min(r.Bands, 256)}
+		c.sub, c.bands = true, min(r.Bands, 256)
 		st := d.state
 		d.mu.Unlock()
 		reply.State = &st
 		return nil
-	case ipc.CmdPlaylists:
-		if cached, ok := d.lib.playlists(); ok {
-			reply.Playlists = cached
-			return nil
+	case ipc.CmdList:
+		return d.list(r.List, reply)
+	case ipc.CmdOpen:
+		if r.Item == nil {
+			return errors.New("open: no item")
 		}
+		return d.open(*r.Item, reply)
+	case ipc.CmdSearch:
 		api, err := d.client()
 		if err != nil {
 			return err
 		}
-		if reply.Playlists, err = api.Playlists(); err != nil {
-			return d.authCheck(err)
-		}
-		d.lib.setPlaylists(reply.Playlists)
-		return nil
-	case ipc.CmdTracks:
-		if cached, ok := d.lib.tracks(r.Playlist); ok {
-			reply.Tracks = cached
-			return nil
-		}
-		api, err := d.client()
+		res, err := api.Search(r.Query)
 		if err != nil {
-			return err
-		}
-		if reply.Tracks, err = api.Tracks(r.Playlist); err != nil {
 			return d.authCheck(err)
 		}
-		d.lib.setTracks(r.Playlist, reply.Tracks)
+		reply.Results = &res
 		return nil
 	case ipc.CmdReload:
 		go d.reload()
 		return nil
 	case ipc.CmdQuit:
-		close(d.quit)
+		d.quitOnce.Do(func() { close(d.quit) })
 		return nil
 	}
 
 	eng := d.engine()
 	if eng == nil {
-		return errors.New("player is not running")
+		return errors.New("the player is still starting")
 	}
 	switch r.Cmd {
 	case ipc.CmdPlay:
-		return eng.PlayPlaylist(r.Playlist, r.Index)
+		return eng.PlayIDs(r.IDs, r.Start, r.Source)
 	case ipc.CmdToggle:
 		return eng.Toggle()
 	case ipc.CmdNext:
@@ -359,8 +384,85 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		return eng.Seek(r.Value)
 	case ipc.CmdVolume:
 		return eng.SetVolume(r.Value)
+	case ipc.CmdShuffle:
+		return eng.SetShuffle(r.Value != 0)
+	case ipc.CmdRepeat:
+		return eng.SetRepeat(int(r.Value))
 	}
 	return fmt.Errorf("unknown command %q", r.Cmd)
+}
+
+// list answers a library list from the cache, fetching it on a miss.
+func (d *Daemon) list(name string, reply *ipc.Message) error {
+	if name == ipc.ListSongs {
+		if v, ok := d.lib.tracks(name); ok {
+			reply.Tracks = v
+			return nil
+		}
+	} else if v, ok := d.lib.items(name); ok {
+		reply.Items = v
+		return nil
+	}
+	api, err := d.client()
+	if err != nil {
+		return err
+	}
+	return d.authCheck(d.fetchList(api, name, reply))
+}
+
+func (d *Daemon) fetchList(api *apple.Client, name string, reply *ipc.Message) error {
+	var err error
+	switch name {
+	case ipc.ListPlaylists:
+		reply.Items, err = api.Playlists()
+	case ipc.ListAlbums:
+		reply.Items, err = api.Albums()
+	case ipc.ListArtists:
+		reply.Items, err = api.Artists()
+	case ipc.ListSongs:
+		reply.Tracks, err = api.Songs()
+	default:
+		return fmt.Errorf("unknown list %q", name)
+	}
+	if err != nil {
+		return err
+	}
+	if name == ipc.ListSongs {
+		d.lib.setTracks(name, reply.Tracks)
+	} else {
+		d.lib.setItems(name, reply.Items)
+	}
+	return nil
+}
+
+// open lists what is inside an item: tracks, or an artist's albums.
+func (d *Daemon) open(it apple.Item, reply *ipc.Message) error {
+	key := it.Key()
+	if it.Kind == apple.KindArtist {
+		if v, ok := d.lib.items(key); ok {
+			reply.Items = v
+			return nil
+		}
+	} else if v, ok := d.lib.tracks(key); ok {
+		reply.Tracks = v
+		return nil
+	}
+	api, err := d.client()
+	if err != nil {
+		return err
+	}
+	if it.Kind == apple.KindArtist {
+		if reply.Items, err = api.ArtistAlbums(it); err != nil {
+			return d.authCheck(err)
+		}
+		d.lib.setItems(key, reply.Items)
+		return nil
+	}
+	if reply.Tracks, err = api.Tracks(it); err != nil {
+		return d.authCheck(err)
+	}
+	d.lib.setTracks(key, reply.Tracks)
+	return nil
 }
 
 func (d *Daemon) client() (*apple.Client, error) {
@@ -397,8 +499,8 @@ func (d *Daemon) reload() {
 	d.boot()
 }
 
-// refresh re-reads the whole library from Apple Music — playlists first,
-// then every playlist's tracks — and tells clients once it changed.
+// refresh re-reads the library from Apple Music — the lists first, then
+// every playlist's tracks — saving and telling clients after each step.
 func (d *Daemon) refresh() {
 	d.mu.Lock()
 	api, busy := d.api, d.refreshing
@@ -413,28 +515,32 @@ func (d *Daemon) refresh() {
 		d.mu.Unlock()
 	}()
 
-	playlists, err := api.Playlists()
-	if err != nil {
-		_ = d.authCheck(err)
-		return
+	changed := func() {
+		if err := d.lib.save(); err != nil {
+			log.Printf("library cache: %v", err)
+		}
+		d.broadcast(ipc.Message{Library: true})
 	}
-	d.lib.setPlaylists(playlists)
-	d.broadcast(ipc.Message{Library: true}, false)
+	for _, name := range []string{ipc.ListPlaylists, ipc.ListAlbums, ipc.ListArtists, ipc.ListSongs} {
+		var reply ipc.Message
+		if err := d.fetchList(api, name, &reply); errors.Is(err, apple.ErrUnauthorized) {
+			_ = d.authCheck(err)
+			return
+		}
+	}
+	changed()
+	playlists, _ := d.lib.items(ipc.ListPlaylists)
 	for _, p := range playlists {
-		tracks, err := api.Tracks(p.ID)
+		tracks, err := api.Tracks(p)
 		if errors.Is(err, apple.ErrUnauthorized) {
 			_ = d.authCheck(err)
 			return
 		}
-		if err != nil {
-			continue // one broken playlist should not stop the rest
+		if err == nil {
+			d.lib.setTracks(p.Key(), tracks)
 		}
-		d.lib.setTracks(p.ID, tracks)
 	}
-	if err := d.lib.save(); err != nil {
-		log.Printf("library cache: %v", err)
-	}
-	d.broadcast(ipc.Message{Library: true}, false)
+	changed()
 }
 
 // mpris.Controller
@@ -449,6 +555,12 @@ func (d *Daemon) Seek(sec float64) {
 }
 func (d *Daemon) SetVolume(v float64) {
 	d.do(func(e *engine.Engine) error { return e.SetVolume(v) })
+}
+func (d *Daemon) SetShuffle(on bool) {
+	d.do(func(e *engine.Engine) error { return e.SetShuffle(on) })
+}
+func (d *Daemon) SetRepeat(mode int) {
+	d.do(func(e *engine.Engine) error { return e.SetRepeat(mode) })
 }
 
 // Raise focuses the brumm TUI, opening one if none is running.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/sys/unix"
 
 	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/ipc"
@@ -26,7 +27,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	_, err = tea.NewProgram(New(client, *r.State)).Run()
+	_, err = tea.NewProgram(newModel(client, *r.State)).Run()
 	return err
 }
 
@@ -73,4 +74,19 @@ func startDaemon() error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+// cellAspect is a terminal cell's height divided by its width in pixels,
+// so the cover can be drawn square. Terminals that do not report pixel
+// sizes get the common 2:1.
+func cellAspect() float64 {
+	ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ)
+	if err != nil || ws.Col == 0 || ws.Row == 0 || ws.Xpixel == 0 || ws.Ypixel == 0 {
+		return 2
+	}
+	a := (float64(ws.Ypixel) / float64(ws.Row)) / (float64(ws.Xpixel) / float64(ws.Col))
+	if a < 1.2 || a > 3.5 {
+		return 2
+	}
+	return a
 }

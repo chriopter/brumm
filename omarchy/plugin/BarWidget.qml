@@ -53,7 +53,7 @@ BarWidget {
       id: bear
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
-      text: root.playing ? "ʕ•ᴥ•ʔ" : "ʕ-ᴥ-ʔ"
+      text: root.playing ? "󰝚" : "󰏤"
       color: root.playing ? root.bar.barForeground : Qt.darker(root.bar.barForeground, 1.5)
       font.family: root.bar.fontFamily
       font.pixelSize: Style.font.body
@@ -252,6 +252,23 @@ BarWidget {
             enabled: root.player && root.player.canGoNext
             opacity: enabled ? 1 : 0.4
             onClicked: root.player.next()
+          }
+          Button {
+            iconText: "󰒝"
+            foreground: root.bar.foreground
+            opacity: root.player && root.player.shuffle ? 1 : 0.4
+            onClicked: if (root.player) root.player.shuffle = !root.player.shuffle
+          }
+          Button {
+            iconText: root.player && root.player.loopState === MprisLoopState.Track ? "󰑘" : "󰑖"
+            foreground: root.bar.foreground
+            opacity: root.player && root.player.loopState !== MprisLoopState.None ? 1 : 0.4
+            onClicked: {
+              if (!root.player) return
+              const s = root.player.loopState
+              root.player.loopState = s === MprisLoopState.None ? MprisLoopState.Playlist
+                : s === MprisLoopState.Playlist ? MprisLoopState.Track : MprisLoopState.None
+            }
           }
         }
 

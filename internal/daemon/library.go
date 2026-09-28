@@ -10,23 +10,29 @@ import (
 	"github.com/chriopter/brumm/internal/config"
 )
 
-// library caches the user's playlists and their tracks in memory and on
-// disk, so the TUI shows everything at once and the network only refreshes.
+// library caches everything the TUI browses — the library lists, each
+// playlist's and album's tracks, each artist's albums — in memory and on
+// disk, so lists open at once and the network only refreshes them.
+//
+// Keys are a list name (ipc.ListPlaylists, …) or an apple.Item's Key().
 type library struct {
-	mu        sync.Mutex
-	Playlists []apple.Playlist         `json:"playlists"`
-	Tracks    map[string][]apple.Track `json:"tracks"`
+	mu     sync.Mutex
+	Items  map[string][]apple.Item  `json:"items"`
+	Tracks map[string][]apple.Track `json:"tracks"`
 }
 
 func libraryPath() string { return filepath.Join(config.CacheDir(), "library.json") }
 
 func loadLibrary() *library {
-	l := &library{Tracks: map[string][]apple.Track{}}
+	l := &library{}
 	if b, err := os.ReadFile(libraryPath()); err == nil {
 		_ = json.Unmarshal(b, l)
-		if l.Tracks == nil {
-			l.Tracks = map[string][]apple.Track{}
-		}
+	}
+	if l.Items == nil {
+		l.Items = map[string][]apple.Item{}
+	}
+	if l.Tracks == nil {
+		l.Tracks = map[string][]apple.Track{}
 	}
 	return l
 }
@@ -48,37 +54,28 @@ func (l *library) save() error {
 	return os.Rename(tmp, libraryPath())
 }
 
-func (l *library) playlists() ([]apple.Playlist, bool) {
+func (l *library) items(key string) ([]apple.Item, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.Playlists, l.Playlists != nil
+	v, ok := l.Items[key]
+	return v, ok
 }
 
-func (l *library) tracks(id string) ([]apple.Track, bool) {
+func (l *library) tracks(key string) ([]apple.Track, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	t, ok := l.Tracks[id]
-	return t, ok
+	v, ok := l.Tracks[key]
+	return v, ok
 }
 
-func (l *library) setPlaylists(p []apple.Playlist) {
+func (l *library) setItems(key string, v []apple.Item) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.Playlists = p
-	// Forget playlists that no longer exist.
-	keep := make(map[string]bool, len(p))
-	for _, pl := range p {
-		keep[pl.ID] = true
-	}
-	for id := range l.Tracks {
-		if !keep[id] {
-			delete(l.Tracks, id)
-		}
-	}
+	l.Items[key] = v
 }
 
-func (l *library) setTracks(id string, t []apple.Track) {
+func (l *library) setTracks(key string, v []apple.Track) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.Tracks[id] = t
+	l.Tracks[key] = v
 }

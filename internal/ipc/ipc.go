@@ -20,25 +20,40 @@ import (
 // Commands.
 const (
 	CmdSubscribe = "subscribe" // push state (and spectrum when Bands > 0)
-	CmdPlaylists = "playlists"
-	CmdTracks    = "tracks" // Playlist
-	CmdPlay      = "play"   // Playlist, Index
+	CmdList      = "list"      // List: one of the lists below → Items or Tracks
+	CmdOpen      = "open"      // Item → Tracks (playlist, album) or Items (artist)
+	CmdSearch    = "search"    // Query → Results
+	CmdPlay      = "play"      // IDs, Start, Source
 	CmdToggle    = "toggle"
 	CmdNext      = "next"
 	CmdPrev      = "prev"
-	CmdSeek      = "seek"   // Value: absolute seconds
-	CmdVolume    = "volume" // Value: 0–1
-	CmdReload    = "reload" // re-read credentials after a login
-	CmdQuit      = "quit"   // stop the daemon
+	CmdSeek      = "seek"    // Value: absolute seconds
+	CmdVolume    = "volume"  // Value: 0–1
+	CmdShuffle   = "shuffle" // Value: 0 or 1
+	CmdRepeat    = "repeat"  // Value: 0 off, 1 one, 2 all
+	CmdReload    = "reload"  // re-read credentials after a login
+	CmdQuit      = "quit"    // stop the daemon
+)
+
+// Library lists.
+const (
+	ListPlaylists = "playlists"
+	ListAlbums    = "albums"
+	ListArtists   = "artists"
+	ListSongs     = "songs"
 )
 
 type Request struct {
-	ID       int     `json:"id"`
-	Cmd      string  `json:"cmd"`
-	Playlist string  `json:"playlist,omitempty"`
-	Index    int     `json:"index,omitempty"`
-	Value    float64 `json:"value,omitempty"`
-	Bands    int     `json:"bands,omitempty"`
+	ID     int         `json:"id"`
+	Cmd    string      `json:"cmd"`
+	List   string      `json:"list,omitempty"`
+	Item   *apple.Item `json:"item,omitempty"`
+	Query  string      `json:"query,omitempty"`
+	IDs    []string    `json:"ids,omitempty"`
+	Start  string      `json:"start,omitempty"`
+	Source string      `json:"source,omitempty"`
+	Value  float64     `json:"value,omitempty"`
+	Bands  int         `json:"bands,omitempty"`
 }
 
 // Status is the daemon's lifecycle phase.
@@ -58,13 +73,14 @@ type State struct {
 }
 
 type Message struct {
-	ID        int              `json:"id,omitempty"`
-	Error     string           `json:"error,omitempty"`
-	Playlists []apple.Playlist `json:"playlists,omitempty"`
-	Tracks    []apple.Track    `json:"tracks,omitempty"`
-	State     *State           `json:"state,omitempty"`
-	Spectrum  []int            `json:"spectrum,omitempty"`
-	Library   bool             `json:"library,omitempty"` // the cached library changed
+	ID       int            `json:"id,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	Items    []apple.Item   `json:"items,omitempty"`
+	Tracks   []apple.Track  `json:"tracks,omitempty"`
+	Results  *apple.Results `json:"results,omitempty"`
+	State    *State         `json:"state,omitempty"`
+	Spectrum []int          `json:"spectrum,omitempty"`
+	Library  bool           `json:"library,omitempty"` // the cached library changed
 }
 
 // Client is one connection to the daemon.
@@ -111,10 +127,14 @@ func (c *Client) read() {
 			}
 			continue
 		}
-		select {
-		case c.events <- m:
-		default: // a slow reader drops frames rather than stalling the daemon
+		if m.Spectrum != nil && m.State == nil {
+			select {
+			case c.events <- m:
+			default: // a busy reader drops spectrum frames, never state
+			}
+			continue
 		}
+		c.events <- m
 	}
 	close(c.events)
 	c.mu.Lock()

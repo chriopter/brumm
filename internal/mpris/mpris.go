@@ -33,6 +33,8 @@ type Controller interface {
 	Prev()
 	Seek(sec float64)
 	SetVolume(v float64)
+	SetShuffle(on bool)
+	SetRepeat(mode int) // 0 off, 1 one, 2 all
 	Raise()
 }
 
@@ -95,9 +97,21 @@ func Start(ctl Controller) (*Server, error) {
 			return s.properties(iface), nil
 		},
 		"Set": func(iface, name string, v dbus.Variant) *dbus.Error {
-			if iface == ifacePlay && name == "Volume" {
-				if f, ok := v.Value().(float64); ok {
-					ctl.SetVolume(math.Max(0, math.Min(1, f)))
+			if iface != ifacePlay {
+				return nil
+			}
+			switch val := v.Value().(type) {
+			case float64:
+				if name == "Volume" {
+					ctl.SetVolume(math.Max(0, math.Min(1, val)))
+				}
+			case bool:
+				if name == "Shuffle" {
+					ctl.SetShuffle(val)
+				}
+			case string:
+				if name == "LoopStatus" {
+					ctl.SetRepeat(map[string]int{"None": 0, "Track": 1, "Playlist": 2}[val])
 				}
 			}
 			return nil
@@ -145,7 +159,7 @@ func trackID(st engine.State) dbus.ObjectPath {
 		return noTrack
 	}
 	// Object paths allow only [A-Za-z0-9_]; hash whatever identifies the track.
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", st.Playlist, st.Title, st.Artist, st.Index)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", st.ID, st.Title, st.Artist, st.Index)))
 	return dbus.ObjectPath(fmt.Sprintf("/org/brumm/track/t%x", sum[:8]))
 }
 
@@ -168,9 +182,9 @@ func (s *Server) properties(iface string) map[string]dbus.Variant {
 		has := st.Title != ""
 		return map[string]dbus.Variant{
 			"PlaybackStatus": dbus.MakeVariant(status(st)),
-			"LoopStatus":     dbus.MakeVariant("None"),
+			"LoopStatus":     dbus.MakeVariant(loopStatus(st.Repeat)),
 			"Rate":           dbus.MakeVariant(1.0),
-			"Shuffle":        dbus.MakeVariant(false),
+			"Shuffle":        dbus.MakeVariant(st.Shuffle),
 			"Metadata":       dbus.MakeVariant(metadata(st, s.lastID)),
 			"Volume":         dbus.MakeVariant(st.Volume),
 			"Position":       dbus.MakeVariant(int64(s.positionLocked() * 1e6)),
@@ -185,6 +199,10 @@ func (s *Server) properties(iface string) map[string]dbus.Variant {
 		}
 	}
 	return map[string]dbus.Variant{}
+}
+
+func loopStatus(repeat int) string {
+	return [...]string{"None", "Track", "Playlist"}[max(0, min(repeat, 2))]
 }
 
 func status(st engine.State) string {
@@ -238,6 +256,12 @@ func (s *Server) Update(st engine.State) {
 	if prev.Volume != st.Volume {
 		changed["Volume"] = dbus.MakeVariant(st.Volume)
 	}
+	if prev.Shuffle != st.Shuffle {
+		changed["Shuffle"] = dbus.MakeVariant(st.Shuffle)
+	}
+	if prev.Repeat != st.Repeat {
+		changed["LoopStatus"] = dbus.MakeVariant(loopStatus(st.Repeat))
+	}
 	if prev.Ready != st.Ready {
 		changed["CanPlay"] = dbus.MakeVariant(st.Ready)
 	}
@@ -273,9 +297,9 @@ const introspection = `<node>
     <method name="OpenUri"><arg name="Uri" type="s" direction="in"/></method>
     <signal name="Seeked"><arg name="Position" type="x"/></signal>
     <property name="PlaybackStatus" type="s" access="read"/>
-    <property name="LoopStatus" type="s" access="read"/>
+    <property name="LoopStatus" type="s" access="readwrite"/>
     <property name="Rate" type="d" access="read"/>
-    <property name="Shuffle" type="b" access="read"/>
+    <property name="Shuffle" type="b" access="readwrite"/>
     <property name="Metadata" type="a{sv}" access="read"/>
     <property name="Volume" type="d" access="readwrite"/>
     <property name="Position" type="x" access="read"/>

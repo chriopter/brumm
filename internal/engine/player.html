@@ -11,7 +11,7 @@
 //
 // The host substitutes the configuration object for the CFG placeholder.
 const CFG = __BRUMM_CFG__;
-const B = window.brumm = { ready: false, err: '', needsAuth: false, m: null, playlist: '' };
+const B = window.brumm = { ready: false, err: '', needsAuth: false, m: null, source: '', gen: 0 };
 
 window.addEventListener('error', (e) => { if (!B.ready) B.err = 'page: ' + (e.message || 'script error'); });
 
@@ -51,16 +51,23 @@ document.addEventListener('musickitloaded', async () => {
   }
 });
 
-async function libraryTracks(m, id) {
-  const items = [];
-  let url = `/v1/me/library/playlists/${encodeURIComponent(id)}/tracks`;
-  for (let page = 0; url && page < 50; page++) {
-    const resp = await m.api.music(url, page === 0 ? { limit: 100 } : undefined);
-    const body = (resp && resp.data) || {};
-    items.push(...(body.data || []));
-    url = body.next || null;
-  }
-  return items;
+// resolve turns song ids into MusicKit items, in order, in batches of 100:
+// library ids ("i.…") from the library, everything else from the catalog.
+// Ids that no longer resolve are dropped; callers find their start by id.
+async function resolve(m, ids) {
+  const byId = new Map();
+  const lib = ids.filter((id) => id.startsWith('i.'));
+  const cat = ids.filter((id) => !id.startsWith('i.'));
+  const fetchAll = async (list, path) => {
+    for (let i = 0; i < list.length; i += 100) {
+      const chunk = list.slice(i, i + 100);
+      const resp = await m.api.music(path, { ids: chunk.join(',') });
+      for (const it of ((resp && resp.data && resp.data.data) || [])) byId.set(it.id, it);
+    }
+  };
+  if (lib.length) await fetchAll(lib, '/v1/me/library/songs');
+  if (cat.length) await fetchAll(cat, `/v1/catalog/${m.storefrontId || 'us'}/songs`);
+  return ids.map((id) => byId.get(id)).filter(Boolean);
 }
 
 // setQueue while MusicKit is mid-seek fails with a spurious
@@ -110,22 +117,30 @@ function analyser() {
 }
 
 Object.assign(B, {
-  async playPlaylist(id, index) {
+  // playIds queues songs and starts at startId. A newer call supersedes an
+  // older one still resolving, so rapid clicks never interleave queues.
+  async playIds(ids, startId, source) {
     const m = B.m;
     if (!m) return;
+    const gen = ++B.gen;
     B.err = '';
     try {
-      const items = await libraryTracks(m, id);
-      if (!items.length) { B.err = 'this playlist is empty'; return; }
+      const items = await resolve(m, ids);
+      if (gen !== B.gen) return;
+      if (!items.length) { B.err = 'nothing playable here'; return; }
       await settle(m);
+      if (gen !== B.gen) return;
       // One native queue: MusicKit advances itself with ~20 ms gaps instead
       // of the ~700 ms a per-track setQueue costs.
       await m.setQueue({ items });
-      const start = Math.max(0, Math.min(index | 0, items.length - 1));
+      if (gen !== B.gen) return;
+      const start = Math.max(0, items.findIndex((it) => it.id === startId));
       if (start > 0) await m.changeToMediaAtIndex(start);
-      B.playlist = id;
+      if (gen !== B.gen) return;
+      B.source = source;
       await play(m);
     } catch (e) {
+      if (gen !== B.gen) return;
       B.err = 'play: ' + errText(e);
       if (isAuthError(e)) B.needsAuth = true;
     }
@@ -141,6 +156,8 @@ Object.assign(B, {
   prev() { if (B.m) B.m.skipToPreviousItem().catch(() => {}); },
   seek(t) { if (B.m) B.m.seekToTime(Math.max(0, t)).catch(() => {}); },
   volume(v) { if (B.m) B.m.volume = Math.max(0, Math.min(1, v)); },
+  shuffle(on) { if (B.m) B.m.shuffleMode = on ? 1 : 0; },
+  repeat(mode) { if (B.m) B.m.repeatMode = mode; }, // 0 off, 1 one, 2 all
   setToken(t) { if (B.m) { B.m.musicUserToken = t; B.needsAuth = false; B.err = ''; } },
 
   state() {
@@ -148,18 +165,21 @@ Object.assign(B, {
     const s = {
       ready: B.ready, err: B.err, needsAuth: B.needsAuth, playing: false,
       title: '', artist: '', album: '', artwork: '', pos: 0, dur: 0,
-      index: -1, length: 0, playlist: B.playlist, volume: 1,
+      index: -1, length: 0, source: B.source, volume: 1, id: '', shuffle: false, repeat: 0,
     };
     if (!m) return JSON.stringify(s);
     const it = m.nowPlayingItem;
     s.playing = !!m.isPlaying;
     s.volume = m.volume;
+    s.shuffle = m.shuffleMode === 1;
+    s.repeat = m.repeatMode || 0;
     s.pos = m.currentPlaybackTime || 0;
     s.dur = m.currentPlaybackDuration || (it && it.playbackDuration ? it.playbackDuration / 1000 : 0);
     s.index = typeof m.nowPlayingItemIndex === 'number' ? m.nowPlayingItemIndex : -1;
     s.length = m.queue && m.queue.items ? m.queue.items.length : 0;
     if (it) {
       const a = it.attributes || {};
+      s.id = it.id || '';
       s.title = it.title || a.name || '';
       s.artist = it.artistName || a.artistName || '';
       s.album = it.albumName || a.albumName || '';
@@ -171,7 +191,7 @@ Object.assign(B, {
 
   // n log-spaced bands from 40 Hz to 16 kHz, each 0–255. Music carries far
   // less energy up high, so a +4.5 dB/octave tilt around 1 kHz levels the
-  // display the way hardware analyzers do; the window is -78…-18 dB.
+  // display the way hardware analyzers do; the window is -72…-8 dB.
   spectrum(n) {
     const out = new Array(n).fill(0);
     if (!B.m || !B.m.isPlaying) return out;
@@ -186,7 +206,7 @@ Object.assign(B, {
       let peak = -Infinity;
       for (let k = a; k < b && k < viz.buf.length; k++) peak = Math.max(peak, viz.buf[k]);
       const db = peak + 4.5 * Math.log2(Math.sqrt(f0 * f1) / 1000);
-      out[i] = Math.round(255 * Math.max(0, Math.min(1, (db + 78) / 60)));
+      out[i] = Math.round(255 * Math.max(0, Math.min(1, (db + 72) / 64)));
     }
     return out;
   },

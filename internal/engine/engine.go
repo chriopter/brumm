@@ -36,8 +36,11 @@ type State struct {
 	Dur       float64 `json:"dur"`
 	Index     int     `json:"index"`
 	Length    int     `json:"length"`
-	Playlist  string  `json:"playlist"`
+	ID        string  `json:"id"`     // the playing song
+	Source    string  `json:"source"` // key of the list it was started from
 	Volume    float64 `json:"volume"`
+	Shuffle   bool    `json:"shuffle"`
+	Repeat    int     `json:"repeat"` // 0 off, 1 one, 2 all
 }
 
 type Engine struct {
@@ -108,7 +111,15 @@ func Start(developerToken, userToken, version string) (*Engine, error) {
 		cancel:  func() { ctxCancel(); allocCancel() },
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/", ln.Addr().(*net.TCPAddr).Port)
-	if err := chromedp.Run(ctx, chromedp.Navigate(url)); err != nil {
+	// Launch the browser on the long-lived context, then navigate on a
+	// bounded one so a dead network cannot hang startup forever.
+	if err := chromedp.Run(ctx); err != nil {
+		e.Close()
+		return nil, fmt.Errorf("chrome: %w", err)
+	}
+	navCtx, navCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer navCancel()
+	if err := chromedp.Run(navCtx, chromedp.Navigate(url)); err != nil {
 		e.Close()
 		return nil, fmt.Errorf("chrome: %w", err)
 	}
@@ -144,9 +155,18 @@ func (e *Engine) Spectrum(n int) ([]int, error) {
 	return bands, err
 }
 
-func (e *Engine) PlayPlaylist(id string, index int) error {
-	return e.call(`brumm.playPlaylist(%q, %d)`, id, index)
+// PlayIDs queues songs by id and starts at startID; source names the list
+// they came from so clients can mark it.
+func (e *Engine) PlayIDs(ids []string, startID, source string) error {
+	list, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return e.call(`brumm.playIds(%s, %q, %q)`, list, startID, source)
 }
+
+// Alive reports whether Chrome is still there.
+func (e *Engine) Alive() bool { return e.ctx.Err() == nil }
 
 func (e *Engine) Toggle() error               { return e.call(`brumm.toggle()`) }
 func (e *Engine) Play() error                 { return e.call(`brumm.play()`) }
@@ -156,6 +176,8 @@ func (e *Engine) Prev() error                 { return e.call(`brumm.prev()`) }
 func (e *Engine) Seek(sec float64) error      { return e.call(`brumm.seek(%f)`, sec) }
 func (e *Engine) SetVolume(v float64) error   { return e.call(`brumm.volume(%f)`, v) }
 func (e *Engine) SetUserToken(t string) error { return e.call(`brumm.setToken(%q)`, t) }
+func (e *Engine) SetShuffle(on bool) error    { return e.call(`brumm.shuffle(%t)`, on) }
+func (e *Engine) SetRepeat(mode int) error    { return e.call(`brumm.repeat(%d)`, mode) }
 
 func (e *Engine) Close() {
 	e.cancel()
