@@ -22,7 +22,13 @@ brumm login
 
 Then run `brumm`, or click the music widget in the bar. You need an Apple Music subscription.
 
-To check the installer before running it, download it and verify that GitHub built it from this repository: `gh attestation verify install.sh -R chriopter/brumm`.
+To check the installer before running it, download it, verify that GitHub built it from this repository, then run it:
+
+```sh
+curl -fsSLO https://github.com/chriopter/brumm/releases/latest/download/install.sh
+gh attestation verify install.sh -R chriopter/brumm
+bash install.sh
+```
 
 ## Update
 
