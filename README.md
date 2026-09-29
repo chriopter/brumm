@@ -26,7 +26,7 @@
 | <kbd>enter</kbd> | play / open |
 | <kbd>space</kbd> | pause · hold to preview |
 | <kbd>←</kbd> <kbd>→</kbd> <kbd>1</kbd>–<kbd>8</kbd> | sections |
-| <kbd>/</kbd> | search, or paste a link |
+| <kbd>/</kbd> | filter here · <kbd>tab</kbd> search everywhere |
 | <kbd>R</kbd> | radio from song or artist |
 | <kbd>*</kbd> <kbd>d</kbd> <kbd>i</kbd> <kbd>P</kbd> | love · dislike · library · playlist |
 | <kbd>f</kbd> | visualizer: <kbd>tab</kbd> <kbd>v</kbd> <kbd>a</kbd> <kbd>F</kbd> |

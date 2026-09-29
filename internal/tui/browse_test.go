@@ -334,3 +334,43 @@ func TestAutoFPS(t *testing.T) {
 		t.Fatalf("F went to %d", m.drawFPS())
 	}
 }
+
+// / filters the list where you are; tab takes the words to all of Apple
+// Music; esc brings the whole list back.
+func TestFilterHere(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height = 120, 35
+	m.section = secPlaylists
+	v := &view{title: "Mix", key: "lib:playlist:p.1", item: &apple.Item{Kind: apple.KindPlaylist, ID: "p.1"}}
+	m.stacks[secPlaylists] = append(m.stacks[secPlaylists], v)
+	fill(v, ipc.Message{Tracks: []apple.Track{
+		{ID: "1", Title: "Around the World", Artist: "Daft Punk"},
+		{ID: "2", Title: "Get Lucky", Artist: "Daft Punk"},
+		{ID: "3", Title: "Blue Monday", Artist: "New Order"},
+	}})
+	m.key("/")
+	if !m.filtering || m.section != secPlaylists {
+		t.Fatal("/ does not filter the list where you are")
+	}
+	for _, r := range "daft luck" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if len(v.rows) != 1 || v.rows[0].track.ID != "2" {
+		t.Fatalf("filter left %d rows", len(v.rows))
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "daft luck") {
+		t.Fatal("the filter box does not show")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if len(v.rows) != 3 || m.filtering {
+		t.Fatal("esc does not bring the list back")
+	}
+	m.key("/")
+	for _, r := range "kraftwerk" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	m.filterKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.section != secSearch || m.query != "kraftwerk" {
+		t.Fatalf("tab does not search all of Apple Music (section %d, %q)", m.section, m.query)
+	}
+}

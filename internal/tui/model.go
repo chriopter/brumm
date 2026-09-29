@@ -78,6 +78,8 @@ type view struct {
 	off     int
 	selAt   int // frame the selection last changed, for the marquee
 	qpos    int // for the queue view: the queue index of the first row
+	filter  string
+	all     []row // every row while a filter shows some (filter.go)
 }
 
 // songs returns the view's song ids and maps a row index to its position
@@ -210,10 +212,11 @@ type Model struct {
 
 	opts options
 
-	optOpen  bool    // the options menu shows
-	pick     *picker // the add-to-playlist menu, while it shows
-	optLines []int   // the options menu line of each option
-	optSel   int
+	filtering bool    // typing into the list's filter (filter.go)
+	optOpen   bool    // the options menu shows
+	pick      *picker // the add-to-playlist menu, while it shows
+	optLines  []int   // the options menu line of each option
+	optSel    int
 
 	// Covers sent to the terminal as kitty graphics, by address and size.
 	kitty      map[string]*kittyImage
@@ -646,6 +649,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return loadedMsg{v: v, reply: reply, err: err, selectID: song}
 		}
 	case tea.PasteMsg:
+		if m.filtering {
+			v := m.cur()
+			v.filter += strings.TrimSpace(msg.Content)
+			applyFilter(v)
+			return m, m.prefetchCovers(v)
+		}
 		if m.searching {
 			m.query += strings.TrimSpace(msg.Content)
 			return m, m.typed()
@@ -700,6 +709,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.searching {
 			return m, m.searchKey(msg)
+		}
+		if m.filtering {
+			return m, m.filterKey(msg)
 		}
 		if k := msg.String(); k == "space" || k == " " {
 			return m, m.spaceDownKey(msg.IsRepeat)
@@ -1246,6 +1258,10 @@ func (m *Model) key(k string) tea.Cmd {
 	case "shift+tab", "left":
 		return m.switchTo((m.section + numSections - 1) % numSections)
 	case "/":
+		if m.filterable() {
+			m.startFilter() // here first; tab goes on to all of Apple Music
+			return nil
+		}
 		m.section, m.searching, m.help = secSearch, true, false
 	case "f":
 		return m.toggleFull()
@@ -1318,6 +1334,10 @@ func (m *Model) key(k string) tea.Cmd {
 	case "esc", "h", "backspace":
 		if m.help {
 			m.help = false
+			return nil
+		}
+		if v := m.cur(); v.all != nil && k == "esc" {
+			m.clearFilter(v) // the filter goes before the view does
 			return nil
 		}
 		if m.previewing {

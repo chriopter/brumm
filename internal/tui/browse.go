@@ -51,6 +51,10 @@ func fill(v *view, reply ipc.Message) {
 		rows = append(rows, row{track: &reply.Tracks[i]})
 	}
 	v.rows, v.loaded, v.err = rows, true, nil
+	if v.all != nil { // a filter shows: keep it over the new rows
+		v.all = rows
+		applyFilter(v)
+	}
 	v.qpos = max(0, reply.Pos)
 	// An album opened from a link has no name yet; its songs carry it.
 	if v.item != nil && v.item.Kind == apple.KindAlbum && v.title == "Album" && len(reply.Tracks) > 0 {
