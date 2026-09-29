@@ -25,6 +25,15 @@ const (
 
 var coverStyles = []string{coverPixel, coverSmooth, coverOriginal}
 
+// Cover sizes: large fills the stage's height, the others leave it room.
+const (
+	sizeSmall  = "small"
+	sizeMedium = "medium"
+	sizeLarge  = "large"
+)
+
+var coverSizes = []string{sizeSmall, sizeMedium, sizeLarge}
+
 // The fullscreen visualizer's frame rates; the renderer allows up to 120.
 // 0 is auto: the screen's own refresh rate.
 var drawRates = []int{0, 30, 60, 120}
@@ -88,11 +97,33 @@ func (o options) cover() string {
 	return coverPixel
 }
 
+// coverSize is the cover's size, large unless set.
+func (o options) coverSize() string {
+	if o.CoverSize == sizeSmall || o.CoverSize == sizeMedium {
+		return o.CoverSize
+	}
+	return sizeLarge
+}
+
+// coverScale is the share of the stage's height the cover takes.
+func (o options) coverScale() float64 {
+	switch o.coverSize() {
+	case sizeSmall:
+		return 0.5
+	case sizeMedium:
+		return 0.75
+	}
+	return 1
+}
+
 // The menu's rows, in order: two choices, then plain switches.
 const (
 	optCover = iota
+	optSize
+	optBackdrop
 	optMeter
 	optScroll
+	optBar
 	optBarScroll
 	optCards
 	optAutoplay
@@ -100,14 +131,27 @@ const (
 	numOptions
 )
 
+// optShown: the bar widget's row only where omarchy can switch it.
+func (m *Model) optShown(i int) bool { return i != optBar || m.hasOmarchy }
+
+// stepOption moves the selection by dir, over rows that do not show.
+func (m *Model) stepOption(dir int) {
+	for {
+		m.optSel = (m.optSel + dir + numOptions) % numOptions
+		if m.optShown(m.optSel) {
+			return
+		}
+	}
+}
+
 // optionsKey handles a key while the options are open; every key stays in
 // the menu.
 func (m *Model) optionsKey(k string) tea.Cmd {
 	switch k {
 	case "up", "k", "shift+tab":
-		m.optSel = (m.optSel + numOptions - 1) % numOptions
+		m.stepOption(-1)
 	case "down", "j", "tab":
-		m.optSel = (m.optSel + 1) % numOptions
+		m.stepOption(1)
 	case "space", " ", "enter", "right", "l":
 		return m.changeOption(m.optSel, 1)
 	case "left", "h":
@@ -140,11 +184,17 @@ func (m *Model) changeOption(i, dir int) tea.Cmd {
 		}
 		m.opts.Cover = step(coverStyles, cur, dir)
 		m.rendered, m.thumbs = map[art.Size][]string{}, map[string][]string{}
+	case optSize:
+		m.opts.CoverSize = step(coverSizes, m.opts.coverSize(), dir)
+	case optBackdrop:
+		m.opts.NoBackdrop = !m.opts.NoBackdrop
 	case optMeter:
 		m.opts.NoMeter = !m.opts.NoMeter
 		cmd = m.subscribe() // no meter, no spectrum stream
 	case optScroll:
 		m.opts.NoScroll = !m.opts.NoScroll
+	case optBar:
+		cmd = m.setBar(!m.barOn)
 	case optBarScroll:
 		m.opts.NoBarScroll = !m.opts.NoBarScroll
 	case optCards:
@@ -187,8 +237,11 @@ func (m *Model) optionsBox() []string {
 	}
 	rows := [numOptions]string{
 		optCover:     label("cover") + cover,
+		optSize:      label("size") + choice(coverSizes, m.opts.coverSize()),
+		optBackdrop:  check(!m.opts.NoBackdrop) + "   backdrop",
 		optMeter:     check(!m.opts.NoMeter) + "   level meter",
 		optScroll:    check(!m.opts.NoScroll) + "   scroll long names",
+		optBar:       check(m.barOn) + "   bar widget",
 		optBarScroll: check(!m.opts.NoBarScroll) + "   scroll in the bar",
 		optCards:     check(!m.opts.NoCards) + "   cover cards",
 		optAutoplay:  check(!m.opts.NoAutoplay) + "   autoplay",
@@ -196,14 +249,21 @@ func (m *Model) optionsBox() []string {
 	}
 	hint := sKey.Render("↑↓") + sDim.Render(" move    ") + sKey.Render("space") + sDim.Render(" change    ") + sKey.Render("o") + sDim.Render(" close")
 	w := lipgloss.Width(hint)
-	for _, r := range rows {
+	for i, r := range rows {
+		if !m.optShown(i) {
+			continue
+		}
 		w = max(w, lipgloss.Width(r)+3)
 	}
 	w = min(w+2, m.width-2*margin-6)
 	var lines []string
 	m.optLines = m.optLines[:0]
 	for i, r := range rows {
-		if i == optMeter {
+		if !m.optShown(i) {
+			m.optLines = append(m.optLines, -1)
+			continue
+		}
+		if i == optBackdrop {
 			lines = append(lines, "") // choices above, switches below
 		}
 		gutter := "   "
@@ -250,7 +310,7 @@ func (m *Model) optionsClick(x, y int) tea.Cmd {
 		return nil
 	}
 	for i, l := range m.optLines {
-		if y-m.geo.optRow0 == l {
+		if l >= 0 && y-m.geo.optRow0 == l {
 			m.optSel = i
 			return m.changeOption(i, 1)
 		}

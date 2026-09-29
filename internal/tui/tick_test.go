@@ -1,13 +1,17 @@
 package tui
 
 import (
+	"fmt"
+	"image"
 	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/chriopter/brumm/internal/apple"
 	"github.com/chriopter/brumm/internal/art"
 	"github.com/chriopter/brumm/internal/ipc"
 )
@@ -103,5 +107,86 @@ func TestOptionsApplyAtOnce(t *testing.T) {
 	m.optionsKey("space")
 	if !m.opts.AlwaysTips || !strings.Contains(ansi.Strip(m.View().Content), "1 Home") {
 		t.Fatal("keys on buttons do not show while the menu is open")
+	}
+}
+
+// songList is a list of n songs, each with a cover of its own.
+func songList(n int) *Model {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height = 200, 55
+	m.section = secSongs
+	var tracks []apple.Track
+	for i := range n {
+		tracks = append(tracks, apple.Track{ID: fmt.Sprint(i), Title: fmt.Sprint("song ", i), Artwork: fmt.Sprint("cover", i, ".jpg")})
+	}
+	fill(m.cur(), ipc.Message{Tracks: tracks})
+	return m
+}
+
+// A free-spinning wheel's notches move the selection at once but are drawn
+// a frame at a time, and covers load only once the wheel rests: nothing is
+// left queued behind the wheel when it stops.
+func TestWheelSpin(t *testing.T) {
+	m := songList(600)
+	m.View()
+	cmds, draws := 0, 0
+	for range 500 {
+		if _, cmd := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown}); cmd != nil {
+			cmds++
+		}
+		if !m.still {
+			draws++
+		}
+		m.View()
+	}
+	if got := m.cur().sel; got != 500 {
+		t.Fatalf("500 notches down selected row %d", got)
+	}
+	if cmds > 3 || draws > 5 {
+		t.Fatalf("500 notches returned %d commands and drew %d times", cmds, draws)
+	}
+	if len(m.fetching) > 0 {
+		t.Fatalf("a spinning wheel fetches %d covers", len(m.fetching))
+	}
+	if m.Update(wheelMsg{}); m.still || !strings.Contains(ansi.Strip(m.View().Content), "song 500") {
+		t.Fatal("the wheel's frame does not draw where it got to")
+	}
+	m.wheelAt = time.Now().Add(-wheelRest)
+	if _, cmd := m.Update(wheelMsg{}); cmd == nil || len(m.fetching) == 0 || len(m.fetching) > 32 {
+		t.Fatalf("the rested wheel fetches %d covers", len(m.fetching))
+	}
+	if m.wheelTick {
+		t.Fatal("the rested wheel keeps ticking")
+	}
+	// A notch after a pause is drawn at once, one row on.
+	m.wheelDrawn = time.Time{}
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.still || m.cur().sel != 499 {
+		t.Fatalf("a lone notch up: still %v, row %d", m.still, m.cur().sel)
+	}
+}
+
+// Covers stay for every row prefetchCovers reaches: moving within them
+// fetches nothing again.
+func TestCoversKept(t *testing.T) {
+	m := songList(400)
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	deliver := func() int {
+		n := 0
+		for url := range m.fetching {
+			m.Update(coverMsg{url, img})
+			n++
+		}
+		return n
+	}
+	for range 8 {
+		m.prefetchCovers(m.cur())
+		deliver()
+	}
+	for i := range 10 {
+		m.move("down")
+		if n := deliver(); n > 0 {
+			t.Fatalf("move %d fetched %d covers again", i, n)
+		}
 	}
 }

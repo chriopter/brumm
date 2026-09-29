@@ -105,13 +105,17 @@ type geometry struct {
 }
 
 func (m *Model) View() tea.View {
+	if m.still && m.drawn.Content != "" {
+		return m.drawn // nothing on screen changed: a wheel notch between frames, a hover
+	}
 	content := m.render()
 	if m.full && m.width >= 20 && m.height >= 6 {
 		content = m.fullscreen()
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	// Every move, not only drags: the pointer changes over buttons (pointer.go).
+	v.MouseMode = tea.MouseModeAllMotion
 	v.KeyboardEnhancements.ReportEventTypes = true // hold space to preview
 	v.ReportFocus = true
 	switch {
@@ -120,12 +124,15 @@ func (m *Model) View() tea.View {
 	case m.full:
 	case m.upd != nil:
 		v.Content = m.overlay(content, m.updateBox())
+	case m.barAsking():
+		v.Content = m.overlay(content, m.barBox())
 	case m.pick != nil:
 		v.Content = m.overlay(content, m.pickerBox())
 	case m.optOpen:
 		v.Content = m.overlay(content, m.optionsBox())
 	}
 	v.WindowTitle = "brumm"
+	m.drawn = v
 	return v
 }
 
@@ -154,15 +161,23 @@ func (m *Model) render() string {
 		mini := m.miniPlayer(inner)
 		body = lipgloss.JoinVertical(lipgloss.Left, append([]string{m.nav(inner, bodyH-len(mini), margin, bodyTop)}, mini...)...)
 	} else {
+		// Large fills the height (or the width); the smaller sizes shrink
+		// the whole column, which stays in the middle both ways.
 		coverH := max(0, bodyH-1-stageBelow)
 		coverH = min(coverH, int(float64(room)/m.cellAspect))
+		coverH = int(float64(coverH) * m.opts.coverScale())
 		colW := max(colMin, min(room, int(math.Round(float64(coverH)*m.cellAspect))))
 		inset := (room - colW) / 2
 		stageX := margin + navW + gapW + inset
 		m.geo.divider = rect{margin + navW - 1, bodyTop, margin + navW + gapW, bodyTop + bodyH}
-		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop), "\n")
+		bd := m.stageBackdrop(room, bodyH)
+		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop, bd, inset), "\n")
 		for i := range stage {
-			stage[i] = strings.Repeat(" ", inset) + stage[i] + strings.Repeat(" ", room-colW-inset)
+			if stage[i] == "" { // nothing on this row: the backdrop's whole row
+				stage[i] = bd.rows[i]
+				continue
+			}
+			stage[i] = bd.spaces(i, 0, inset) + stage[i] + bd.spaces(i, inset+colW, room-colW-inset)
 		}
 		// Both sides are exactly as wide as their column, so rows join
 		// without measuring the long colored cover lines again.
@@ -210,6 +225,9 @@ func (m *Model) footer() string {
 	if m.showTips() { // the rest is on the buttons: the footer has what is not
 		keys = []entry{{"esc", "back", "esc"}, {"f", "visualizer", "f"}, {"c", "now playing", "c"},
 			{"Q", "close, music plays on", "Q"}, {"q", "quit", "q"}, {"?", "all keys", "?"}}
+	}
+	if m.searching { // the box has the keys
+		keys = []entry{{"esc", "done", "esc"}, {"enter", "search", "enter"}}
 	}
 	if m.help {
 		keys = []entry{{"esc", "back", "esc"}, {"?", "close the keys", "?"}}
@@ -374,6 +392,16 @@ func (m *Model) nav(w, h, x, y int) string {
 	for _, sv := range m.stack() {
 		crumb = append(crumb, sv.title)
 	}
+	// Too long, it gives up its first parts: … / Deftones / Koi No Yokan.
+	if lipgloss.Width(strings.Join(crumb, " / ")) > w-8 {
+		for k := 1; k < len(crumb)-1; k++ {
+			c := append([]string{"…"}, crumb[k:]...)
+			if k == len(crumb)-2 || lipgloss.Width(strings.Join(c, " / ")) <= w-8 {
+				crumb = c
+				break
+			}
+		}
+	}
 	title := strings.Join(crumb, " / ")
 	if len(crumb) > 1 {
 		parent := strings.Join(crumb[:len(crumb)-1], " / ")
@@ -530,11 +558,14 @@ func marquee(s string, w, t int) string {
 type stageLine struct {
 	text   string
 	center bool
+	art    bool // a picture: drawn as it is, the backdrop only around it
 	hit    func(x, y int)
 	width  int // known display width; skips measuring long colored lines
 }
 
-func (m *Model) stage(colW, coverH, h, x, y int) string {
+// stage draws the column colW wide; bd, when there is one, shows behind
+// it, the column starting at inset in it.
+func (m *Model) stage(colW, coverH, h, x, y int, bd *backdrop, inset int) string {
 	st := m.state
 	var top, bottom []stageLine
 	add := func(s string) { top = append(top, stageLine{text: s}) }
@@ -560,7 +591,9 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 
 	out := make([]string, h)
 	for i := range out {
-		out[i] = strings.Repeat(" ", colW)
+		if bd == nil { // with one, render fills the empty rows whole
+			out[i] = strings.Repeat(" ", colW)
+		}
 	}
 	put := func(row int, l stageLine) {
 		if row < 0 || row >= h {
@@ -575,7 +608,10 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 		if l.center {
 			left = max(0, (colW-w)/2)
 		}
-		out[row] = strings.Repeat(" ", left) + text + strings.Repeat(" ", max(0, colW-left-w))
+		if !l.art {
+			text = bd.paint(row, inset+left, text)
+		}
+		out[row] = bd.spaces(row, inset, left) + text + bd.spaces(row, inset+left+w, colW-left-w)
 		if l.hit != nil {
 			l.hit(x+left, y+row)
 		}

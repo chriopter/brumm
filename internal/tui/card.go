@@ -189,7 +189,7 @@ func (m *Model) idleCard(colW, coverH int) []stageLine {
 	w := min(colW, int(math.Round(float64(coverH)*m.cellAspect)))
 	var out []stageLine
 	for _, l := range m.cardLines(c, art.Size{Width: w, Height: coverH}) {
-		out = append(out, stageLine{text: l, center: true, width: w})
+		out = append(out, stageLine{text: l, center: true, art: true, width: w})
 	}
 	out = append(out, stageLine{}, stageLine{text: sBold.Render(c.name), center: true})
 	if c.sub != "" {

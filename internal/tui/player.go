@@ -38,7 +38,7 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 	if coverH >= 6 {
 		coverW := min(colW, int(math.Round(float64(coverH)*m.cellAspect)))
 		for _, l := range m.stageCover(art.Size{Width: coverW, Height: coverH}) {
-			top = append(top, stageLine{text: l, center: true, width: coverW})
+			top = append(top, stageLine{text: l, center: true, art: true, width: coverW})
 		}
 	}
 

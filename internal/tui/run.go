@@ -36,7 +36,7 @@ func Run() error {
 		return err
 	}
 	if m, ok := final.(*Model); ok {
-		os.Stdout.WriteString(m.kittyCleanup())
+		os.Stdout.WriteString(m.kittyCleanup() + m.pointerReset())
 	}
 	if m, ok := final.(*Model); ok && m.reexec {
 		// The binary changed under us (an update): continue in the new one.

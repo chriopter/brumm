@@ -405,10 +405,8 @@ func linkPlugin() error {
 		return err
 	}
 	rescan()
-	if fresh {
-		if _, err := exec.LookPath("omarchy"); err == nil {
-			_ = exec.Command("omarchy", "plugin", "enable", pluginID).Run()
-		}
+	if fresh && HasOmarchy() {
+		_ = SetPlugin(true)
 	}
 	return nil
 }

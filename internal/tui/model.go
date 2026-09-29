@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -79,7 +80,8 @@ type view struct {
 	selAt   int // frame the selection last changed, for the marquee
 	qpos    int // for the queue view: the queue index of the first row
 	filter  string
-	all     []row // every row while a filter shows some (filter.go)
+	all     []row  // every row while a filter shows some (filter.go)
+	want    string // a song to select once the rows come
 }
 
 // songs returns the view's song ids and maps a row index to its position
@@ -119,11 +121,13 @@ type (
 	}
 	albumMsg struct {
 		item apple.Item
+		song string // the song looked up, selected when the item lists it
 		err  error
 	}
 	loginMsg   struct{ err error }
 	errMsg     struct{ err error }
 	tickMsg    struct{ seq int }
+	wheelMsg   struct{}          // the spinning wheel's next frame
 	refreshMsg int               // the screen's refresh rate, found at start
 	holdMsg    struct{ seq int } // space is still down after holdDelay
 	seekMsg    struct{ seq int } // the last seek key was a moment ago
@@ -209,8 +213,16 @@ type Model struct {
 	split    float64 // the list's share of the width
 	dragging bool    // the divider is being dragged
 	reexec   bool    // the binary was updated: restart into it on quit
+	pointer  string  // the mouse pointer's shape as last sent (pointer.go)
 
 	opts options
+
+	hasOmarchy bool // omarchy is here: the bar widget can be switched (bar.go)
+	barOn      bool // the bar widget is on, as far as is known
+	barAsk     bool // the first start's question about it is due
+
+	termBg   color.Color // the terminal's background, once it says (backdrop.go)
+	backdrop *backdrop   // the stage's glow, for one cover at one size
 
 	filtering bool    // typing into the list's filter (filter.go)
 	optOpen   bool    // the options menu shows
@@ -226,6 +238,14 @@ type Model struct {
 	kittyClock int
 
 	loginTried bool // the sign-in page opened on its own once
+
+	// A spinning mouse wheel (see wheel).
+	wheelAt    time.Time // the last notch
+	wheelDrawn time.Time // the last notch drawn at once
+	wheelMoved bool      // notches since the screen was drawn
+	wheelTick  bool      // a wheelMsg is on its way
+	still      bool      // this update changed nothing on screen: View reuses drawn
+	drawn      tea.View
 
 	full     bool // fullscreen visualizer
 	vizList  bool // the list of styles shows over it
@@ -252,6 +272,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		lastVol:    1,
 		split:      loadSplit(),
 		opts:       loadOptions(),
+		hasOmarchy: hasOmarchy(),
 		refresh:    60,
 		kitty:      map[string]*kittyImage{},
 		vizStyle:   vizOpening,
@@ -266,12 +287,14 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 	m.stacks[secQueue] = []*view{{title: "Queue", key: "queue:"}}
 	m.rating = map[string]int{}
 	m.covers, m.fetching, m.thumbs = map[string]image.Image{}, map[string]bool{}, map[string][]string{}
+	m.barOn = m.hasOmarchy && barKnown(m.opts)
 	return m
 }
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.listen(), m.schedule(frameEvery), func() tea.Msg { return refreshMsg(screenRefresh()) }, m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
-		m.send(ipc.Request{Cmd: ipc.CmdUpdate})) // look for an update on every start
+		m.send(ipc.Request{Cmd: ipc.CmdUpdate}), // look for an update on every start
+		m.readBar(), tea.RequestBackgroundColor)
 }
 
 const frameEvery = 100 * time.Millisecond
@@ -448,13 +471,17 @@ func (m *Model) fetchCover(url string) tea.Cmd {
 	}
 }
 
-// keepCover remembers a decoded cover, dropping the oldest past 80.
+// coverKeep is how many decoded covers stay: at least all prefetchCovers
+// reaches, or each move would evict and fetch the same covers again.
+func (m *Model) coverKeep() int { return max(80, 3*m.listRows()+8) }
+
+// keepCover remembers a decoded cover, dropping the oldest past coverKeep.
 func (m *Model) keepCover(url string, img image.Image) {
 	if _, ok := m.covers[url]; !ok {
 		m.coverLRU = append(m.coverLRU, url)
 	}
 	m.covers[url] = img
-	for len(m.coverLRU) > 80 {
+	for len(m.coverLRU) > m.coverKeep() {
 		delete(m.covers, m.coverLRU[0])
 		m.coverLRU = m.coverLRU[1:]
 	}
@@ -524,6 +551,11 @@ func (m *Model) prefetchCovers(v *view) tea.Cmd {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.frame = int(time.Since(m.start) / frameEvery)
+	m.still = false
+	if m.hovering(msg) {
+		m.still = true
+		return m, m.hover(msg)
+	}
 	model, cmd := m.update(msg)
 	if _, isTick := msg.(tickMsg); !isTick {
 		// Something happened: give the screen a frame to settle, and more
@@ -544,10 +576,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.FocusMsg:
 		m.blurred = false
-		return m, m.subscribe()
+		return m, tea.Batch(m.subscribe(), tea.RequestBackgroundColor) // the theme may have changed
+	case tea.BackgroundColorMsg:
+		m.termBg = msg.Color
 	case tea.BlurMsg:
 		m.blurred = true
-		return m, m.subscribe()
+		return m, tea.Batch(m.subscribe(), m.setPointer(shapeDefault))
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.cellAspect = cellAspect()
@@ -575,6 +609,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateInstalled(msg)
 	case refreshMsg:
 		m.refresh = int(msg)
+	case barMsg:
+		m.barRead(msg)
+	case barSetMsg:
+		m.barSet(msg)
 	case thumbMsg:
 		m.thumbBusy = false
 		if len(m.thumbs) > 150 {
@@ -606,14 +644,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		fill(msg.v, msg.reply)
-		if id := msg.selectID; id != "" {
-			for i, r := range msg.v.rows {
-				if r.track != nil && (r.track.ID == id || strings.HasSuffix(r.track.ID, id)) {
-					msg.v.sel, msg.v.selAt = i, m.frame
-					break
-				}
-			}
+		if msg.selectID != "" {
+			msg.v.want = msg.selectID
 		}
+		m.selectSong(msg.v, msg.v.want)
+		msg.v.want = ""
 		return m, tea.Batch(m.maybeResume(), m.fetchRatings(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover(), m.warm(msg.v))
 	case ratingsMsg:
 		for id, v := range msg {
@@ -634,20 +669,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.send(ipc.Request{Cmd: ipc.CmdSeek, Value: m.seekTo})
 		}
 	case typedMsg:
-		if msg.seq == m.typedSeq {
+		if msg.seq == m.typedSeq && m.section == secSearch { // not after leaving it
 			return m, m.runSearch(false)
 		}
 	case flashMsg:
 		m.setFlash(string(msg))
 	case openMsg:
 		it := msg.item
-		v := &view{title: it.Name, key: it.Key(), item: &it, loading: true}
-		m.stacks[m.section] = append(m.stack(), v)
-		client, song := m.client, msg.song
-		return m, func() tea.Msg {
-			reply, err := client.Do(ipc.Request{Cmd: ipc.CmdOpen, Item: v.item})
-			return loadedMsg{v: v, reply: reply, err: err, selectID: song}
-		}
+		return m, m.push(&view{title: it.Name, key: it.Key(), item: &it}, msg.song)
 	case tea.PasteMsg:
 		if m.filtering {
 			v := m.cur()
@@ -676,7 +705,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		it := msg.item
-		return m, m.push(&view{title: it.Name, key: it.Key(), item: &it})
+		return m, m.push(&view{title: it.Name, key: it.Key(), item: &it}, msg.song)
 	case loginMsg:
 		if msg.err != nil {
 			m.setFlash("sign-in failed: " + msg.err.Error())
@@ -700,6 +729,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.upd != nil {
 			return m, m.updateKey(msg.String())
+		}
+		if m.barAsking() {
+			return m, m.barKey(msg.String())
 		}
 		if m.pick != nil {
 			return m, m.pickerKey(msg)
@@ -730,6 +762,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.upd != nil {
 			return m, m.updateClick(msg.Mouse().X, msg.Mouse().Y)
 		}
+		if m.barAsking() {
+			return m, m.barClick(msg.Mouse().X, msg.Mouse().Y)
+		}
 		if m.pick != nil {
 			return m, m.pickerClick(msg.Mouse().X, msg.Mouse().Y)
 		}
@@ -758,10 +793,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			saveSplit(m.split)
 		}
 	case tea.MouseWheelMsg:
-		if msg.Button == tea.MouseWheelUp {
-			return m, m.move("up")
-		}
-		return m, m.move("down")
+		return m, m.wheel(msg.Button)
+	case wheelMsg:
+		return m, m.wheelFrame()
 	}
 	return m, nil
 }
@@ -854,7 +888,9 @@ func (m *Model) switchTo(s section) tea.Cmd {
 		m.stacks[secQueue] = m.stacks[secQueue][:1]
 		m.cur().loaded = false // always fresh
 	}
-	if s == secSearch && m.cur().key == "search:" {
+	if s != secSearch {
+		m.searching = false // the box stays behind
+	} else if m.cur().key == "search:" {
 		m.searching = true
 	}
 	if v := m.cur(); !v.loaded {
@@ -863,10 +899,42 @@ func (m *Model) switchTo(s section) tea.Cmd {
 	return nil
 }
 
-func (m *Model) push(v *view) tea.Cmd {
-	m.stacks[m.section] = append(m.stacks[m.section], v)
-	v.selAt = m.frame
+// push opens v over the current view. A view the stack already holds is
+// gone back to instead, rows and selection kept, so going between an
+// artist and an album never piles up. song, when given, is selected.
+func (m *Model) push(v *view, song string) tea.Cmd {
+	s := m.stack()
+	for i, o := range s {
+		if o.key == v.key {
+			m.stacks[m.section], v = s[:i+1], o
+			break
+		}
+	}
+	if m.cur() != v {
+		m.stacks[m.section] = append(s, v)
+		v.selAt = m.frame
+	}
+	if v.loaded {
+		m.selectSong(v, song)
+		return nil
+	}
+	if song != "" {
+		v.want = song
+	}
 	return m.load(v)
+}
+
+// selectSong selects the row playing id, if the view lists it.
+func (m *Model) selectSong(v *view, id string) {
+	if id == "" {
+		return
+	}
+	for i, r := range v.rows {
+		if r.track != nil && (r.track.ID == id || strings.HasSuffix(r.track.ID, id)) {
+			v.sel, v.selAt = i, m.frame
+			return
+		}
+	}
 }
 
 func (m *Model) back() {
@@ -894,7 +962,7 @@ func (m *Model) activate() tea.Cmd {
 			m.query = it.Name
 			return m.runSearch(true)
 		}
-		return m.push(&view{title: it.Name, key: it.Key(), item: &it})
+		return m.push(&view{title: it.Name, key: it.Key(), item: &it}, "")
 	}
 	if v.key == "queue:" {
 		return m.send(ipc.Request{Cmd: ipc.CmdJump, Value: float64(v.qpos + v.sel)})
@@ -962,7 +1030,7 @@ func (m *Model) lookupID(cmd, id string) tea.Cmd {
 		if err != nil || len(reply.Items) == 0 {
 			return errMsg{fmt.Errorf("nothing found for this song")}
 		}
-		return albumMsg{item: reply.Items[0]}
+		return albumMsg{item: reply.Items[0], song: id}
 	}
 }
 
@@ -1442,12 +1510,24 @@ func (m *Model) runSearch(final bool) tea.Cmd {
 
 func (m *Model) move(k string) tea.Cmd {
 	v := m.cur()
+	prev := v.sel
+	ok := m.step(k)
+	if v.sel == prev && (k == "up" || k == "k") && m.section == secSearch && len(m.stack()) == 1 {
+		m.searching = true // up from the first result: back into the box
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	return m.prefetchCovers(v)
+}
+
+// step moves the selection by a key, false if k is no move.
+func (m *Model) step(k string) bool {
+	v := m.cur()
 	n := len(v.rows)
 	if n == 0 {
-		if (k == "up" || k == "k") && m.section == secSearch && len(m.stack()) == 1 {
-			m.searching = true
-		}
-		return nil
+		return false
 	}
 	page := max(1, m.listRows()-1)
 	prev := v.sel
@@ -1465,7 +1545,7 @@ func (m *Model) move(k string) tea.Cmd {
 	case "G", "end":
 		v.sel = n - 1
 	default:
-		return nil
+		return false
 	}
 	v.sel = max(0, min(v.sel, n-1))
 	dir := 1
@@ -1476,14 +1556,64 @@ func (m *Model) move(k string) tea.Cmd {
 		dir = 1
 	}
 	v.sel = nearest(v.rows, v.sel, dir)
-	if v.sel == prev && (k == "up" || k == "k") && m.section == secSearch && len(m.stack()) == 1 {
-		m.searching = true // up from the first result: back into the box
-		return nil
-	}
 	if v.sel != prev {
 		v.selAt = m.frame
 	}
-	return m.prefetchCovers(v)
+	return true
+}
+
+// A free-spinning wheel sends hundreds of notches a second. Drawn one by
+// one — bubbletea draws after every message — they queued up and the list
+// scrolled on long after the wheel stopped. So a notch only moves the
+// selection; the screen catches up at most once per wheelEvery, and covers
+// load once the wheel rests for wheelRest.
+const (
+	wheelEvery = 25 * time.Millisecond
+	wheelRest  = 150 * time.Millisecond
+)
+
+// wheel moves the selection a row per notch. It stays in the list: up
+// from the first search result does not fall into the search box.
+func (m *Model) wheel(b tea.MouseButton) tea.Cmd {
+	k := "down"
+	switch b {
+	case tea.MouseWheelUp:
+		k = "up"
+	case tea.MouseWheelDown:
+	default:
+		return nil
+	}
+	if !m.step(k) {
+		return nil
+	}
+	now := time.Now()
+	m.wheelAt = now
+	if now.Sub(m.wheelDrawn) >= wheelEvery {
+		m.wheelDrawn = now // a lone notch shows at once
+	} else {
+		m.still, m.wheelMoved = true, true
+	}
+	if m.wheelTick {
+		return nil
+	}
+	m.wheelTick = true
+	return tea.Tick(wheelEvery, func(time.Time) tea.Msg { return wheelMsg{} })
+}
+
+// wheelFrame draws what the notches since the last frame moved, and once
+// the wheel rests, loads the covers around where it stopped.
+func (m *Model) wheelFrame() tea.Cmd {
+	m.wheelTick = false
+	if m.wheelMoved {
+		m.wheelMoved, m.wheelDrawn = false, time.Now()
+	} else {
+		m.still = true
+	}
+	if time.Since(m.wheelAt) >= wheelRest {
+		return m.prefetchCovers(m.cur())
+	}
+	m.wheelTick = true
+	return tea.Tick(wheelEvery, func(time.Time) tea.Msg { return wheelMsg{} })
 }
 
 // click maps a mouse click onto the layout recorded by the last render.
@@ -1500,6 +1630,8 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 	if ms.Button != tea.MouseLeft {
 		return nil
 	}
+	searching := m.searching
+	m.searching = false // a click anywhere but the box leaves it
 	for i, r := range g.tabs {
 		if r.has(ms.X, ms.Y) {
 			return m.switchTo(section(i))
@@ -1507,6 +1639,12 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 	}
 	for _, f := range g.foot {
 		if f.r.has(ms.X, ms.Y) {
+			switch {
+			case searching && f.action == "esc": // done: the click left the box
+				return nil
+			case searching && f.action == "enter":
+				return m.runSearch(true)
+			}
 			if f.action == "?" {
 				m.help = !m.help
 				return nil

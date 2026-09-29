@@ -127,6 +127,30 @@ func TestArrowsLeaveSearch(t *testing.T) {
 	}
 }
 
+// A click on another tab leaves the search box: the next key is a key
+// again, not a letter of the query.
+func TestClickLeavesSearch(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height = 120, 35
+	m.switchTo(secSearch)
+	if !strings.Contains(ansi.Strip(m.View().Content), "esc done") {
+		t.Fatal("the focused box does not say esc leaves it")
+	}
+	r := m.geo.tabs[secHome]
+	m.Update(tea.MouseClickMsg{X: r.x0, Y: r.y0, Button: tea.MouseLeft})
+	if m.section != secHome || m.searching {
+		t.Fatalf("click on Home: section %d, searching %v", m.section, m.searching)
+	}
+	m.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if !m.optOpen || m.query != "" {
+		t.Fatalf("o after the click: options %v, query %q", m.optOpen, m.query)
+	}
+	m.Update(typedMsg{m.typedSeq})
+	if m.section != secHome {
+		t.Fatalf("the search pulled back to section %d", m.section)
+	}
+}
+
 // Keytips keep every line exactly as wide as the screen, and put space
 // under the play button.
 func TestTipsLayout(t *testing.T) {
