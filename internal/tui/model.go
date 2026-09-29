@@ -163,6 +163,8 @@ type Model struct {
 
 	rating map[string]int // loves (1) and dislikes (-1) seen so far, by id
 
+	pending *pendingPlay // a song started and shown, not yet reported playing
+
 	seekTo  float64 // where pending seek keys point
 	seekAt  time.Time
 	seekSeq int
@@ -570,7 +572,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		return m, tea.Batch(m.maybeResume(), m.fetchRatings(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover())
+		return m, tea.Batch(m.maybeResume(), m.fetchRatings(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover(), m.warm(msg.v))
 	case ratingsMsg:
 		for id, v := range msg {
 			m.rating[id] = v
@@ -704,6 +706,7 @@ func (m *Model) event(msg ipc.Message) tea.Cmd {
 	cmds := []tea.Cmd{m.listen()}
 	if msg.State != nil {
 		wasLoggedOut := m.state.Status == ipc.StatusLoggedOut
+		m.keepShowing(msg.State)
 		songChanged := msg.State.ID != m.state.ID
 		m.state, m.stateAt = *msg.State, time.Now()
 		if songChanged && m.section == secQueue && len(m.stack()) == 1 {
@@ -840,8 +843,8 @@ func (m *Model) activate() tea.Cmd {
 		// the chosen one: it first, then a random pick of the rest.
 		window = append([]string{r.track.ID}, sample(ids, r.track.ID, queueAfter-1)...)
 	}
-	m.setFlash("▶ " + r.track.Title) // at once: the song itself starts a moment later
-	return m.send(ipc.Request{Cmd: ipc.CmdPlay, IDs: window, Start: r.track.ID, Source: v.key})
+	return tea.Batch(m.showPlaying(*r.track, v.key),
+		m.send(ipc.Request{Cmd: ipc.CmdPlay, IDs: window, Start: r.track.ID, Source: v.key}))
 }
 
 // sample returns up to n ids in random order, leaving out skip.
@@ -1470,5 +1473,60 @@ func (m *Model) addToLibrary() tea.Cmd {
 			return errMsg{err}
 		}
 		return flashMsg("added " + name + " to your library")
+	}
+}
+
+// ── playing at once ─────────────────────────────────────────────────────
+
+// A play takes the player a moment — a license, the first bytes — so the
+// screen does not wait for it: the song shows as playing at once, cover and
+// all, and the player's reports keep showing it until they catch up.
+type pendingPlay struct {
+	track  apple.Track
+	source string
+	at     time.Time
+}
+
+// showPlaying puts track on the stage now, as if it already played.
+func (m *Model) showPlaying(t apple.Track, source string) tea.Cmd {
+	m.pending = &pendingPlay{t, source, time.Now()}
+	st := m.state
+	m.keepShowing(&st)
+	m.state, m.stateAt = st, time.Now()
+	return m.maybeFetchCover()
+}
+
+// keepShowing lays the song being started over a report from the player
+// that does not have it yet; once the player plays it, fails, or takes
+// longer than a few seconds, its reports are the truth again.
+func (m *Model) keepShowing(st *ipc.State) {
+	p := m.pending
+	if p == nil {
+		return
+	}
+	if st.ID == p.track.ID || (st.Err != "" && st.Err != m.state.Err) || time.Since(p.at) > 6*time.Second {
+		m.pending = nil
+		return
+	}
+	t := p.track
+	st.ID, st.Title, st.Artist, st.Album, st.Dur, st.Pos = t.ID, t.Title, t.Artist, t.Album, t.Duration, 0
+	st.Source, st.Playing, st.Preview = p.source, true, nil
+	if t.Artwork != "" {
+		st.Artwork = t.Artwork
+	}
+}
+
+// warm tells the player which songs a list holds, so starting one skips
+// the lookup at Apple; the first few hundred, which is what gets played.
+func (m *Model) warm(v *view) tea.Cmd {
+	ids, _ := v.songs()
+	if len(ids) == 0 || v.key == "queue:" {
+		return nil
+	}
+	ids = ids[:min(len(ids), 300)]
+	client := m.client
+	return func() tea.Msg {
+		_, _ = client.Do(ipc.Request{Cmd: ipc.CmdWarm, IDs: ids})
+		return nil
 	}
 }

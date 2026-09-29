@@ -660,9 +660,11 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 	if eng == nil {
 		return d.asleepCmd(r, reply)
 	}
-	d.mu.Lock()
-	d.active = time.Now()
-	d.mu.Unlock()
+	if r.Cmd != ipc.CmdWarm { // browsing alone does not keep a paused player up
+		d.mu.Lock()
+		d.active = time.Now()
+		d.mu.Unlock()
+	}
 	switch r.Cmd {
 	case ipc.CmdPlay:
 		d.mu.Lock()
@@ -707,6 +709,8 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		return eng.SetRepeat(int(r.Value))
 	case ipc.CmdAutoplay:
 		return eng.SetAutoplay(r.Value != 0)
+	case ipc.CmdWarm:
+		return eng.Warm(r.IDs)
 	}
 	return fmt.Errorf("unknown command %q", r.Cmd)
 }
@@ -728,8 +732,8 @@ func (d *Daemon) asleepCmd(r ipc.Request, reply *ipc.Message) error {
 		if d.wake(true) {
 			return nil
 		}
-	case ipc.CmdAutoplay:
-		return nil // a new player reads it from the options
+	case ipc.CmdAutoplay, ipc.CmdWarm:
+		return nil // a new player reads autoplay from the options; warming waits for one
 	case ipc.CmdQueue:
 		if d.sleeping() {
 			reply.Pos = -1 // nothing is queued while the player sleeps

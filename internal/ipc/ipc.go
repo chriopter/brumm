@@ -28,6 +28,7 @@ const (
 	CmdStation   = "station"   // Item (a station, or an artist) or Start (a song): play its station
 	CmdPlaylist  = "playlist"  // IDs to Start (a playlist id), or to a new playlist named Query → Items
 	CmdAutoplay  = "autoplay"  // Value 1: similar music plays on when the queue ends
+	CmdWarm      = "warm"      // IDs: songs likely to be played next; the player looks them up
 	CmdPlay      = "play"      // IDs, Start, Source
 	CmdAlbum     = "album"     // Start: a song id → Items: its album
 	CmdPreview   = "preview"   // Start: a song id; Value 0 stops the preview

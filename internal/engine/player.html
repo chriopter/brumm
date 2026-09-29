@@ -88,20 +88,29 @@ document.addEventListener('musickitloaded', async () => {
 // resolve turns song ids into MusicKit items, in order: library ids
 // ("i.…") from the library, everything else from the catalog, 100 per
 // request and all requests at once. Ids that no longer resolve are dropped.
+//
+// Resolved songs are kept (known), so a song brumm warmed — the lists on
+// screen are, as they open — plays without asking Apple first.
+const known = new Map();
 async function resolve(m, ids) {
-  const byId = new Map();
   const jobs = [];
   const fetch = (list, path) => {
     for (let i = 0; i < list.length; i += 100) {
       jobs.push(m.api.music(path, { ids: list.slice(i, i + 100).join(',') }).then((resp) => {
-        for (const it of ((resp && resp.data && resp.data.data) || [])) byId.set(it.id, it);
+        for (const it of ((resp && resp.data && resp.data.data) || [])) known.set(it.id, it);
       }));
     }
   };
-  fetch(ids.filter((id) => id.startsWith('i.')), '/v1/me/library/songs');
-  fetch(ids.filter((id) => !id.startsWith('i.')), `/v1/catalog/${m.storefrontId || 'us'}/songs`);
+  const missing = ids.filter((id) => !known.has(id));
+  fetch(missing.filter((id) => id.startsWith('i.')), '/v1/me/library/songs');
+  fetch(missing.filter((id) => !id.startsWith('i.')), `/v1/catalog/${m.storefrontId || 'us'}/songs`);
   await Promise.all(jobs);
-  return ids.map((id) => byId.get(id)).filter(Boolean);
+  // Oldest first out: a Map keeps insertion order.
+  for (const id of known.keys()) {
+    if (known.size <= 3000) break;
+    known.delete(id);
+  }
+  return ids.map((id) => known.get(id)).filter(Boolean);
 }
 
 // setQueue while MusicKit is mid-seek fails with a spurious
@@ -217,6 +226,8 @@ Object.assign(B, {
       if (isAuthError(e)) B.needsAuth = true;
     }
   },
+  // warm looks songs up ahead of a play, quietly; failures do not matter.
+  warm(ids) { if (B.m) resolve(B.m, ids.slice(0, 500)).catch(() => {}); },
   // autoplay keeps similar music coming after the queue ends. MusicKit
   // does not document it; where it is missing this does nothing.
   autoplay(on) {

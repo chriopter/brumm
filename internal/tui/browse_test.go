@@ -11,6 +11,7 @@ import (
 
 	"github.com/chriopter/brumm/internal/apple"
 	"github.com/chriopter/brumm/internal/art"
+	"github.com/chriopter/brumm/internal/engine"
 	"github.com/chriopter/brumm/internal/ipc"
 )
 
@@ -206,5 +207,27 @@ func TestCardOnCover(t *testing.T) {
 	fill(m.cur(), ipc.Message{Tracks: []apple.Track{{ID: "1", Title: "Now", Artwork: "x.jpg"}}})
 	if m.selectedCard() != nil {
 		t.Fatal("the playing song shows a card of itself")
+	}
+}
+
+// Enter shows the song as playing at once; the player's older reports do
+// not take it back, its first report of the song ends the stand-in.
+func TestPlayShowsAtOnce(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height = 120, 35
+	m.state.ID, m.state.Title = "old", "Old Song"
+	fill(m.cur(), ipc.Message{Tracks: []apple.Track{{ID: "new", Title: "New Song", Artist: "A", Duration: 200}}})
+	m.showPlaying(*m.cur().rows[0].track, "list:songs")
+	if m.state.Title != "New Song" || !m.state.Playing || m.state.Pos != 0 {
+		t.Fatalf("stage shows %+v", m.state.State)
+	}
+	report := func(st ipc.State) { m.keepShowing(&st); m.state = st } // as event does
+	report(ipc.State{Status: ipc.StatusReady, State: engine.State{ID: "old", Title: "Old Song", Volume: 0.5}})
+	if m.state.Title != "New Song" || m.state.Volume != 0.5 {
+		t.Fatalf("an older report took the song back: %+v", m.state.State)
+	}
+	report(ipc.State{Status: ipc.StatusReady, State: engine.State{ID: "new", Title: "New Song", Pos: 1.2, Playing: true}})
+	if m.pending != nil || m.state.Pos != 1.2 {
+		t.Fatal("the player's own report did not take over")
 	}
 }

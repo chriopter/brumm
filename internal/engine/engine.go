@@ -335,6 +335,16 @@ func (e *Engine) PlayStation(id, source string) error {
 	return e.call(`brumm.playStation(%q, %q)`, id, source)
 }
 
+// Warm looks songs up in the page ahead of a play, so starting one of them
+// skips the round trip to Apple.
+func (e *Engine) Warm(ids []string) error {
+	list, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return e.call(`brumm.warm(%s)`, list)
+}
+
 // SetAutoplay lets similar music play on when the queue runs out.
 func (e *Engine) SetAutoplay(on bool) error { return e.call(`brumm.autoplay(%t)`, on) }
 
