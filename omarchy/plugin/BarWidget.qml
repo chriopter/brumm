@@ -23,7 +23,8 @@ BarWidget {
   readonly property bool playing: player !== null && player.isPlaying
   property bool popupOpen: false
   // The title glides when it does not fit, unless brumm's options say not
-  // to (o in brumm: "scroll in the bar"); read live from its options file.
+  // to (o in brumm: "reduce motion", saved as no_bar_scroll); read live
+  // from its options file.
   property bool barScroll: true
 
   function readOptions(text) {

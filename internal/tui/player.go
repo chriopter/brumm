@@ -38,7 +38,7 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 	if coverH >= 6 {
 		coverW := min(colW, int(math.Round(float64(coverH)*m.cellAspect)))
 		for _, l := range m.stageCover(art.Size{Width: coverW, Height: coverH}) {
-			top = append(top, stageLine{text: l, center: true, art: true, width: coverW})
+			top = append(top, stageLine{text: l, center: true, width: coverW})
 		}
 	}
 
@@ -121,7 +121,7 @@ func spread(left, right string, w int) string {
 	return left + strings.Repeat(" ", w-lipgloss.Width(left)-rw) + right
 }
 
-// meter is the progress rule: played in magenta, the rest dim, with a
+// meter is the progress rule: played in the accent, the rest dim, with a
 // half-cell step (╸ ╺) so it moves every second on long songs too.
 func (m *Model) meter(w int) string {
 	pos, dur := m.position(), m.state.Dur
@@ -131,10 +131,10 @@ func (m *Model) meter(w int) string {
 	}
 	full, half := halves/2, halves%2 == 1
 	var b strings.Builder
-	b.WriteString(sHere.Render(strings.Repeat("━", full)))
+	b.WriteString(m.acc.here.Render(strings.Repeat("━", full)))
 	rest := w - full
 	if half {
-		b.WriteString(sHere.Render("╸"))
+		b.WriteString(m.acc.here.Render("╸"))
 		rest--
 		b.WriteString(sDim.Render(strings.Repeat("━", rest)))
 	} else if rest > 0 {
@@ -143,13 +143,13 @@ func (m *Model) meter(w int) string {
 	return b.String()
 }
 
-// sweep is the meter while a preview clip plays: a short magenta segment
+// sweep is the meter while a preview clip plays: a short accent segment
 // travelling along a dim rule.
 func (m *Model) sweep(w int) string {
 	seg := max(3, w/8)
 	p := m.frame % (w + seg)
 	lo, hi := max(0, p-seg), min(w, p)
-	return sDim.Render(strings.Repeat("━", lo)) + sHere.Render(strings.Repeat("━", hi-lo)) +
+	return sDim.Render(strings.Repeat("━", lo)) + m.acc.here.Render(strings.Repeat("━", hi-lo)) +
 		sDim.Render(strings.Repeat("━", w-hi))
 }
 
@@ -209,7 +209,7 @@ func (m *Model) controls(w int) stageLine {
 	}
 	// A key cap: half blocks round the reverse cell off into a square
 	// button two cells wider than the icon.
-	play := sPlays.Render("▐") + sPill.Render(" "+playIcon+" ") + sPlays.Render("▌")
+	play := m.acc.plays.Render("▐") + m.acc.pill.Render(" "+playIcon+" ") + m.acc.plays.Render("▌")
 	volume := m.volumeLabel()
 	start, gap, tw, vw, all := controlLayout(w, lipgloss.Width(volume))
 	sp := strings.Repeat(" ", gap)

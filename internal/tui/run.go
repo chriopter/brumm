@@ -70,7 +70,7 @@ func loadSplit() float64 {
 		return 0.5
 	}
 	f, err := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
-	if err != nil || f < 0.2 || f > 0.75 {
+	if err != nil || f < 0.1 || f > 0.95 {
 		return 0.5
 	}
 	return f

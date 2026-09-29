@@ -82,14 +82,13 @@ func TestOptionsOverlay(t *testing.T) {
 			t.Fatalf("line %d is %d wide", i, w)
 		}
 	}
-	if !strings.Contains(out, "options") || !strings.Contains(out, "level meter") {
+	if !strings.Contains(out, "options") || !strings.Contains(out, "reduce motion") {
 		t.Fatal("the menu is missing")
 	}
-	// A click on the second row flips the meter.
-	cmd := m.optionsClick(m.geo.options.x0+3, m.geo.optRow0+m.optLines[optMeter])
-	_ = cmd
-	if !m.opts.NoMeter {
-		t.Fatal("clicking the meter row did not switch it off")
+	// A click on a row flips it.
+	m.optionsClick(m.geo.options.x0+3, m.geo.optRow0+m.optLines[optMotion])
+	if !m.opts.ReduceMotion || m.optSel != optMotion {
+		t.Fatal("clicking the reduce motion row did not switch it on")
 	}
 	m.optionsKey("esc")
 	if m.optOpen {

@@ -57,7 +57,7 @@ const kittyKeep = 24
 // kittyLines draws a cover through kitty graphics, or reports false while
 // it is not in the terminal yet (it is then requested).
 func (m *Model) kittyLines(url string, size art.Size) ([]string, bool) {
-	key := url + "@" + strconv.Itoa(size.Width) + "x" + strconv.Itoa(size.Height)
+	key := url + "@" + sizeKey(size)
 	if k := m.kitty[key]; k != nil {
 		m.kittyClock++
 		k.used = m.kittyClock
@@ -74,6 +74,8 @@ func (m *Model) kittyLines(url string, size art.Size) ([]string, bool) {
 	m.kittyWant = append(m.kittyWant, kittyReq{key, url, size})
 	return nil, false
 }
+
+func sizeKey(s art.Size) string { return strconv.Itoa(s.Width) + "x" + strconv.Itoa(s.Height) }
 
 // kittySend uploads the first wanted cover off the event loop, one at a
 // time, freeing the least recently drawn one when too many are kept.

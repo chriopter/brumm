@@ -4,13 +4,15 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/chriopter/brumm/internal/art"
 	"github.com/chriopter/brumm/internal/ipc"
 	"github.com/chriopter/brumm/internal/update"
 )
@@ -18,7 +20,7 @@ import (
 // playingModel is a w×h screen playing a song with a two-color cover.
 func playingModel(w, h int) *Model {
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
-	m.width, m.height = w, h
+	m.width, m.height, m.split = w, h, 0.5
 	m.state.Title, m.state.Artist, m.state.Album, m.state.ID, m.state.Dur = "Midnight City", "M83", "Hurry Up", "1", 240
 	img := image.NewRGBA(image.Rect(0, 0, 60, 60))
 	for y := range 60 {
@@ -44,115 +46,6 @@ func widths(t *testing.T, m *Model) []int {
 		}
 	}
 	return out
-}
-
-// Every cover size keeps the lines as wide as ever, and the smaller ones
-// shrink the column, which stays in the middle of the stage.
-func TestCoverSizes(t *testing.T) {
-	m := playingModel(200, 55)
-	m.opts.CoverSize = sizeLarge
-	want := widths(t, m)
-	large, mid := m.geo.bar, (m.geo.bar.x0+m.geo.bar.x1)/2
-	var last rect
-	for _, s := range coverSizes {
-		m.opts.CoverSize = s
-		got := widths(t, m)
-		for i := range got {
-			if got[i] != want[i] {
-				t.Fatalf("%s: line %d is %d wide, %d at large", s, i, got[i], want[i])
-			}
-		}
-		b := m.geo.bar
-		if last != (rect{}) && b.x1-b.x0 <= last.x1-last.x0 {
-			t.Fatalf("%s is no wider than the size before it: %v, %v", s, b, last)
-		}
-		if c := (b.x0 + b.x1) / 2; c < mid-1 || c > mid+1 {
-			t.Fatalf("%s: column centered at %d, large at %d", s, c, mid)
-		}
-		if !m.geo.play.has(m.geo.play.x0, b.y0+3) {
-			t.Fatalf("%s: play button %v not under the meter %v", s, m.geo.play, b)
-		}
-		last = b
-	}
-	if last != large {
-		t.Fatalf("large is %v, was %v", last, large)
-	}
-	m.opts.CoverSize = "" // an options file from before: large
-	widths(t, m)
-	if m.geo.bar != large {
-		t.Fatal("no size set is not large")
-	}
-}
-
-// The backdrop changes colors only: the same text in the same places,
-// every line as wide, the cover's own lines drawn untouched, a card too.
-func TestBackdrop(t *testing.T) {
-	for _, bg := range []color.Color{color.Black, color.RGBA{0xee, 0xee, 0xe8, 0xff}} {
-		m := playingModel(200, 55)
-		m.opts.NoBackdrop = true
-		m.termBg = bg
-		off, plain := widths(t, m), ansi.Strip(m.View().Content)
-		m.opts.NoBackdrop = false
-		on := widths(t, m)
-		out := m.View().Content
-		for i := range on {
-			if on[i] != off[i] {
-				t.Fatalf("line %d is %d wide, %d without the backdrop", i, on[i], off[i])
-			}
-		}
-		if ansi.Strip(out) != plain {
-			t.Fatal("the backdrop changed the text")
-		}
-		if !strings.Contains(out, "\x1b[48;2;") {
-			t.Fatal("no backdrop drawn")
-		}
-		size := m.lastCover()
-		for _, l := range m.stageCover(size) {
-			if !strings.Contains(out, l) {
-				t.Fatal("a cover line was changed")
-			}
-		}
-		if m.backdrop == nil || m.stageBackdrop(m.backdrop.w, m.backdrop.h) != m.backdrop {
-			t.Fatal("the backdrop is worked out again for the same cover")
-		}
-	}
-	m := playingModel(200, 55)
-	m.termBg = color.Black
-	m.state.Title = "" // nothing plays: no glow
-	if strings.Contains(m.View().Content, "\x1b[48;2;") {
-		t.Fatal("a backdrop with nothing playing")
-	}
-}
-
-// lastCover is the size the stage's cover was last drawn at.
-func (m *Model) lastCover() (s art.Size) {
-	for k := range m.rendered {
-		if k.Height > s.Height {
-			s = k
-		}
-	}
-	return s
-}
-
-// Text with a background of its own keeps it; the backdrop shows through
-// everywhere else, and is set again after the text resets.
-func TestBackdropPaint(t *testing.T) {
-	m := playingModel(80, 30)
-	m.termBg = color.Black
-	b := newBackdrop(m.cover, "x", color.RGBA{0, 0, 0, 255}, 10, 4, 2)
-	s := b.paint(1, 3, "a\x1b[7mb\x1b[27mc\x1b[mde")
-	if ansi.Strip(s) != "abcde" || lipgloss.Width(s) != 5 {
-		t.Fatalf("painted %q", s)
-	}
-	if i := strings.Index(s, "\x1b[7m"); strings.Contains(s[i:strings.Index(s, "b")], "48;2") {
-		t.Fatalf("reverse text got the backdrop: %q", s)
-	}
-	if !strings.Contains(s[strings.Index(s, "\x1b[m"):], "48;2") {
-		t.Fatalf("no backdrop after a reset: %q", s)
-	}
-	if sgrOwnBg("38;2;48;1;2", false) {
-		t.Fatal("a foreground's 48 read as a background")
-	}
 }
 
 // fakeOmarchy stands in for the omarchy command, answering list with
@@ -184,7 +77,7 @@ func TestBarOption(t *testing.T) {
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
 	m.width, m.height = 120, 35
 	m.optOpen = true
-	if strings.Contains(m.View().Content, "bar widget") || m.optLines[optBar] != -1 {
+	if strings.Contains(m.View().Content, "top bar player") || m.optLines[optBar] != -1 {
 		t.Fatal("the bar widget's row shows without omarchy")
 	}
 	for range numOptions {
@@ -202,8 +95,8 @@ func TestBarOption(t *testing.T) {
 		t.Fatalf("on %v, asking %v", m.barOn, m.barAsk)
 	}
 	m.optOpen = true
-	if !strings.Contains(ansi.Strip(m.View().Content), "bar widget") {
-		t.Fatal("no bar widget row")
+	if !strings.Contains(ansi.Strip(m.View().Content), "top bar player") {
+		t.Fatal("no top bar player row")
 	}
 	m.optSel = optBar
 	msg := m.optionsKey("space")().(barSetMsg)
@@ -252,14 +145,160 @@ func TestBarOffer(t *testing.T) {
 	}
 }
 
-// BenchmarkView is a whole frame of the playing screen at 200×55, with and
-// without the backdrop, the text changing as the clock runs.
+// The menu is these rows in this order, each with its sentence under
+// them for the selected one, and fits an 80-column window.
+func TestOptionsMenu(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	fakeOmarchy(t, false, nil)
+	m := playingModel(80, 24)
+	m.optOpen = true
+	m.View()
+	want := []string{"cover", "cover colors", "autoplay", "reduce motion", "show shortcuts", "top bar player"}
+	for i := range numOptions {
+		m.optSel = i
+		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+		for j, l := range lines {
+			if lipgloss.Width(l) > 80 {
+				t.Fatalf("line %d is %d wide", j, lipgloss.Width(l))
+			}
+		}
+		box := strings.Join(lines[m.geo.options.y0:m.geo.options.y1], "\n")
+		if m.geo.options.x1 > 80 {
+			t.Fatalf("the menu ends at %d", m.geo.options.x1)
+		}
+		row := lines[m.geo.optRow0+m.optLines[i]]
+		if !strings.Contains(row, "▌  "+want[i]) {
+			t.Fatalf("row %d reads %q", i, row)
+		}
+		h := optHints[i]
+		if !strings.Contains(box, h) || h[0] < 'A' || h[0] > 'Z' || !strings.HasSuffix(h, ".") {
+			t.Fatalf("hint %q for %s", h, want[i])
+		}
+		if !strings.Contains(box, "↑↓ move   space change   esc close") {
+			t.Fatal("no keys")
+		}
+		for j := range numOptions {
+			if j != i && strings.Contains(box, optHints[j]) {
+				t.Fatalf("%s shows the hint of %s", want[i], want[j])
+			}
+		}
+	}
+	for i, r := range m.optLines {
+		if i > 0 && r != m.optLines[i-1]+1 {
+			t.Fatalf("rows not in order, one under the other: %v", m.optLines)
+		}
+	}
+}
+
+// Without kitty graphics original is no choice, and a saved original
+// draws as smooth; with them it is the third.
+func TestCoverChoices(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	old := hasKitty
+	t.Cleanup(func() { hasKitty = old })
+	m := playingModel(100, 30)
+	m.optOpen = true
+	hasKitty = false
+	m.opts.Cover = coverOriginal
+	if m.opts.cover() != coverSmooth || strings.Contains(m.View().Content, "original") {
+		t.Fatalf("original offered without kitty, drawn as %s", m.opts.cover())
+	}
+	m.optSel = optCover
+	for _, want := range []string{coverPixel, coverSmooth, coverPixel} {
+		if m.optionsKey("right"); m.opts.Cover != want {
+			t.Fatalf("stepped to %s, want %s", m.opts.Cover, want)
+		}
+	}
+	hasKitty = true
+	m.optionsKey("left")
+	if m.opts.Cover != coverOriginal || !strings.Contains(m.View().Content, "original") {
+		t.Fatalf("left from pixel: %s", m.opts.Cover)
+	}
+}
+
+// Any switch reduce motion took over starts it on, and the bar widget
+// reads it as no_bar_scroll; off, that goes too.
+func TestReduceMotionMigrates(t *testing.T) {
+	for _, old := range []string{`{"no_scroll":true}`, `{"no_cards":true}`, `{"no_bar_scroll":true}`, `{"cover":"smooth"}`} {
+		dir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", dir)
+		path := filepath.Join(dir, "brumm", "options.json")
+		os.MkdirAll(filepath.Dir(path), 0o700)
+		os.WriteFile(path, []byte(old), 0o600)
+		m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+		on := old != `{"cover":"smooth"}`
+		if m.opts.ReduceMotion != on {
+			t.Fatalf("%s: reduce motion %v", old, m.opts.ReduceMotion)
+		}
+		b, _ := os.ReadFile(path)
+		if on != strings.Contains(strings.ReplaceAll(string(b), " ", ""), `"no_bar_scroll":true`) {
+			t.Fatalf("%s: saved %s", old, b)
+		}
+		m.optSel = optMotion
+		m.optionsKey("space")
+		b, _ = os.ReadFile(path)
+		if loadOptions().ReduceMotion == on || strings.Contains(string(b), "no_bar_scroll") == on || strings.Contains(string(b), "no_scroll") {
+			t.Fatalf("%s: switched, saved %s", old, b)
+		}
+	}
+}
+
+// Reduce motion keeps a long selected name still and lays no card on
+// the cover.
+func TestReduceMotion(t *testing.T) {
+	m := songList(20)
+	m.cur().rows[0].track.Title = strings.Repeat("a very long name ", 20)
+	m.View()
+	if !m.marquee {
+		t.Fatal("a long name does not scroll")
+	}
+	m.opts.ReduceMotion = true
+	m.View()
+	if m.marquee || m.selectedCard() != nil {
+		t.Fatal("moving with reduce motion on")
+	}
+}
+
+// The spectrum streams only while the playing row's bars show in a
+// focused window; without it they wobble on their own.
+func TestSpectrumOnlyWhenSeen(t *testing.T) {
+	m := playingModel(120, 35)
+	m.state.Playing = true
+	m.eqShown = true
+	m.subscribe()
+	if !m.specOn {
+		t.Fatal("no spectrum for the bars in view")
+	}
+	m.feedSpectrum(make([]int, bands))
+	if d, _ := m.nextTick(); d != 500*time.Millisecond {
+		t.Fatalf("ticks every %v with the spectrum streaming", d)
+	}
+	m.eqShown = false
+	if m.subscribe(); m.specOn || m.spec != nil {
+		t.Fatal("the spectrum streams with the bars out of view")
+	}
+	m.eqShown, m.blurred = true, true
+	if m.subscribe(); m.specOn {
+		t.Fatal("the spectrum streams in the background")
+	}
+	m.blurred = false
+	if d, _ := m.nextTick(); d != 125*time.Millisecond {
+		t.Fatalf("no spectrum yet: ticks every %v, want the wobble", d)
+	}
+}
+
+// BenchmarkView is a whole frame of the playing screen at 200×55, the
+// text changing as the clock runs: the cover filling the height, and a
+// smaller one with the covers coming up under it.
 func BenchmarkView(b *testing.B) {
-	for _, name := range []string{"plain", "backdrop"} {
+	for _, name := range []string{"plain", "upnext"} {
 		b.Run(name, func(b *testing.B) {
 			m := playingModel(200, 55)
 			m.termBg = color.Black
-			m.opts.NoBackdrop = name == "plain"
+			if name == "upnext" {
+				m.split = 0.7
+				withNext(m, 4)
+			}
 			m.View()
 			b.ResetTimer()
 			for i := range b.N {

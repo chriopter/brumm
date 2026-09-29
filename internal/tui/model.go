@@ -158,6 +158,7 @@ type Model struct {
 	cardShown     bool      // the last render laid a card on the cover (card.go)
 	marquee       bool      // the last render scrolled a selected row
 	specFPS       int       // the rate the spectrum arrives at
+	specOn        bool      // the stream carries the spectrum
 
 	state   ipc.State
 	stateAt time.Time
@@ -212,6 +213,7 @@ type Model struct {
 
 	split    float64 // the list's share of the width
 	dragging bool    // the divider is being dragged
+	dragOff  int     // where on the divider it was grabbed
 	reexec   bool    // the binary was updated: restart into it on quit
 	pointer  string  // the mouse pointer's shape as last sent (pointer.go)
 
@@ -221,8 +223,14 @@ type Model struct {
 	barOn      bool // the bar widget is on, as far as is known
 	barAsk     bool // the first start's question about it is due
 
-	termBg   color.Color // the terminal's background, once it says (backdrop.go)
-	backdrop *backdrop   // the stage's glow, for one cover at one size
+	termBg color.Color // the terminal's background, once it says: accents keep clear of it
+	acc    accent      // the colors of what plays (accent.go)
+
+	next      []nextUp // the queue's next covers (upnext.go)
+	nextAsked nextKey  // the state they were last asked for in
+	nextSeq   int
+	nextGen   int       // counts changes to next, for the row's cache
+	nextDraw  nextStrip // the row as last drawn
 
 	filtering bool    // typing into the list's filter (filter.go)
 	optOpen   bool    // the options menu shows
@@ -267,11 +275,13 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		stateAt:    time.Now(),
 		start:      time.Now(),
 		specFPS:    meterFPS,
+		specOn:     true, // as Run subscribed
 		rendered:   map[art.Size][]string{},
 		cellAspect: cellAspect(),
 		lastVol:    1,
 		split:      loadSplit(),
 		opts:       loadOptions(),
+		acc:        themeAccent(),
 		hasOmarchy: hasOmarchy(),
 		refresh:    60,
 		kitty:      map[string]*kittyImage{},
@@ -294,7 +304,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.listen(), m.schedule(frameEvery), func() tea.Msg { return refreshMsg(screenRefresh()) }, m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
 		m.send(ipc.Request{Cmd: ipc.CmdUpdate}), // look for an update on every start
-		m.readBar(), tea.RequestBackgroundColor)
+		m.readBar(), tea.RequestBackgroundColor, m.fetchNext(false))
 }
 
 const frameEvery = 100 * time.Millisecond
@@ -328,13 +338,17 @@ func (m *Model) nextTick() (time.Duration, bool) {
 		return frameEvery, true
 	case m.cardShown:
 		return max(frameEvery, m.cardLeft()), true // take the card away on time
-	case m.state.Playing && m.eqShown && m.opts.NoMeter:
-		return 125 * time.Millisecond, true // the row's equalizer wobbles by itself
+	case m.state.Playing && m.eqShown && len(m.spec) == 0:
+		return 125 * time.Millisecond, true // no spectrum: the row's equalizer wobbles by itself
 	case m.state.Playing:
 		return 500 * time.Millisecond, true // the spectrum's own frames move the rest
 	}
 	return 0, false
 }
+
+// wantSpec: the spectrum can be seen — the visualizer, or the playing
+// row's equalizer in a focused window.
+func (m *Model) wantSpec() bool { return m.full || (!m.blurred && m.eqShown) }
 
 // subscribe tells the daemon what to stream: the spectrum only while it
 // can be seen, and faster only for the fullscreen visualizer.
@@ -343,10 +357,13 @@ func (m *Model) subscribe() tea.Cmd {
 	switch {
 	case m.full:
 		r.Wave, r.FPS = max(96, m.width*3), vizFPS // room for the scope to find its trigger
-	case m.blurred || m.opts.NoMeter:
+	case !m.wantSpec():
 		r.Bands = 0
 	}
-	m.specFPS = r.FPS
+	m.specFPS, m.specOn = r.FPS, r.Bands > 0
+	if !m.specOn {
+		m.spec = nil // stale bars would stand still: the wobble until it streams again
+	}
 	return m.send(r)
 }
 
@@ -557,6 +574,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.hover(msg)
 	}
 	model, cmd := m.update(msg)
+	if m.client != nil && m.drawn.Content != "" && m.wantSpec() != m.specOn {
+		cmd = tea.Batch(cmd, m.subscribe()) // the playing row came into view, or left it
+	}
 	if _, isTick := msg.(tickMsg); !isTick {
 		// Something happened: give the screen a frame to settle, and more
 		// for as long as it animates. A tick far off (a card waiting to
@@ -636,7 +656,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, reconnect()
 		}
 		m.client, m.state, m.stateAt = msg.client, msg.state, time.Now()
-		return m, tea.Batch(m.listen(), m.load(m.cur()))
+		return m, tea.Batch(m.listen(), m.load(m.cur()), m.fetchNext(true))
 	case loadedMsg:
 		msg.v.loading = false
 		if msg.err != nil {
@@ -699,6 +719,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.url == m.coverURL {
 			m.cover = msg.img
 		}
+	case nextMsg:
+		return m, m.gotNext(msg)
 	case albumMsg:
 		if msg.err != nil {
 			m.setFlash(msg.err.Error())
@@ -772,7 +794,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.optionsClick(msg.Mouse().X, msg.Mouse().Y)
 		}
 		if ms := msg.Mouse(); ms.Button == tea.MouseLeft && m.geo.divider.has(ms.X, ms.Y) {
-			m.dragging = true
+			m.dragging, m.dragOff = true, ms.X-m.geo.divider.x0
 			return m, nil
 		}
 		return m, m.click(msg.Mouse())
@@ -784,12 +806,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.dragging {
-			m.setSplit(float64(msg.X-margin) / float64(max(1, m.width-2*margin)))
+		if m.dragging { // the divider stays under the mouse where it grabbed it
+			m.setSplit(float64(msg.X-m.dragOff+1-margin) / float64(max(1, m.width-2*margin)))
 		}
 	case tea.MouseReleaseMsg:
 		if m.dragging {
 			m.dragging = false
+			m.setSplit(m.shownSplit()) // dragged past where the cover stops growing: where it stopped
 			saveSplit(m.split)
 		}
 	case tea.MouseWheelMsg:
@@ -817,7 +840,7 @@ func (m *Model) event(msg ipc.Message) tea.Cmd {
 		if wasLoggedOut || !m.cur().loaded {
 			cmds = append(cmds, m.load(m.cur()))
 		}
-		cmds = append(cmds, m.maybeFetchCover(), m.maybeResume(), m.autoLogin())
+		cmds = append(cmds, m.maybeFetchCover(), m.maybeResume(), m.autoLogin(), m.fetchNext(false))
 	}
 	if msg.Spectrum != nil {
 		m.feedSpectrum(msg.Spectrum)
@@ -1371,7 +1394,7 @@ func (m *Model) key(k string) tea.Cmd {
 		if k == "[" {
 			delta = -0.05
 		}
-		m.setSplit(m.split + delta)
+		m.setSplit(m.shownSplit() + delta)
 		saveSplit(m.split)
 	case "c":
 		return m.jumpToPlaying()
@@ -1420,7 +1443,18 @@ func (m *Model) key(k string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) setSplit(f float64) { m.split = min(0.75, max(0.2, f)) }
+// setSplit asks for the list's share; render keeps both sides their
+// minimum, and a cover held back by the height gives the list the rest.
+func (m *Model) setSplit(f float64) { m.split = min(0.95, max(0.1, f)) }
+
+// shownSplit is the list's share as drawn.
+func (m *Model) shownSplit() float64 {
+	inner := m.width - 2*margin
+	if navW, colW, _ := m.layout(inner, m.height-bodyTop-2); colW > 0 {
+		return float64(navW) / float64(inner)
+	}
+	return m.split
+}
 
 func (m *Model) setVolume(v float64) tea.Cmd {
 	v = min(1, max(0, v))
@@ -1651,6 +1685,9 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 			}
 			return m.key(f.action)
 		}
+	}
+	if cmd, ok := m.nextClick(ms.X, ms.Y); ok {
+		return cmd
 	}
 	switch {
 	case g.search.has(ms.X, ms.Y):

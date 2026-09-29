@@ -38,7 +38,7 @@ func (m *Model) cardLeft() time.Duration {
 // only a while after the selection moved — or for good when nothing plays.
 func (m *Model) selectedCard() *card {
 	v := m.cur()
-	if m.opts.NoCards || v.sel >= len(v.rows) {
+	if m.opts.ReduceMotion || v.sel >= len(v.rows) {
 		return nil
 	}
 	if m.state.Title != "" && m.cardLeft() <= 0 {
@@ -99,11 +99,12 @@ func (m *Model) thumbKey(art string, size art.Size) string {
 }
 
 // nextThumb is a card worth drawing ahead: the rows around the selection,
-// nearest first, whose cover is loaded and card not drawn yet.
+// nearest first, whose cover is loaded and card not drawn yet; else an
+// up-next cover.
 func (m *Model) nextThumb() thumbReq {
 	v, size := m.cur(), m.cardSize
-	if size.Width == 0 || m.opts.NoCards {
-		return thumbReq{}
+	if size.Width == 0 || m.opts.ReduceMotion {
+		return m.nextThumbWant()
 	}
 	for _, d := range []int{1, -1, 2, -2, 3, 4, 5, -3} {
 		i := v.sel + d
@@ -123,7 +124,7 @@ func (m *Model) nextThumb() thumbReq {
 			return thumbReq{key, url, size}
 		}
 	}
-	return thumbReq{}
+	return m.nextThumbWant() // then the covers coming up
 }
 
 // caption is a card's one line: its name, then artist or facts.
@@ -189,7 +190,7 @@ func (m *Model) idleCard(colW, coverH int) []stageLine {
 	w := min(colW, int(math.Round(float64(coverH)*m.cellAspect)))
 	var out []stageLine
 	for _, l := range m.cardLines(c, art.Size{Width: w, Height: coverH}) {
-		out = append(out, stageLine{text: l, center: true, art: true, width: w})
+		out = append(out, stageLine{text: l, center: true, width: w})
 	}
 	out = append(out, stageLine{}, stageLine{text: sBold.Render(c.name), center: true})
 	if c.sub != "" {

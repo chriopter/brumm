@@ -74,6 +74,11 @@ func (m *Model) shapeAt(x, y int) string {
 			return shapePointer
 		}
 	}
+	for _, r := range g.upnext {
+		if r.has(x, y) {
+			return shapePointer
+		}
+	}
 	if m.state.ID != "" && (g.artist.has(x, y) || g.album.has(x, y)) {
 		return shapePointer
 	}

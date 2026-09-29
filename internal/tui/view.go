@@ -16,9 +16,10 @@ import (
 )
 
 // Colors come only from the terminal's ANSI palette, so the Omarchy theme
-// decides them; the cover is the one exception. Each has one job:
-// magenta is where you are, green is what plays, cyan is a key, blue is
-// the music itself, bright black is everything secondary.
+// decides them; the cover, and the accent it lends (accent.go), are the
+// exceptions. Each has one job: magenta is where you are, green is what
+// plays, cyan is a key, blue is the music itself, bright black is
+// everything secondary.
 var (
 	sHere  = lipgloss.NewStyle().Foreground(lipgloss.Magenta)
 	sPlays = lipgloss.NewStyle().Foreground(lipgloss.Green)
@@ -76,7 +77,8 @@ const (
 	margin   = 2 // columns left and right of everything
 	bodyTop  = 1 // one blank line above the panels
 	navMin   = 44
-	colMin   = 30
+	colMin   = 30 // narrower, the stage gives way to the mini player
+	ctlMin   = 40 // the controls' width, however small the cover
 	stagePad = 2
 	listTop  = 3 // list rows start this far below the panel's top border
 
@@ -98,8 +100,9 @@ type geometry struct {
 	list, crumb, search, divider                   rect
 	tabs                                           [numSections]rect
 	prev, play, next, shuffle, repeat, volume, bar rect
-	artist, album                                  rect // under the now-playing title
-	options                                        rect // the options menu
+	artist, album                                  rect          // under the now-playing title
+	upnext                                         [nextMax]rect // the covers coming up (upnext.go)
+	options                                        rect          // the options menu
 	foot                                           []footHit
 	optRow0                                        int // its first row
 }
@@ -146,46 +149,31 @@ func (m *Model) render() string {
 	if m.width < 40 || m.height < 14 {
 		return sDim.Render("ʕ•ᴥ•ʔ brumm needs a bigger window")
 	}
+	m.syncAccent()
 	inner := m.width - 2*margin
 	bodyH := m.height - bodyTop - 2 // blank line + footer
 
-	// The list takes its share of the width — half unless dragged — and the
-	// stage the rest, with the cover's column centered in it.
+	// The divider sets the cover's size: the stage is the cover's column
+	// and no wider. What the cover cannot use, held back by the height,
+	// goes to the list; the controls under it keep ctlMin.
 	gapW := 2 + 2*stagePad
-	navW := int(math.Round(float64(inner) * m.split))
-	navW = max(navMin, min(navW, inner-gapW-colMin))
-	room := inner - navW - gapW
-
 	var body string
-	if room < colMin || navW < navMin {
+	navW, colW, coverH := m.layout(inner, bodyH)
+	if colW == 0 {
 		mini := m.miniPlayer(inner)
 		body = lipgloss.JoinVertical(lipgloss.Left, append([]string{m.nav(inner, bodyH-len(mini), margin, bodyTop)}, mini...)...)
 	} else {
-		// Large fills the height (or the width); the smaller sizes shrink
-		// the whole column, which stays in the middle both ways.
-		coverH := max(0, bodyH-1-stageBelow)
-		coverH = min(coverH, int(float64(room)/m.cellAspect))
-		coverH = int(float64(coverH) * m.opts.coverScale())
-		colW := max(colMin, min(room, int(math.Round(float64(coverH)*m.cellAspect))))
-		inset := (room - colW) / 2
-		stageX := margin + navW + gapW + inset
+		stageX := margin + navW + gapW
 		m.geo.divider = rect{margin + navW - 1, bodyTop, margin + navW + gapW, bodyTop + bodyH}
-		bd := m.stageBackdrop(room, bodyH)
-		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop, bd, inset), "\n")
-		for i := range stage {
-			if stage[i] == "" { // nothing on this row: the backdrop's whole row
-				stage[i] = bd.rows[i]
-				continue
-			}
-			stage[i] = bd.spaces(i, 0, inset) + stage[i] + bd.spaces(i, inset+colW, room-colW-inset)
-		}
+		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop), "\n")
 		// Both sides are exactly as wide as their column, so rows join
 		// without measuring the long colored cover lines again.
 		nav := strings.Split(m.nav(navW, bodyH, margin, bodyTop), "\n")
 		gap := strings.Repeat(" ", gapW)
 		rows := make([]string, max(len(nav), len(stage)))
+		navBlank, colBlank := strings.Repeat(" ", navW), strings.Repeat(" ", colW)
 		for i := range rows {
-			l, r := strings.Repeat(" ", navW), strings.Repeat(" ", room)
+			l, r := navBlank, colBlank
 			if i < len(nav) {
 				l = nav[i]
 			}
@@ -202,6 +190,24 @@ func (m *Model) render() string {
 		lines[i] = pad + lines[i]
 	}
 	return strings.Join([]string{"", strings.Join(lines, "\n"), "", m.footer()}, "\n")
+}
+
+// layout splits inner cells between the list and the stage's column:
+// the list's width, the column's, and the cover's height; colW is 0 when
+// only the mini player fits.
+func (m *Model) layout(inner, bodyH int) (navW, colW, coverH int) {
+	gapW := 2 + 2*stagePad
+	if inner-gapW-navMin < colMin {
+		return inner, 0, 0
+	}
+	// Where the divider asks to be, leaving the stage room for the controls.
+	navW = int(math.Round(float64(inner) * m.split))
+	navW = max(navMin, min(navW, inner-gapW-ctlMin))
+	room := inner - navW - gapW
+	coverH = max(0, min(bodyH-1-stageBelow, int(float64(room)/m.cellAspect)))
+	coverW := min(room, int(math.Round(float64(coverH)*m.cellAspect)))
+	colW = min(room, max(coverW, ctlMin))
+	return inner - gapW - colW, colW, coverH
 }
 
 // ── footer ──────────────────────────────────────────────────────────────
@@ -453,7 +459,7 @@ func (m *Model) row(v *view, i, w int) string {
 	sel := i == v.sel
 	gutter := "  "
 	if sel {
-		gutter = sHere.Render("▌") + " "
+		gutter = m.acc.here.Render("▌") + " "
 	}
 
 	var text, detail string
@@ -465,7 +471,11 @@ func (m *Model) row(v *view, i, w int) string {
 		heart := " "
 		switch playing := t.ID != "" && t.ID == m.state.ID; {
 		case playing:
-			title = m.miniEQ() + " " + sPlays.Bold(sel).Render(t.Title)
+			style := m.acc.plays
+			if sel {
+				style = m.acc.bold
+			}
+			title = m.miniEQ() + " " + style.Render(t.Title)
 			m.eqShown = true
 		case sel:
 			title = sBold.Render(t.Title)
@@ -501,11 +511,11 @@ func (m *Model) row(v *view, i, w int) string {
 		playing := it.Key() == m.state.Source || (it.Kind == apple.KindStation && m.state.Source == "station:"+it.ID)
 		detail = m.ratingMark(it.ID)
 		if playing && m.state.Title != "" {
-			detail = sPlays.Render("♪") + " " + detail
+			detail = m.acc.plays.Render("♪") + " " + detail
 		}
 	}
 	avail := w - 2 - 2 - lipgloss.Width(detail)
-	if sel && !m.opts.NoScroll {
+	if sel && !m.opts.ReduceMotion {
 		m.marquee = m.marquee || lipgloss.Width(text) > avail
 		text = marquee(text, avail, m.frame-v.selAt)
 	} else {
@@ -514,9 +524,9 @@ func (m *Model) row(v *view, i, w int) string {
 	return gutter + pad(text, avail) + "  " + detail
 }
 
-// miniEQ is the playing row's four-bar equalizer: the real spectrum when
-// the level meter is on, otherwise four bars wobbling on their own, which
-// costs no spectrum stream. Paused, the bars rest low and dim.
+// miniEQ is the playing row's four-bar equalizer: the real spectrum, or
+// four bars wobbling on their own while none streams. Paused, the bars
+// rest low and dim.
 func (m *Model) miniEQ() string {
 	ramp := []rune("▁▂▃▄▅▆▇█")
 	var sb strings.Builder
@@ -526,7 +536,7 @@ func (m *Model) miniEQ() string {
 	t := time.Since(m.start).Seconds()
 	for i := range 4 {
 		var lv float64
-		if n := len(m.spec); n > 0 && !m.opts.NoMeter {
+		if n := len(m.spec); n > 0 {
 			lv = m.spec[min(n-1, []int{1, n / 5, n * 2 / 5, n * 3 / 5}[i])]
 		} else {
 			// Two sines per bar at unrelated speeds never quite repeat.
@@ -535,7 +545,7 @@ func (m *Model) miniEQ() string {
 		}
 		sb.WriteRune(ramp[max(0, min(len(ramp)-1, int(lv*float64(len(ramp)))))])
 	}
-	return sPlays.Render(sb.String())
+	return m.acc.plays.Render(sb.String())
 }
 
 // marquee scrolls text that does not fit: it rests, glides to the end,
@@ -558,14 +568,12 @@ func marquee(s string, w, t int) string {
 type stageLine struct {
 	text   string
 	center bool
-	art    bool // a picture: drawn as it is, the backdrop only around it
 	hit    func(x, y int)
 	width  int // known display width; skips measuring long colored lines
 }
 
-// stage draws the column colW wide; bd, when there is one, shows behind
-// it, the column starting at inset in it.
-func (m *Model) stage(colW, coverH, h, x, y int, bd *backdrop, inset int) string {
+// stage draws the column colW wide.
+func (m *Model) stage(colW, coverH, h, x, y int) string {
 	st := m.state
 	var top, bottom []stageLine
 	add := func(s string) { top = append(top, stageLine{text: s}) }
@@ -590,10 +598,9 @@ func (m *Model) stage(colW, coverH, h, x, y int, bd *backdrop, inset int) string
 	}
 
 	out := make([]string, h)
+	blank := strings.Repeat(" ", colW)
 	for i := range out {
-		if bd == nil { // with one, render fills the empty rows whole
-			out[i] = strings.Repeat(" ", colW)
-		}
+		out[i] = blank
 	}
 	put := func(row int, l stageLine) {
 		if row < 0 || row >= h {
@@ -608,10 +615,7 @@ func (m *Model) stage(colW, coverH, h, x, y int, bd *backdrop, inset int) string
 		if l.center {
 			left = max(0, (colW-w)/2)
 		}
-		if !l.art {
-			text = bd.paint(row, inset+left, text)
-		}
-		out[row] = bd.spaces(row, inset, left) + text + bd.spaces(row, inset+left+w, colW-left-w)
+		out[row] = strings.Repeat(" ", left) + text + strings.Repeat(" ", max(0, colW-left-w))
 		if l.hit != nil {
 			l.hit(x+left, y+row)
 		}
@@ -638,7 +642,8 @@ func (m *Model) stage(colW, coverH, h, x, y int, bd *backdrop, inset int) string
 			group = append(group, stageLine{})
 		}
 		group = append(group, rest...)
-		start := max(0, (h-len(group))/2) // the cover sits in the vertical middle
+		group = append(group, m.upNext(colW, h-len(group))...) // room to spare: what comes next
+		start := max(0, (h-len(group))/2)                      // the cover sits in the vertical middle
 		for i, l := range group {
 			put(start+i, l)
 		}
@@ -706,7 +711,7 @@ func (m *Model) miniPlayer(w int) []string {
 	if st.Title == "" {
 		return []string{"", sDim.Render("nothing playing")}
 	}
-	icon := sPlays.Render(icPause)
+	icon := m.acc.plays.Render(icPause)
 	if !st.Playing {
 		icon = sDim.Render(icPlay)
 	}

@@ -25,15 +25,6 @@ const (
 
 var coverStyles = []string{coverPixel, coverSmooth, coverOriginal}
 
-// Cover sizes: large fills the stage's height, the others leave it room.
-const (
-	sizeSmall  = "small"
-	sizeMedium = "medium"
-	sizeLarge  = "large"
-)
-
-var coverSizes = []string{sizeSmall, sizeMedium, sizeLarge}
-
 // The fullscreen visualizer's frame rates; the renderer allows up to 120.
 // 0 is auto: the screen's own refresh rate.
 var drawRates = []int{0, 30, 60, 120}
@@ -81,15 +72,26 @@ func (m *Model) fpsLabel() string {
 // options wraps the saved switches with what the menu needs.
 type options struct{ config.Options }
 
-func loadOptions() options { return options{config.LoadOptions()} }
+// loadOptions reads them; switches reduce motion took over are written
+// back as it, so the bar widget reads it too.
+func loadOptions() options {
+	o := config.LoadOptions()
+	if o.ReduceMotion != o.NoBarScroll {
+		_ = o.Save()
+	}
+	return options{o}
+}
 
 func (o options) save() { _ = o.Options.Save() }
+
+// hasKitty: the terminal shows real images, as guessed once at start.
+var hasKitty = art.KittySupported()
 
 // cover is the style to draw covers in: original falls back to smooth in
 // terminals without kitty graphics.
 func (o options) cover() string {
 	switch {
-	case o.Cover == coverOriginal && !art.KittySupported():
+	case o.Cover == coverOriginal && !hasKitty:
 		return coverSmooth
 	case o.Cover == coverSmooth || o.Cover == coverOriginal:
 		return o.Cover
@@ -97,41 +99,46 @@ func (o options) cover() string {
 	return coverPixel
 }
 
-// coverSize is the cover's size, large unless set.
-func (o options) coverSize() string {
-	if o.CoverSize == sizeSmall || o.CoverSize == sizeMedium {
-		return o.CoverSize
+// coverChoices are the cover styles this terminal can show.
+func coverChoices() []string {
+	if hasKitty {
+		return coverStyles
 	}
-	return sizeLarge
+	return coverStyles[:2]
 }
 
-// coverScale is the share of the stage's height the cover takes.
-func (o options) coverScale() float64 {
-	switch o.coverSize() {
-	case sizeSmall:
-		return 0.5
-	case sizeMedium:
-		return 0.75
-	}
-	return 1
-}
-
-// The menu's rows, in order: two choices, then plain switches.
+// The menu's rows, in order.
 const (
 	optCover = iota
-	optSize
-	optBackdrop
-	optMeter
-	optScroll
-	optBar
-	optBarScroll
-	optCards
+	optColors
 	optAutoplay
+	optMotion
 	optKeys
+	optBar
 	numOptions
 )
 
-// optShown: the bar widget's row only where omarchy can switch it.
+// optLabels and optHints name each row and say what it does.
+var (
+	optLabels = [numOptions]string{
+		optCover:    "cover",
+		optColors:   "cover colors",
+		optAutoplay: "autoplay",
+		optMotion:   "reduce motion",
+		optKeys:     "show shortcuts",
+		optBar:      "top bar player",
+	}
+	optHints = [numOptions]string{
+		optCover:    "How album covers are drawn.",
+		optColors:   "Tint the progress bar and buttons with the cover's colors.",
+		optAutoplay: "When the queue ends, keep playing similar music.",
+		optMotion:   "Keep long titles still and covers from sliding in.",
+		optKeys:     "Show each button's key on the button.",
+		optBar:      "The playing song in Omarchy's top bar; click it for controls.",
+	}
+)
+
+// optShown: the top bar's row only where omarchy can switch it.
 func (m *Model) optShown(i int) bool { return i != optBar || m.hasOmarchy }
 
 // stepOption moves the selection by dir, over rows that do not show.
@@ -178,40 +185,27 @@ func (m *Model) changeOption(i, dir int) tea.Cmd {
 	var cmd tea.Cmd
 	switch i {
 	case optCover:
-		cur := m.opts.Cover
-		if cur == "" {
-			cur = coverPixel
-		}
-		m.opts.Cover = step(coverStyles, cur, dir)
+		m.opts.Cover = step(coverChoices(), m.opts.cover(), dir)
 		m.rendered, m.thumbs = map[art.Size][]string{}, map[string][]string{}
-	case optSize:
-		m.opts.CoverSize = step(coverSizes, m.opts.coverSize(), dir)
-	case optBackdrop:
-		m.opts.NoBackdrop = !m.opts.NoBackdrop
-	case optMeter:
-		m.opts.NoMeter = !m.opts.NoMeter
-		cmd = m.subscribe() // no meter, no spectrum stream
-	case optScroll:
-		m.opts.NoScroll = !m.opts.NoScroll
-	case optBar:
-		cmd = m.setBar(!m.barOn)
-	case optBarScroll:
-		m.opts.NoBarScroll = !m.opts.NoBarScroll
-	case optCards:
-		m.opts.NoCards = !m.opts.NoCards
+	case optColors:
+		m.opts.NoCoverColors = !m.opts.NoCoverColors // the next frame picks them (accent.go)
 	case optAutoplay:
 		m.opts.NoAutoplay = !m.opts.NoAutoplay
 		cmd = m.send(ipc.Request{Cmd: ipc.CmdAutoplay, Value: map[bool]float64{true: 1}[!m.opts.NoAutoplay]})
+	case optMotion:
+		m.opts.ReduceMotion = !m.opts.ReduceMotion // the bar widget follows the saved file
 	case optKeys:
 		m.opts.AlwaysTips = !m.opts.AlwaysTips
+	case optBar:
+		cmd = m.setBar(!m.barOn)
 	}
 	m.opts.save()
 	return cmd
 }
 
-// optionsBox is the menu, drawn over the lower left corner: the two
-// choices, a gap, the switches, a gap, the keys. optLines records which
-// line each option is on, for the mouse.
+// optionsBox is the menu, drawn over the lower left corner: the rows, a
+// gap, what the selected one does, the keys. optLines records which line
+// each option is on, for the mouse.
 func (m *Model) optionsBox() []string {
 	check := func(on bool) string {
 		if on {
@@ -219,61 +213,49 @@ func (m *Model) optionsBox() []string {
 		}
 		return sDim.Render("󰄱")
 	}
-	choice := func(list []string, cur string) string {
-		var out []string
-		for _, v := range list {
-			if v == cur {
-				out = append(out, sHere.Render("●")+" "+v)
-			} else {
-				out = append(out, sDim.Render("○ "+v))
-			}
+	var choice []string
+	for _, v := range coverChoices() {
+		if v == m.opts.cover() {
+			choice = append(choice, sHere.Render("●")+" "+v)
+		} else {
+			choice = append(choice, sDim.Render("○ "+v))
 		}
-		return strings.Join(out, "    ")
 	}
-	label := func(s string) string { return fmt.Sprintf("%-12s", s) }
-	cover := choice(coverStyles, m.opts.cover())
-	if m.opts.Cover == coverOriginal && !art.KittySupported() {
-		cover = choice(coverStyles, coverOriginal) + sDim.Render("  needs kitty or Ghostty")
+	values := [numOptions]string{
+		optCover:    strings.Join(choice, "   "),
+		optColors:   check(!m.opts.NoCoverColors),
+		optAutoplay: check(!m.opts.NoAutoplay),
+		optMotion:   check(m.opts.ReduceMotion),
+		optKeys:     check(m.opts.AlwaysTips),
+		optBar:      check(m.barOn),
 	}
-	rows := [numOptions]string{
-		optCover:     label("cover") + cover,
-		optSize:      label("size") + choice(coverSizes, m.opts.coverSize()),
-		optBackdrop:  check(!m.opts.NoBackdrop) + "   backdrop",
-		optMeter:     check(!m.opts.NoMeter) + "   level meter",
-		optScroll:    check(!m.opts.NoScroll) + "   scroll long names",
-		optBar:       check(m.barOn) + "   bar widget",
-		optBarScroll: check(!m.opts.NoBarScroll) + "   scroll in the bar",
-		optCards:     check(!m.opts.NoCards) + "   cover cards",
-		optAutoplay:  check(!m.opts.NoAutoplay) + "   autoplay",
-		optKeys:      check(m.opts.AlwaysTips) + "   keys on buttons",
-	}
-	hint := sKey.Render("↑↓") + sDim.Render(" move    ") + sKey.Render("space") + sDim.Render(" change    ") + sKey.Render("o") + sDim.Render(" close")
-	w := lipgloss.Width(hint)
-	for i, r := range rows {
-		if !m.optShown(i) {
-			continue
+	keys := sKey.Render("↑↓") + sDim.Render(" move   ") + sKey.Render("space") + sDim.Render(" change   ") + sKey.Render("esc") + sDim.Render(" close")
+	w := lipgloss.Width(keys)
+	for i := range numOptions {
+		if m.optShown(i) {
+			w = max(w, 16+lipgloss.Width(values[i]), len(optHints[i]))
 		}
-		w = max(w, lipgloss.Width(r)+3)
 	}
-	w = min(w+2, m.width-2*margin-6)
+	w = min(w+3, m.width-2*margin-6) // the box as wide as its widest hint: it keeps its size
 	var lines []string
 	m.optLines = m.optLines[:0]
-	for i, r := range rows {
+	for i := range numOptions {
 		if !m.optShown(i) {
 			m.optLines = append(m.optLines, -1)
 			continue
-		}
-		if i == optBackdrop {
-			lines = append(lines, "") // choices above, switches below
 		}
 		gutter := "   "
 		if i == m.optSel {
 			gutter = sHere.Render("▌") + "  "
 		}
 		m.optLines = append(m.optLines, len(lines)+1) // +1: the padding line
-		lines = append(lines, gutter+fit(r, w-3))
+		lines = append(lines, gutter+fit(fmt.Sprintf("%-16s", optLabels[i])+values[i], w-3))
 	}
-	lines = append(append([]string{""}, lines...), "", "   "+fit(hint, w-3), "")
+	hint := ""
+	if m.optSel >= 0 && m.optSel < numOptions {
+		hint = optHints[m.optSel]
+	}
+	lines = append(append([]string{""}, lines...), "", "   "+fit(sDim.Render(hint), w-3), "   "+fit(keys, w-3), "")
 	for i := range lines {
 		lines[i] = " " + fit(lines[i], w)
 	}
