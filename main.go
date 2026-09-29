@@ -3,7 +3,7 @@
 //	brumm          open the player (starts the background daemon if needed)
 //	brumm daemon   run the background daemon (usually via systemd)
 //	brumm login    sign in to Apple Music in the browser, then open the player
-//	brumm update   install the newest release now (it also updates itself daily)
+//	brumm update   install the newest release now and offer to restart into it
 //	brumm setup D  install from an unpacked release D (used by install.sh)
 package main
 
@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/sys/unix"
 
@@ -64,7 +65,8 @@ func main() {
 		var installed bool
 		if tag, installed, err = update.Update(version); err == nil {
 			if installed {
-				fmt.Println("updated to", tag, "— brumm restarts into it when playback is paused or a song ends")
+				fmt.Println("updated to", tag)
+				restartOffer()
 			} else {
 				fmt.Println("brumm", version, "is current")
 			}
@@ -84,4 +86,31 @@ func main() {
 func isTerminal(f *os.File) bool {
 	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
 	return err == nil
+}
+
+// restartOffer asks, at a terminal, to restart the running player into the
+// update now; it plays on where it was. Otherwise it waits for a pause.
+func restartOffer() {
+	later := "brumm restarts into it when playback is paused or a song ends"
+	c, err := ipc.Dial()
+	if err != nil {
+		return // nothing running: the next start is the new one
+	}
+	defer c.Close()
+	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
+		fmt.Println(later)
+		return
+	}
+	fmt.Print("restart now? the music goes on where it is [Y/n] ")
+	var answer string
+	_, _ = fmt.Scanln(&answer)
+	if a := strings.ToLower(strings.TrimSpace(answer)); a != "" && a != "y" && a != "yes" && a != "j" && a != "ja" {
+		fmt.Println(later)
+		return
+	}
+	if _, err := c.Do(ipc.Request{Cmd: ipc.CmdUpdate, Value: 3}); err != nil {
+		fmt.Println("could not restart:", err, "—", later)
+		return
+	}
+	fmt.Println("restarting")
 }
