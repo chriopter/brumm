@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Quickshell.Services.Mpris
 import qs.Ui
 import qs.Commons
@@ -21,6 +22,26 @@ BarWidget {
   readonly property bool hasTrack: player !== null && player.trackTitle !== ""
   readonly property bool playing: player !== null && player.isPlaying
   property bool popupOpen: false
+  // The title glides when it does not fit, unless brumm's options say not
+  // to (o in brumm: "scroll in the bar"); read live from its options file.
+  property bool barScroll: true
+
+  function readOptions(text) {
+    try {
+      root.barScroll = !JSON.parse(text).no_bar_scroll
+    } catch (e) {
+      root.barScroll = true
+    }
+  }
+
+  FileView {
+    path: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/brumm/options.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.readOptions(text())
+    onFileChanged: reload() // text() is stale in the change signal itself
+    onLoadFailed: root.barScroll = true
+  }
 
   function close() { popupOpen = false }
   function clock(sec) {
@@ -70,6 +91,8 @@ BarWidget {
       Text {
         id: label
         anchors.verticalCenter: parent.verticalCenter
+        width: root.barScroll ? implicitWidth : clip.width
+        elide: root.barScroll ? Text.ElideNone : Text.ElideRight
         textFormat: Text.PlainText
         text: root.player ? root.player.trackTitle + (root.player.trackArtist ? "  ·  " + root.player.trackArtist : "") : ""
         color: root.bar.barForeground
@@ -79,7 +102,7 @@ BarWidget {
         // Rest, glide slowly to the end, rest, snap back — only when the
         // title does not fit.
         SequentialAnimation on x {
-          running: label.implicitWidth > clip.width && !root.popupOpen
+          running: root.barScroll && label.implicitWidth > clip.width && !root.popupOpen
           loops: Animation.Infinite
           onRunningChanged: if (!running) label.x = 0
           PauseAnimation { duration: 2500 }
@@ -131,8 +154,8 @@ BarWidget {
         spacing: Style.space(12)
 
         BorderSurface {
-          width: Style.space(96)
-          height: Style.space(96)
+          width: Style.space(112)
+          height: Style.space(112)
           radius: Style.spacing.labelGap
           color: Style.normalFillFor(root.bar.foreground, Color.accent)
           borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
@@ -156,7 +179,7 @@ BarWidget {
         }
 
         Column {
-          width: parent.width - Style.space(108)
+          width: parent.width - Style.space(124)
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(4)
 
@@ -221,7 +244,7 @@ BarWidget {
           }
           Text {
             anchors.right: parent.right
-            text: root.player ? root.clock(root.player.length) : ""
+            text: root.player ? "-" + root.clock(root.player.length - root.player.position) : ""
             color: Qt.darker(root.bar.foreground, 1.6)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -229,46 +252,27 @@ BarWidget {
         }
       }
 
+      // As in brumm: modes on the left, the transport in the middle with the
+      // play button the one filled control, the way into brumm on the right.
       Item {
         width: parent.width
-        height: controls.implicitHeight
+        height: transport.implicitHeight
 
         Row {
-          id: controls
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.space(6)
+          spacing: Style.space(2)
 
           Button {
-            iconText: "󰒮"
-            foreground: root.bar.foreground
-            enabled: root.player && root.player.canGoPrevious
-            opacity: enabled ? 1 : 0.4
-            onClicked: root.player.previous()
-          }
-          Button {
-            iconText: root.playing ? "󰏤" : "󰐊"
-            iconSize: Style.font.iconLarge
-            foreground: root.bar.foreground
-            horizontalPadding: Style.spacing.panelGap
-            enabled: root.player !== null
-            onClicked: root.player.togglePlaying()
-          }
-          Button {
-            iconText: "󰒭"
-            foreground: root.bar.foreground
-            enabled: root.player && root.player.canGoNext
-            opacity: enabled ? 1 : 0.4
-            onClicked: root.player.next()
-          }
-          Button {
             iconText: "󰒝"
+            tooltipText: "Shuffle"
             foreground: root.bar.foreground
             opacity: root.player && root.player.shuffle ? 1 : 0.4
             onClicked: if (root.player) root.player.shuffle = !root.player.shuffle
           }
           Button {
             iconText: root.player && root.player.loopState === MprisLoopState.Track ? "󰑘" : "󰑖"
+            tooltipText: "Repeat"
             foreground: root.bar.foreground
             opacity: root.player && root.player.loopState !== MprisLoopState.None ? 1 : 0.4
             onClicked: {
@@ -280,13 +284,46 @@ BarWidget {
           }
         }
 
+        Row {
+          id: transport
+          anchors.centerIn: parent
+          spacing: Style.space(8)
+
+          Button {
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰒮"
+            foreground: root.bar.foreground
+            enabled: root.player && root.player.canGoPrevious
+            opacity: enabled ? 1 : 0.4
+            onClicked: root.player.previous()
+          }
+          Button {
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: root.playing ? "󰏤" : "󰐊"
+            iconSize: Style.font.iconLarge
+            foreground: root.bar.foreground
+            horizontalPadding: Style.spacing.panelGap
+            bordered: true
+            selected: root.playing
+            enabled: root.player !== null
+            onClicked: root.player.togglePlaying()
+          }
+          Button {
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰒭"
+            foreground: root.bar.foreground
+            enabled: root.player && root.player.canGoNext
+            opacity: enabled ? 1 : 0.4
+            onClicked: root.player.next()
+          }
+        }
+
         Button {
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           iconText: "󰆍"
-          text: "Open brumm"
+          tooltipText: "Open brumm"
           foreground: root.bar.foreground
-          bordered: true
           onClicked: root.openTui()
         }
       }

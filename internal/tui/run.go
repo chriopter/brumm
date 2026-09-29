@@ -27,13 +27,16 @@ func Run() error {
 	}
 	defer client.Close()
 	go art.Prune(filepath.Join(config.CacheDir(), "covers"), 200<<20)
-	r, err := client.Do(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands})
+	r, err := client.Do(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands, FPS: meterFPS})
 	if err != nil {
 		return err
 	}
-	final, err := tea.NewProgram(newModel(client, *r.State)).Run()
+	final, err := tea.NewProgram(newModel(client, *r.State), tea.WithFPS(maxDrawFPS)).Run()
 	if err != nil {
 		return err
+	}
+	if m, ok := final.(*Model); ok {
+		os.Stdout.WriteString(m.kittyCleanup())
 	}
 	if m, ok := final.(*Model); ok && m.reexec {
 		// The binary changed under us (an update): continue in the new one.

@@ -120,7 +120,7 @@ func (d *Daemon) watchSelf() {
 	if !ok {
 		return
 	}
-	t := time.NewTicker(15 * time.Second)
+	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {
 		select {

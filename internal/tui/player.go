@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -18,9 +17,6 @@ import (
 //	Title                                    3/10
 //	Artist · Album
 //
-//	▆ █ ▃   ▅ ─ ▂        spectrum, bars with gaps and falling peaks
-//	█ █ █ ▂ █ █ █ ▁ ▁
-//
 //	━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━   meter, half-cell precise
 //	2:44 / 5:08                         -2:24
 //
@@ -33,15 +29,6 @@ import (
 // transport below (view.go adds the gap between cover and meter).
 const stageBelow = 2 + 1 + 2 + 1 + 1
 
-// Raw SGR for the per-cell spectrum: one escape per color run instead of a
-// lipgloss render per run. Only the 16 theme colors.
-const (
-	sgrBlue  = "\x1b[34m"
-	sgrDim   = "\x1b[90m"
-	sgrPeak  = "\x1b[39m"
-	sgrReset = "\x1b[m"
-)
-
 // nowPlaying returns the stage in two parts: the cover (top-anchored) and
 // the block under it (bottom-anchored); len(bottom) == stageBelow.
 func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
@@ -50,7 +37,7 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 
 	if coverH >= 6 {
 		coverW := min(colW, int(math.Round(float64(coverH)*m.cellAspect)))
-		for _, l := range m.coverLines(art.Size{Width: coverW, Height: coverH}) {
+		for _, l := range m.stageCover(art.Size{Width: coverW, Height: coverH}) {
 			top = append(top, stageLine{text: l, center: true, width: coverW})
 		}
 	}
@@ -65,16 +52,36 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 		tag = sDim.Render(fmt.Sprintf("%d/%d", st.Index+1, st.Length))
 	}
 	heading := sBold.Render(title)
-	if st.Preview == nil && m.loved[st.ID] {
-		heading += "  " + sErr.Render("♥")
+	if st.Preview == nil && m.rating[st.ID] != 0 {
+		heading += "  " + m.ratingMark(st.ID)
 	}
 	add(spread(heading, tag, colW))
 	meta := artist
 	if album != "" && album != title {
 		meta += sDim.Render("  ·  " + album)
 	}
-	add(ansi.Truncate(meta, colW, "…"))
-	add("")
+	aw := min(lipgloss.Width(artist), colW)
+	hasAlbum := album != "" && album != title && aw+5 < colW
+	bottom = append(bottom, stageLine{text: ansi.Truncate(meta, colW, "…"), hit: func(x, y int) {
+		if st.Preview != nil {
+			return
+		}
+		m.geo.artist = rect{x, y, x + aw, y + 1}
+		if hasAlbum {
+			m.geo.album = rect{x + aw + 5, y, x + min(colW, aw+5+lipgloss.Width(album)), y + 1}
+		}
+	}})
+	// The gap under the names carries a and A while keytips show, when
+	// they act on this song (the selected row is not another song).
+	if m.showTips() && st.Preview == nil && m.tipsOnPlaying() {
+		bs := []badge{{0, "A"}}
+		if hasAlbum {
+			bs = append(bs, badge{aw + 5, "a"})
+		}
+		add(m.badges(colW, bs))
+	} else {
+		add("")
+	}
 	if st.Preview != nil {
 		// The clip's own position is not reported: a sweeping meter says
 		// "a clip is playing", the line under it what comes back after.
@@ -90,7 +97,11 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 		}})
 		add(m.times(colW))
 	}
-	add("")
+	if m.showTips() {
+		add(m.controlTips(colW))
+	} else {
+		add("")
+	}
 	bottom = append(bottom, m.controls(colW))
 	return top, bottom
 }
@@ -199,21 +210,13 @@ func (m *Model) controls(w int) stageLine {
 	// A key cap: half blocks round the reverse cell off into a square
 	// button two cells wider than the icon.
 	play := sPlays.Render("▐") + sPill.Render(" "+playIcon+" ") + sPlays.Render("▌")
-	gap := max(2, min(5, w/14))
+	volume := m.volumeLabel()
+	start, gap, tw, vw, all := controlLayout(w, lipgloss.Width(volume))
 	sp := strings.Repeat(" ", gap)
 	transport := icPrev + sp + play + sp + icNext
-	tw := 1 + gap + 5 + gap + 1
 
-	vol := int(math.Round(st.Volume * 100))
-	volume := sDim.Render(icMuted) + " " + sDim.Render("mute")
-	if vol > 0 {
-		volume = icVolume + " " + sDim.Render(fmt.Sprintf("%3d", vol))
-	}
-	vw := lipgloss.Width(volume)
-
-	start := max(0, (w-tw)/2)
 	var line string
-	if start >= 4+2 && start+tw+2+vw <= w {
+	if all {
 		line = modes + strings.Repeat(" ", start-4) + transport +
 			strings.Repeat(" ", w-start-tw-vw) + volume
 	} else {
@@ -234,102 +237,37 @@ func (m *Model) controls(w int) stageLine {
 	}}
 }
 
-// peaks remembers the falling peak marks of the stage spectrum between
-// renders; there is one stage, so one set.
-var peaks struct {
-	v    []float64
-	hold []time.Time
-	at   time.Time
+func (m *Model) volumeLabel() string {
+	vol := int(math.Round(m.state.Volume * 100))
+	if vol > 0 {
+		return icVolume + " " + sDim.Render(fmt.Sprintf("%3d", vol))
+	}
+	return sDim.Render(icMuted) + " " + sDim.Render("mute")
 }
 
-// spectrum draws the bands as thin bars with one-cell gaps, eighth-block
-// precise, each with a peak mark that holds briefly and then falls. When
-// paused the bars rest on a dim baseline.
-func (m *Model) spectrum(w, rows int) []string {
-	n := max(1, (w+1)/2)
-	lead := (w - (2*n - 1)) / 2
-	levels := make([]float64, n)
-	if k := len(m.spec); k > 0 {
-		for i := range levels {
-			// Each bar takes the loudest of its share of the bands.
-			lo := i * k / n
-			hi := max(lo+1, (i+1)*k/n)
-			v := 0.0
-			for _, b := range m.spec[lo:min(hi, k)] {
-				v = max(v, b)
-			}
-			// The analyser runs hot; a curve keeps the bars off the
-			// ceiling so the shape reads.
-			levels[i] = math.Pow(v, 1.6)
-		}
-	}
+// controlLayout places the controls in w cells: the transport's first
+// column, the gap around the play button, the transport's width, the
+// volume's, and whether modes and volume fit beside the transport.
+func controlLayout(w, vw int) (start, gap, tw, _ int, all bool) {
+	gap = max(2, min(5, w/14))
+	tw = 1 + gap + 5 + gap + 1
+	start = max(0, (w-tw)/2)
+	return start, gap, tw, vw, start >= 4+2 && start+tw+2+vw <= w
+}
 
-	now := time.Now()
-	if len(peaks.v) != n {
-		peaks.v, peaks.hold = make([]float64, n), make([]time.Time, n)
+// controlTips is the line above the controls while keytips show: each
+// key under what it presses.
+func (m *Model) controlTips(w int) string {
+	start, gap, tw, vw, all := controlLayout(w, lipgloss.Width(m.volumeLabel()))
+	bs := []badge{{start, "p"}, {start + 1 + gap, "space"}, {start + tw - 1, "n"}}
+	if all {
+		bs = append(bs, badge{0, "s"}, badge{3, "r"}, badge{w - vw, "- + m"})
 	}
-	dt := min(0.5, now.Sub(peaks.at).Seconds())
-	peaks.at = now
-	for i, lv := range levels {
-		switch {
-		case lv >= peaks.v[i]:
-			peaks.v[i], peaks.hold[i] = lv, now.Add(400*time.Millisecond)
-		case now.After(peaks.hold[i]):
-			peaks.v[i] = max(lv, peaks.v[i]-0.6*dt)
-		}
-	}
+	return m.badges(w, bs)
+}
 
-	playing := m.state.Playing || m.state.Preview != nil
-	barColor := sgrBlue
-	if !playing {
-		barColor = sgrDim
-	}
-	ramp := []rune(" ▁▂▃▄▅▆▇█")
-	out := make([]string, rows)
-	var sb strings.Builder
-	for r := range rows {
-		row := rows - 1 - r // 0 is the bottom row
-		sb.Reset()
-		sb.WriteString(strings.Repeat(" ", lead))
-		cur := ""
-		put := func(color string, ch rune) {
-			if color != cur && ch != ' ' {
-				sb.WriteString(color)
-				cur = color
-			}
-			sb.WriteRune(ch)
-		}
-		for i, lv := range levels {
-			if i > 0 {
-				sb.WriteByte(' ')
-			}
-			fill := lv*float64(rows*8) - float64(row*8)
-			pk := peaks.v[i]*float64(rows) - float64(row) // peak within this row: 0..1
-			switch {
-			case fill >= 8:
-				put(barColor, '█')
-			case fill >= 1:
-				put(barColor, ramp[int(fill)])
-			case row == 0:
-				put(barColor, '▁')
-			case playing && pk >= 0 && pk < 1 && peaks.v[i] > lv+0.5/float64(rows*8):
-				// Only where the bar does not reach: a thin mark at the
-				// peak's height in the cell.
-				ch := '▁'
-				if pk >= 0.66 {
-					ch = '▔'
-				} else if pk >= 0.33 {
-					ch = '─'
-				}
-				put(sgrPeak, ch)
-			default:
-				sb.WriteByte(' ')
-			}
-		}
-		if cur != "" {
-			sb.WriteString(sgrReset)
-		}
-		out[r] = sb.String()
-	}
-	return out
+// tipsOnPlaying is whether a and A would act on the playing song.
+func (m *Model) tipsOnPlaying() bool {
+	v := m.cur()
+	return v.sel >= len(v.rows) || v.rows[v.sel].track == nil || v.rows[v.sel].track.ID == m.state.ID
 }

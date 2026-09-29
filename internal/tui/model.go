@@ -25,8 +25,14 @@ import (
 	"github.com/chriopter/brumm/internal/login"
 )
 
-// bands is how many spectrum bands the TUI asks the daemon for.
-const bands = 48
+// bands is how many spectrum bands the TUI asks the daemon for, and at
+// what rate: the small meters need less than the fullscreen visualizer.
+const (
+	bands    = 48
+	meterFPS = 15
+	vizFPS   = 30 // spectrum frames for the fullscreen visualizer; it draws faster, see drawFPS
+	fallRef  = 25 // the rate the meters' fall was tuned at
+)
 
 // A play queues the chosen song and at most this many in all.
 const queueAfter = 500
@@ -34,17 +40,20 @@ const queueAfter = 500
 type section int
 
 const (
-	secPlaylists section = iota
+	secHome section = iota
+	secPlaylists
 	secAlbums
 	secArtists
 	secSongs
 	secSearch
 	secQueue
+	secRadio
 	numSections
 )
 
 var (
-	sectionNames = []string{"Playlists", "Albums", "Artists", "Songs", "Search", "Queue"}
+	sectionNames = []string{"Home", "Playlists", "Albums", "Artists", "Songs", "Search", "Queue", "Radio"}
+	sectionIcons = []string{icHome, icPlaylist, icAlbum, icArtist, icSong, icSearch, icQueue, icStation}
 	sectionLists = []string{ipc.ListPlaylists, ipc.ListAlbums, ipc.ListArtists, ipc.ListSongs}
 )
 
@@ -52,6 +61,8 @@ var (
 type row struct {
 	track *apple.Track
 	item  *apple.Item
+	head  string // a shelf's title
+	note  string // a line of text about the view
 }
 
 // view is one level of the browser.
@@ -112,7 +123,6 @@ type (
 	errMsg   struct{ err error }
 	tickMsg  struct{}
 	holdMsg  struct{ seq int } // space is still down after holdDelay
-	lovedMsg struct{ ids []string }
 	seekMsg  struct{ seq int } // the last seek key was a moment ago
 	typedMsg struct{ seq int } // the search query stopped changing
 	flashMsg string
@@ -131,7 +141,14 @@ type Model struct {
 
 	width, height int
 	cellAspect    float64 // cell height ÷ width, measured in pixels
-	frame         int
+	frame         int     // animation clock in 100 ms steps, read fresh on every update
+	start         time.Time
+	ticking       bool // a tick is on its way; none is while nothing animates
+	blurred       bool // the terminal lost focus: stop what only a viewer would see
+	eqShown       bool // the last render drew the playing row's equalizer
+	cardShown     bool // the last render laid a card on the cover (card.go)
+	marquee       bool // the last render scrolled a selected row
+	specFPS       int  // the rate the spectrum arrives at
 
 	state   ipc.State
 	stateAt time.Time
@@ -144,7 +161,7 @@ type Model struct {
 	query     string
 	typedSeq  int
 
-	loved map[string]bool // favorite song ids seen so far
+	rating map[string]int // loves (1) and dislikes (-1) seen so far, by id
 
 	seekTo  float64 // where pending seek keys point
 	seekAt  time.Time
@@ -152,6 +169,7 @@ type Model struct {
 
 	coverURL string
 	cover    image.Image
+	coverDim image.Image // darker, behind a card (card.go)
 	rendered map[art.Size][]string
 	covers   map[string]image.Image // recently seen covers by address
 	coverLRU []string
@@ -180,6 +198,22 @@ type Model struct {
 	dragging bool    // the divider is being dragged
 	reexec   bool    // the binary was updated: restart into it on quit
 
+	opts options
+
+	optOpen  bool    // the options menu shows
+	pick     *picker // the add-to-playlist menu, while it shows
+	optLines []int   // the options menu line of each option
+	optSel   int
+
+	// Covers sent to the terminal as kitty graphics, by address and size.
+	kitty      map[string]*kittyImage
+	kittyWant  []kittyReq // what the last render lacked
+	kittyBusy  bool
+	kittyNext  int
+	kittyClock int
+
+	loginTried bool // the sign-in page opened on its own once
+
 	full     bool // fullscreen visualizer
 	vizStyle int
 	vizPrev  int       // style fading out, -1 when none
@@ -195,30 +229,79 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		http:       &http.Client{Timeout: 10 * time.Second},
 		state:      initial,
 		stateAt:    time.Now(),
+		start:      time.Now(),
+		ticking:    true, // Init starts the first tick
+		specFPS:    meterFPS,
 		rendered:   map[art.Size][]string{},
 		cellAspect: cellAspect(),
 		lastVol:    1,
 		split:      loadSplit(),
+		opts:       loadOptions(),
+		kitty:      map[string]*kittyImage{},
 		vizStyle:   vizOpening,
 		vizPrev:    -1,
 	}
 	for s := secPlaylists; s <= secSongs; s++ {
-		m.stacks[s] = []*view{{title: sectionNames[s], key: "list:" + sectionLists[s]}}
+		m.stacks[s] = []*view{{title: sectionNames[s], key: "list:" + sectionLists[s-secPlaylists]}}
 	}
+	m.stacks[secHome] = []*view{{title: "Home", key: "home:"}}
+	m.stacks[secRadio] = []*view{{title: "Radio", key: "radio:", item: &apple.Item{Kind: apple.KindShelf, ID: "radio", Name: "Radio", Catalog: true}}}
 	m.stacks[secSearch] = []*view{{title: "Search", key: "search:", loaded: true}}
 	m.stacks[secQueue] = []*view{{title: "Queue", key: "queue:"}}
-	m.loved = map[string]bool{}
+	m.rating = map[string]int{}
 	m.covers, m.fetching, m.thumbs = map[string]image.Image{}, map[string]bool{}, map[string][]string{}
 	return m
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), tick(), m.load(m.cur()), m.maybeFetchCover(),
+	return tea.Batch(m.listen(), tick(frameEvery), m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
 		m.send(ipc.Request{Cmd: ipc.CmdUpdate})) // look for an update on every start
 }
 
-func tick() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
+const frameEvery = 100 * time.Millisecond
+
+func tick(every time.Duration) tea.Cmd {
+	return tea.Tick(every, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// nextTick says when the screen next needs a frame of its own, if ever.
+// Nothing ticks while nothing moves, so an idle brumm costs no wakeups;
+// every message restarts the clock for as long as something animates.
+func (m *Model) nextTick() (time.Duration, bool) {
+	switch {
+	case m.blurred && !m.full:
+		return time.Second, m.state.Playing // the clock and the meter, for a glance
+	case m.full && !m.state.Playing:
+		return 2 * frameEvery, true // the paused visualizer only breathes
+	case m.full:
+		// The visualizer moves by the clock, so it draws at the display's
+		// pace, not the spectrum's: its motion is as smooth as the rate.
+		return time.Second / time.Duration(m.opts.drawFPS()), true
+	case m.full || m.marquee || m.flash != "" || m.thumbBusy || m.kittyBusy || len(m.kittyWant) > 0 || m.state.Preview != nil ||
+		m.state.Status == ipc.StatusStarting || m.cur().loading:
+		return frameEvery, true
+	case m.cardShown:
+		return max(frameEvery, m.cardLeft()), true // take the card away on time
+	case m.state.Playing && m.eqShown && m.opts.NoMeter:
+		return 125 * time.Millisecond, true // the row's equalizer wobbles by itself
+	case m.state.Playing:
+		return 500 * time.Millisecond, true // the spectrum's own frames move the rest
+	}
+	return 0, false
+}
+
+// subscribe tells the daemon what to stream: the spectrum only while it
+// can be seen, and faster only for the fullscreen visualizer.
+func (m *Model) subscribe() tea.Cmd {
+	r := ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands, FPS: meterFPS}
+	switch {
+	case m.full:
+		r.Wave, r.FPS = max(96, m.width*3), vizFPS // room for the scope to find its trigger
+	case m.blurred || m.opts.NoMeter:
+		r.Bands = 0
+	}
+	m.specFPS = r.FPS
+	return m.send(r)
 }
 
 func (m *Model) listen() tea.Cmd {
@@ -239,7 +322,7 @@ func reconnect() tea.Cmd {
 		if err != nil {
 			return connectedMsg{err: err}
 		}
-		r, err := c.Do(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands})
+		r, err := c.Do(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands, FPS: meterFPS})
 		if err != nil {
 			c.Close()
 			return connectedMsg{err: err}
@@ -277,6 +360,8 @@ func (m *Model) load(v *view) tea.Cmd {
 		req = ipc.Request{Cmd: ipc.CmdSearch, Query: strings.TrimPrefix(v.key, "search:")}
 	case v.key == "queue:":
 		req = ipc.Request{Cmd: ipc.CmdQueue, Value: 500}
+	case v.key == "home:":
+		req = ipc.Request{Cmd: ipc.CmdHome}
 	default:
 		return nil
 	}
@@ -285,54 +370,6 @@ func (m *Model) load(v *view) tea.Cmd {
 	return func() tea.Msg {
 		reply, err := client.Do(req)
 		return loadedMsg{v: v, reply: reply, err: err}
-	}
-}
-
-func fill(v *view, reply ipc.Message) {
-	var rows []row
-	if res := reply.Results; res != nil {
-		for i := range res.Songs {
-			rows = append(rows, row{track: &res.Songs[i]})
-		}
-		for _, list := range [][]apple.Item{res.Albums, res.Artists, res.Playlists} {
-			for i := range list {
-				rows = append(rows, row{item: &list[i]})
-			}
-		}
-	}
-	for i := range reply.Items {
-		rows = append(rows, row{item: &reply.Items[i]})
-	}
-	for i := range reply.Tracks {
-		rows = append(rows, row{track: &reply.Tracks[i]})
-	}
-	v.rows, v.loaded, v.err = rows, true, nil
-	v.qpos = max(0, reply.Pos)
-	// An album opened from a link has no name yet; its songs carry it.
-	if v.item != nil && v.item.Kind == apple.KindAlbum && v.title == "Album" && len(reply.Tracks) > 0 {
-		v.title = reply.Tracks[0].Album
-	}
-	v.sel = min(v.sel, max(0, len(rows)-1))
-}
-
-// fetchLoved asks which songs of a view are favorites.
-func (m *Model) fetchLoved(v *view) tea.Cmd {
-	var ids []string
-	for _, r := range v.rows {
-		if r.track != nil && len(ids) < 1000 {
-			ids = append(ids, r.track.ID)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	client := m.client
-	return func() tea.Msg {
-		reply, err := client.Do(ipc.Request{Cmd: ipc.CmdLoved, IDs: ids})
-		if err != nil {
-			return nil
-		}
-		return lovedMsg{reply.IDs}
 	}
 }
 
@@ -362,7 +399,7 @@ func (m *Model) maybeFetchCover() tea.Cmd {
 	if url == m.coverURL {
 		return nil
 	}
-	m.coverURL, m.cover, m.rendered = url, nil, map[art.Size][]string{}
+	m.coverURL, m.cover, m.coverDim, m.rendered = url, nil, nil, map[art.Size][]string{}
 	if url == "" {
 		return nil
 	}
@@ -416,7 +453,8 @@ func (m *Model) renderThumb() tea.Cmd {
 		return nil
 	}
 	m.thumbBusy = true
-	return func() tea.Msg { return thumbMsg{w.key, art.RenderDithered(img, w.size)} }
+	style := m.opts.cover()
+	return func() tea.Msg { return thumbMsg{w.key, drawCover(style, img, w.size)} }
 }
 
 // prefetchCovers loads the covers of the rows on screen and just beyond,
@@ -455,19 +493,44 @@ func (m *Model) prefetchCovers(v *view) tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.frame = int(time.Since(m.start) / frameEvery)
+	model, cmd := m.update(msg)
+	if _, isTick := msg.(tickMsg); !isTick && !m.ticking {
+		// Something happened: give the screen a frame to settle, and more
+		// for as long as it animates.
+		m.ticking = true
+		cmd = tea.Batch(cmd, tick(frameEvery))
+	}
+	return model, cmd
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		m.blurred = false
+		return m, m.subscribe()
+	case tea.BlurMsg:
+		m.blurred = true
+		return m, m.subscribe()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.cellAspect = cellAspect()
 	case tickMsg:
-		m.frame++
+		m.ticking = false
 		if m.full && time.Since(m.vizAt) > vizEvery {
 			m.showViz((m.vizStyle + 1) % len(vizNames))
 		}
 		if m.flash != "" && time.Since(m.flashAt) > 4*time.Second {
 			m.flash = ""
 		}
-		return m, tea.Batch(tick(), m.renderThumb())
+		cmds := []tea.Cmd{m.renderThumb(), m.kittySend()}
+		if every, ok := m.nextTick(); ok {
+			m.ticking = true
+			cmds = append(cmds, tick(every))
+		}
+		return m, tea.Batch(cmds...)
+	case kittyMsg:
+		return m, m.kittySent(msg)
 	case thumbMsg:
 		m.thumbBusy = false
 		if len(m.thumbs) > 60 {
@@ -507,10 +570,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		return m, tea.Batch(m.maybeResume(), m.fetchLoved(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover())
-	case lovedMsg:
-		for _, id := range msg.ids {
-			m.loved[id] = true
+		return m, tea.Batch(m.maybeResume(), m.fetchRatings(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover())
+	case ratingsMsg:
+		for id, v := range msg {
+			m.rating[id] = v
+		}
+	case pickerListsMsg:
+		if p := m.pick; p != nil {
+			p.loading, p.lists = false, msg.lists
+			if msg.err != nil {
+				m.setFlash(msg.err.Error())
+			}
 		}
 	case seekMsg:
 		if msg.seq == m.seekSeq {
@@ -578,11 +648,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.spaceUp()
 		}
 	case tea.KeyPressMsg:
+		if m.pick != nil {
+			return m, m.pickerKey(msg)
+		}
+		if m.optOpen {
+			return m, m.optionsKey(msg.String())
+		}
 		if m.searching {
 			return m, m.searchKey(msg)
 		}
 		if k := msg.String(); k == "space" || k == " " {
 			return m, m.spaceDownKey(msg.IsRepeat)
+		}
+		if msg.String() == "?" && !m.full {
+			m.help = !m.help
+			return m, nil
 		}
 		if m.full {
 			if cmd, ok := m.fullKey(msg.String()); ok {
@@ -591,6 +671,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.key(msg.String())
 	case tea.MouseClickMsg:
+		if m.pick != nil {
+			return m, m.pickerClick(msg.Mouse().X, msg.Mouse().Y)
+		}
+		if m.optOpen {
+			return m, m.optionsClick(msg.Mouse().X, msg.Mouse().Y)
+		}
 		if ms := msg.Mouse(); ms.Button == tea.MouseLeft && m.geo.divider.has(ms.X, ms.Y) {
 			m.dragging = true
 			return m, nil
@@ -630,7 +716,7 @@ func (m *Model) event(msg ipc.Message) tea.Cmd {
 		if wasLoggedOut || !m.cur().loaded {
 			cmds = append(cmds, m.load(m.cur()))
 		}
-		cmds = append(cmds, m.maybeFetchCover(), m.maybeResume())
+		cmds = append(cmds, m.maybeFetchCover(), m.maybeResume(), m.autoLogin())
 	}
 	if msg.Spectrum != nil {
 		m.feedSpectrum(msg.Spectrum)
@@ -667,8 +753,9 @@ func (m *Model) feedSpectrum(in []int) {
 	if len(m.spec) != len(in) {
 		m.spec = make([]float64, len(in))
 	}
+	fall := math.Pow(0.86, float64(fallRef)/float64(m.specFPS)) // the same fall per second at any rate
 	for i, v := range in {
-		m.spec[i] = max(float64(v)/255, m.spec[i]*0.86)
+		m.spec[i] = max(float64(v)/255, m.spec[i]*fall)
 	}
 }
 
@@ -728,8 +815,18 @@ func (m *Model) activate() tea.Cmd {
 		return nil
 	}
 	r := v.rows[v.sel]
+	if !r.selectable() {
+		return nil
+	}
 	if r.item != nil {
 		it := *r.item
+		switch it.Kind {
+		case apple.KindStation:
+			return m.startStation(ipc.Request{Cmd: ipc.CmdStation, Item: &it})
+		case apple.KindTerm:
+			m.query = it.Name
+			return m.runSearch(true)
+		}
 		return m.push(&view{title: it.Name, key: it.Key(), item: &it})
 	}
 	if v.key == "queue:" {
@@ -787,6 +884,11 @@ func (m *Model) lookup(cmd string) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	return m.lookupID(cmd, id)
+}
+
+// lookupID opens what the song id belongs to.
+func (m *Model) lookupID(cmd, id string) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
 		reply, err := client.Do(ipc.Request{Cmd: cmd, Start: id})
@@ -807,17 +909,9 @@ func (m *Model) enqueue(next bool) tea.Cmd {
 	r, client := v.rows[v.sel], m.client
 	done := map[bool]string{true: "plays next", false: "added to the queue"}[next]
 	return func() tea.Msg {
-		var ids []string
-		if r.track != nil {
-			ids = []string{r.track.ID}
-		} else {
-			reply, err := client.Do(ipc.Request{Cmd: ipc.CmdOpen, Item: r.item})
-			if err != nil {
-				return errMsg{err}
-			}
-			for _, t := range reply.Tracks {
-				ids = append(ids, t.ID)
-			}
+		ids, err := songsOf(client, r)
+		if err != nil {
+			return errMsg{err}
 		}
 		if len(ids) == 0 {
 			return nil
@@ -831,26 +925,6 @@ func (m *Model) enqueue(next bool) tea.Cmd {
 		}
 		return flashMsg(done)
 	}
-}
-
-// toggleLoved marks the selected (or playing) song as a favorite or not.
-func (m *Model) toggleLoved() tea.Cmd {
-	id, ok := m.selectedTrack()
-	if !ok {
-		return nil
-	}
-	on := !m.loved[id]
-	if on {
-		m.loved[id] = true
-	} else {
-		delete(m.loved, id)
-	}
-	m.setFlash(map[bool]string{true: "♥ favorite", false: "no longer a favorite"}[on])
-	value := 0.0
-	if on {
-		value = 1
-	}
-	return m.send(ipc.Request{Cmd: ipc.CmdLove, Start: id, Value: value})
 }
 
 // copyLink puts the song's music.apple.com link on the clipboard.
@@ -933,12 +1007,10 @@ func (m *Model) spaceUp() tea.Cmd {
 // waveform data only while it shows.
 func (m *Model) toggleFull() tea.Cmd {
 	m.full = !m.full
-	wave := 0
 	if m.full {
-		wave = max(64, m.width*2)
 		m.vizStyle, m.vizPrev, m.vizAt = vizOpening, -1, time.Now()
 	}
-	return m.send(ipc.Request{Cmd: ipc.CmdSubscribe, Bands: bands, Wave: wave})
+	return m.subscribe()
 }
 
 // fullKey handles the keys that mean something else in fullscreen.
@@ -977,22 +1049,6 @@ func (m *Model) showViz(style int) {
 	m.vizPrev, m.vizStyle, m.vizAt = m.vizStyle, style, time.Now()
 }
 
-// openAlbum opens the album of the selected song.
-func (m *Model) openAlbum() tea.Cmd {
-	v := m.cur()
-	if v.sel >= len(v.rows) || v.rows[v.sel].track == nil {
-		return nil
-	}
-	id, client := v.rows[v.sel].track.ID, m.client
-	return func() tea.Msg {
-		reply, err := client.Do(ipc.Request{Cmd: ipc.CmdAlbum, Start: id})
-		if err != nil || len(reply.Items) == 0 {
-			return albumMsg{err: fmt.Errorf("no album found for this song")}
-		}
-		return albumMsg{item: reply.Items[0]}
-	}
-}
-
 // jumpToPlaying shows the list the current song was started from with the
 // song selected, reopening that list if needed.
 func (m *Model) jumpToPlaying() tea.Cmd {
@@ -1008,7 +1064,7 @@ func (m *Model) jumpToPlaying() tea.Cmd {
 			}
 		}
 	}
-	for s := secPlaylists; s <= secSearch; s++ {
+	for s := secHome; s <= secSearch; s++ {
 		for _, v := range m.stacks[s] {
 			if v.key == src {
 				m.section = s
@@ -1055,15 +1111,14 @@ func (m *Model) maybeResume() tea.Cmd {
 
 func (m *Model) key(k string) tea.Cmd {
 	switch k {
-	case "q", "ctrl+c":
-		return tea.Quit
-	case "Q":
+	case "q":
+		// Done listening: the music stops and brumm with it.
 		return tea.Sequence(m.send(ipc.Request{Cmd: ipc.CmdQuit}), tea.Quit)
-	case "?":
-		m.help = !m.help
+	case "Q", "ctrl+c":
+		return tea.Quit // close the window; the music plays on
 	case "L":
-		return func() tea.Msg { return loginMsg{login.Run(context.Background(), func(string) {})} }
-	case "1", "2", "3", "4", "5", "6":
+		return signIn()
+	case "1", "2", "3", "4", "5", "6", "7", "8":
 		return m.switchTo(section(k[0] - '1'))
 	case "tab", "right":
 		return m.switchTo((m.section + 1) % numSections)
@@ -1116,15 +1171,25 @@ func (m *Model) key(k string) tea.Cmd {
 	case "c":
 		return m.jumpToPlaying()
 	case "o":
+		m.optOpen, m.help = true, false
+	case "O":
 		return m.togglePreview()
+	case "i":
+		return m.addToLibrary()
 	case "a":
-		return m.openAlbum()
+		return m.lookup(ipc.CmdAlbum) // the selected song's, else the playing one's
 	case "A":
 		return m.lookup(ipc.CmdArtist)
 	case "z", "Z":
 		return m.enqueue(k == "Z")
 	case "*":
-		return m.toggleLoved()
+		return m.rate(apple.Love)
+	case "d":
+		return m.rate(apple.Dislike)
+	case "R":
+		return m.playStation()
+	case "P":
+		return m.openPicker()
 	case "y":
 		return m.copyLink()
 	case "U":
@@ -1192,6 +1257,9 @@ func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "down", "up":
 		m.searching = false // move into the results
 		return m.move(msg.String())
+	case "left", "right", "tab", "shift+tab":
+		m.searching = false // on to the next section: the box has no cursor to move
+		return m.key(msg.String())
 	default:
 		if msg.Text == "" {
 			return nil
@@ -1245,6 +1313,9 @@ func (m *Model) move(k string) tea.Cmd {
 	v := m.cur()
 	n := len(v.rows)
 	if n == 0 {
+		if (k == "up" || k == "k") && m.section == secSearch && len(m.stack()) == 1 {
+			m.searching = true
+		}
 		return nil
 	}
 	page := max(1, m.listRows()-1)
@@ -1266,6 +1337,18 @@ func (m *Model) move(k string) tea.Cmd {
 		return nil
 	}
 	v.sel = max(0, min(v.sel, n-1))
+	dir := 1
+	if v.sel < prev || k == "G" || k == "end" {
+		dir = -1
+	}
+	if k == "g" || k == "home" {
+		dir = 1
+	}
+	v.sel = nearest(v.rows, v.sel, dir)
+	if v.sel == prev && (k == "up" || k == "k") && m.section == secSearch && len(m.stack()) == 1 {
+		m.searching = true // up from the first result: back into the box
+		return nil
+	}
 	if v.sel != prev {
 		v.selAt = m.frame
 	}
@@ -1288,6 +1371,15 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 			return m.switchTo(section(i))
 		}
 	}
+	for _, f := range g.foot {
+		if f.r.has(ms.X, ms.Y) {
+			if f.action == "?" {
+				m.help = !m.help
+				return nil
+			}
+			return m.key(f.action)
+		}
+	}
 	switch {
 	case g.search.has(ms.X, ms.Y):
 		m.searching = true
@@ -1305,6 +1397,10 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 		return m.key("r")
 	case g.volume.has(ms.X, ms.Y):
 		return m.key("m")
+	case g.artist.has(ms.X, ms.Y) && m.state.ID != "":
+		return m.lookupID(ipc.CmdArtist, m.state.ID)
+	case g.album.has(ms.X, ms.Y) && m.state.ID != "":
+		return m.lookupID(ipc.CmdAlbum, m.state.ID)
 	case g.bar.has(ms.X, ms.Y) && m.state.Dur > 0:
 		f := float64(ms.X-g.bar.x0) / float64(max(1, g.bar.x1-g.bar.x0-1))
 		return m.seek(f * m.state.Dur)
@@ -1314,8 +1410,65 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 		if idx >= len(v.rows) {
 			return nil
 		}
+		if !v.rows[idx].selectable() {
+			return nil
+		}
 		v.sel, v.selAt = idx, m.frame
 		return m.activate()
 	}
 	return nil
+}
+
+// signIn opens the Apple Music sign-in page in the browser.
+func signIn() tea.Cmd {
+	return func() tea.Msg { return loginMsg{login.Run(context.Background(), func(string) {})} }
+}
+
+// autoLogin opens the sign-in page by itself the first time brumm finds
+// it is signed out, so nobody has to hunt for the key.
+func (m *Model) autoLogin() tea.Cmd {
+	if m.loginTried || m.state.Status != ipc.StatusLoggedOut {
+		return nil
+	}
+	m.loginTried = true
+	m.setFlash("opening the Apple Music sign-in in your browser…")
+	return signIn()
+}
+
+// addToLibrary adds the selected catalog song, album or playlist — or the
+// song playing — to the library.
+func (m *Model) addToLibrary() tea.Cmd {
+	kind, id, name := "", "", ""
+	v := m.cur()
+	switch {
+	case v.sel < len(v.rows) && v.rows[v.sel].track != nil:
+		t := v.rows[v.sel].track
+		kind, id, name = "songs", t.ID, t.Title
+	case v.sel < len(v.rows) && v.rows[v.sel].item != nil:
+		it := v.rows[v.sel].item
+		switch {
+		case it.Kind == apple.KindArtist:
+			m.setFlash("artists cannot be added; add one of their albums")
+			return nil
+		case !it.Catalog:
+			m.setFlash(it.Name + " is already in your library")
+			return nil
+		}
+		kind, id, name = it.Kind+"s", it.ID, it.Name
+	case m.state.ID != "":
+		kind, id, name = "songs", m.state.ID, m.state.Title
+	default:
+		return nil
+	}
+	if strings.HasPrefix(id, "i.") {
+		m.setFlash(name + " is already in your library")
+		return nil
+	}
+	client := m.client
+	return func() tea.Msg {
+		if _, err := client.Do(ipc.Request{Cmd: ipc.CmdAdd, List: kind, IDs: []string{id}}); err != nil {
+			return errMsg{err}
+		}
+		return flashMsg("added " + name + " to your library")
+	}
 }

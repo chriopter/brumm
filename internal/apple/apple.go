@@ -1,5 +1,5 @@
-// Package apple is a minimal Apple Music REST client: the user's library
-// and the catalog search.
+// Package apple is a small Apple Music REST client: the user's library,
+// the catalog, and what Apple lets a third-party app do with them.
 package apple
 
 import (
@@ -10,12 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-const base = "https://api.music.apple.com"
+const apiBase = "https://api.music.apple.com"
 
 // ErrUnauthorized means Apple rejected the session; the user must log in again.
 var ErrUnauthorized = errors.New("apple music: not signed in")
@@ -29,6 +30,9 @@ const (
 	KindPlaylist = "playlist"
 	KindAlbum    = "album"
 	KindArtist   = "artist"
+	KindStation  = "station" // plays, never opens
+	KindShelf    = "shelf"   // a page of shelves: charts, a recommendation
+	KindTerm     = "term"    // a search suggestion
 )
 
 // Item is a container the user can open: a playlist, an album or an artist.
@@ -41,6 +45,11 @@ type Item struct {
 	Artist  string `json:"artist,omitempty"`
 	Catalog bool   `json:"catalog,omitempty"`
 	Artwork string `json:"artwork,omitempty"`
+	// Info is a one-line summary: year, label, song count, audio quality.
+	Info string `json:"info,omitempty"`
+	// Note is Apple's editorial blurb or a playlist's description.
+	Note     string `json:"note,omitempty"`
+	Editable bool   `json:"editable,omitempty"` // a playlist songs can be added to
 }
 
 // Key identifies an item across kinds and sources.
@@ -61,6 +70,7 @@ type Track struct {
 	Album    string  `json:"album"`
 	Duration float64 `json:"duration"` // seconds
 	Artwork  string  `json:"artwork,omitempty"`
+	Number   int     `json:"number,omitempty"` // position on its album
 }
 
 // artworkSize is the cover size brumm asks for everywhere, so the same
@@ -77,33 +87,51 @@ func artworkURL(a *struct {
 }
 
 type Client struct {
+	base      string // the API's address; a test server's in tests
 	dev, user string
 	http      *http.Client
 
 	sfOnce     sync.Once
 	storefront string
+	lang       string // catalog text language, when the storefront has the user's
 }
 
 func New(developerToken, userToken string) *Client {
-	return &Client{dev: developerToken, user: userToken, http: &http.Client{Timeout: 15 * time.Second}}
+	return &Client{base: apiBase, dev: developerToken, user: userToken, http: &http.Client{Timeout: 15 * time.Second}}
 }
 
 type resource struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Attributes struct {
-		Name        string `json:"name"`
-		ArtistName  string `json:"artistName"`
-		AlbumName   string `json:"albumName"`
-		CuratorName string `json:"curatorName"`
-		DurationMS  int64  `json:"durationInMillis"`
-		PlayParams  *struct {
-			ID string `json:"id"`
-		} `json:"playParams"`
-		Artwork *struct {
-			URL string `json:"url"`
-		} `json:"artwork"`
-	} `json:"attributes"`
+	ID         string     `json:"id"`
+	Type       string     `json:"type"`
+	Attributes attributes `json:"attributes"`
+}
+
+type notes struct {
+	Short    string `json:"short"`
+	Standard string `json:"standard"`
+}
+
+type attributes struct {
+	Name        string `json:"name"`
+	ArtistName  string `json:"artistName"`
+	AlbumName   string `json:"albumName"`
+	CuratorName string `json:"curatorName"`
+	DurationMS  int64  `json:"durationInMillis"`
+	TrackNumber int    `json:"trackNumber"`
+	PlayParams  *struct {
+		ID string `json:"id"`
+	} `json:"playParams"`
+	Artwork *struct {
+		URL string `json:"url"`
+	} `json:"artwork"`
+	CanEdit        bool     `json:"canEdit"`
+	ReleaseDate    string   `json:"releaseDate"`
+	RecordLabel    string   `json:"recordLabel"`
+	TrackCount     int      `json:"trackCount"`
+	AudioTraits    []string `json:"audioTraits"`
+	EditorialNotes *notes   `json:"editorialNotes"`
+	Description    *notes   `json:"description"`
+	IsLive         bool     `json:"isLive"`
 }
 
 type page struct {
@@ -122,7 +150,7 @@ func (c *Client) send(method, path string, body, out any) error {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, base+path, rd)
+	req, err := http.NewRequest(method, c.base+path, rd)
 	if err != nil {
 		return err
 	}
@@ -153,7 +181,7 @@ func (c *Client) send(method, path string, body, out any) error {
 // get fetches one document into out. Apple answers 404 for an empty
 // library collection, which is reported as found=false, not an error.
 func (c *Client) get(path string, out any) (found bool, err error) {
-	req, err := http.NewRequest(http.MethodGet, base+path, nil)
+	req, err := http.NewRequest(http.MethodGet, c.base+c.localize(path), nil)
 	if err != nil {
 		return false, err
 	}
@@ -201,12 +229,24 @@ func (c *Client) all(path string, maxPages int) ([]resource, error) {
 	return out, nil
 }
 
-// Storefront is the user's country, needed for catalog requests.
+// Storefront is the user's country, needed for catalog requests. It also
+// picks the language for catalog texts: the system's ($LANG), when the
+// storefront offers it and it is not the storefront's default anyway.
 func (c *Client) Storefront() string {
 	c.sfOnce.Do(func() {
-		var p page
-		if found, err := c.get("/v1/me/storefront", &p); err == nil && found && len(p.Data) > 0 {
-			c.storefront = p.Data[0].ID
+		var doc struct {
+			Data []struct {
+				ID         string `json:"id"`
+				Attributes struct {
+					Default   string   `json:"defaultLanguageTag"`
+					Supported []string `json:"supportedLanguageTags"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		if found, err := c.get("/v1/me/storefront", &doc); err == nil && found && len(doc.Data) > 0 {
+			sf := doc.Data[0]
+			c.storefront = sf.ID
+			c.lang = pickLang(os.Getenv("LANG"), sf.Attributes.Default, sf.Attributes.Supported)
 		}
 		if c.storefront == "" {
 			c.storefront = "us"
@@ -215,17 +255,122 @@ func (c *Client) Storefront() string {
 	return c.storefront
 }
 
+// pickLang turns a locale like de_DE.UTF-8 into a language tag the
+// storefront supports, matching the language alone if the region differs;
+// "" means the storefront's default.
+func pickLang(locale, def string, supported []string) string {
+	locale, _, _ = strings.Cut(locale, ".")
+	locale, _, _ = strings.Cut(locale, "@")
+	tag := strings.ReplaceAll(locale, "_", "-")
+	if tag == "" || tag == "C" || tag == "POSIX" {
+		return ""
+	}
+	lang, _, _ := strings.Cut(tag, "-")
+	best := ""
+	for _, s := range supported {
+		switch {
+		case strings.EqualFold(s, tag):
+			best = s
+		case best == "" && strings.EqualFold(strings.SplitN(s, "-", 2)[0], lang):
+			best = s
+		}
+	}
+	if strings.EqualFold(best, def) {
+		return ""
+	}
+	return best
+}
+
+// localize adds the language to catalog requests.
+func (c *Client) localize(path string) string {
+	if !strings.HasPrefix(path, "/v1/catalog/") || c.lang == "" || strings.Contains(path, "l=") {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "l=" + url.QueryEscape(c.lang)
+}
+
 func items(rs []resource, kind string, catalog bool) []Item {
 	out := make([]Item, 0, len(rs))
 	for _, r := range rs {
-		a := r.Attributes
-		artist := a.ArtistName
-		if kind == KindPlaylist {
-			artist = a.CuratorName
-		}
-		out = append(out, Item{Kind: kind, ID: r.ID, Name: a.Name, Artist: artist, Catalog: catalog, Artwork: artworkURL(a.Artwork)})
+		out = append(out, item(r, kind, catalog))
 	}
 	return out
+}
+
+func item(r resource, kind string, catalog bool) Item {
+	a := r.Attributes
+	artist := a.ArtistName
+	if kind == KindPlaylist {
+		artist = a.CuratorName
+	}
+	it := Item{Kind: kind, ID: r.ID, Name: a.Name, Artist: artist, Catalog: catalog, Artwork: artworkURL(a.Artwork),
+		Editable: a.CanEdit}
+	var info []string
+	if len(a.ReleaseDate) >= 4 {
+		info = append(info, a.ReleaseDate[:4])
+	}
+	if a.RecordLabel != "" {
+		info = append(info, a.RecordLabel)
+	}
+	if a.TrackCount > 0 {
+		info = append(info, fmt.Sprintf("%d songs", a.TrackCount))
+	}
+	for _, t := range a.AudioTraits {
+		switch t {
+		case "lossless", "hi-res-lossless":
+			info = append(info, "Lossless")
+		case "atmos", "spatial":
+			info = append(info, "Dolby Atmos")
+		}
+	}
+	if a.IsLive {
+		info = append(info, "live")
+	}
+	it.Info = strings.Join(dedupe(info), " · ")
+	for _, n := range []*notes{a.EditorialNotes, a.Description} {
+		if n == nil {
+			continue
+		}
+		if it.Note = plain(n.Short); it.Note == "" {
+			it.Note = plain(n.Standard)
+		}
+		if it.Note != "" {
+			break
+		}
+	}
+	return it
+}
+
+// kindOf maps an API resource type to an Item kind and whether it is from
+// the catalog; ok is false for what brumm does not show (music videos…).
+func kindOf(typ string) (kind string, catalog, ok bool) {
+	catalog = !strings.HasPrefix(typ, "library-")
+	switch strings.TrimPrefix(typ, "library-") {
+	case "albums":
+		return KindAlbum, catalog, true
+	case "playlists":
+		return KindPlaylist, catalog, true
+	case "artists":
+		return KindArtist, catalog, true
+	case "stations":
+		return KindStation, true, true
+	}
+	return "", false, false
+}
+
+// mixed splits a list of any resources into things to open and songs.
+func mixed(rs []resource) ([]Item, []Track) {
+	var its []Item
+	for _, r := range rs {
+		if kind, catalog, ok := kindOf(r.Type); ok {
+			its = append(its, item(r, kind, catalog))
+		}
+	}
+	return its, tracks(rs)
 }
 
 func tracks(rs []resource) []Track {
@@ -240,7 +385,7 @@ func tracks(rs []resource) []Track {
 			id = a.PlayParams.ID
 		}
 		out = append(out, Track{ID: id, Title: a.Name, Artist: a.ArtistName, Album: a.AlbumName,
-			Duration: float64(a.DurationMS) / 1000, Artwork: artworkURL(a.Artwork)})
+			Duration: float64(a.DurationMS) / 1000, Artwork: artworkURL(a.Artwork), Number: a.TrackNumber})
 	}
 	return out
 }
@@ -316,83 +461,21 @@ func (c *Client) AlbumOf(songID string) (Item, error) {
 	return items(p.Data[:1], KindAlbum, catalog)[0], nil
 }
 
-// Results are a catalog search's hits.
-type Results struct {
-	Songs     []Track `json:"songs"`
-	Albums    []Item  `json:"albums"`
-	Artists   []Item  `json:"artists"`
-	Playlists []Item  `json:"playlists"`
-}
-
-func (c *Client) Search(term string) (Results, error) {
-	var doc struct {
-		Results map[string]page `json:"results"`
+// AddToLibrary adds catalog songs, albums or playlists (kind is "songs",
+// "albums" or "playlists") to the library. Apple adds them in the
+// background: they show up in library listings a few seconds later. There
+// is no way back through the API — removing is done in the Music app.
+func (c *Client) AddToLibrary(kind string, ids []string) error {
+	switch kind {
+	case "songs", "albums", "playlists":
+	default:
+		return fmt.Errorf("cannot add %s to the library", kind)
 	}
-	q := url.Values{"term": {term}, "types": {"songs,albums,artists,playlists"}, "limit": {"15"}}
-	_, err := c.get("/v1/catalog/"+c.Storefront()+"/search?"+q.Encode(), &doc)
-	if err != nil {
-		return Results{}, err
+	if len(ids) == 0 {
+		return nil
 	}
-	return Results{
-		Songs:     tracks(doc.Results["songs"].Data),
-		Albums:    items(doc.Results["albums"].Data, KindAlbum, true),
-		Artists:   items(doc.Results["artists"].Data, KindArtist, true),
-		Playlists: items(doc.Results["playlists"].Data, KindPlaylist, true),
-	}, nil
-}
-
-// ratingPath is where a song's rating lives: library songs ("i.…") and
-// catalog songs have separate rating collections.
-func ratingPath(id string) string {
-	if strings.HasPrefix(id, "i.") {
-		return "/v1/me/ratings/library-songs"
-	}
-	return "/v1/me/ratings/songs"
-}
-
-// Loved returns which of ids the user marked as favorites (loved).
-func (c *Client) Loved(ids []string) (map[string]bool, error) {
-	loved := map[string]bool{}
-	groups := map[string][]string{}
-	for _, id := range ids {
-		groups[ratingPath(id)] = append(groups[ratingPath(id)], id)
-	}
-	for path, list := range groups {
-		for i := 0; i < len(list); i += 100 {
-			chunk := list[i:min(i+100, len(list))]
-			var doc struct {
-				Data []struct {
-					ID         string `json:"id"`
-					Attributes struct {
-						Value int `json:"value"`
-					} `json:"attributes"`
-				} `json:"data"`
-			}
-			found, err := c.get(path+"?ids="+url.QueryEscape(strings.Join(chunk, ",")), &doc)
-			if err != nil {
-				return loved, err
-			}
-			if !found {
-				continue
-			}
-			for _, r := range doc.Data {
-				if r.Attributes.Value == 1 {
-					loved[r.ID] = true
-				}
-			}
-		}
-	}
-	return loved, nil
-}
-
-// SetLoved marks a song as a favorite, or clears that.
-func (c *Client) SetLoved(id string, on bool) error {
-	path := ratingPath(id) + "/" + url.PathEscape(id)
-	if !on {
-		return c.send(http.MethodDelete, path, nil, nil)
-	}
-	body := map[string]any{"type": "rating", "attributes": map[string]int{"value": 1}}
-	return c.send(http.MethodPut, path, body, nil)
+	q := url.Values{"ids[" + kind + "]": {strings.Join(ids, ",")}}
+	return c.send(http.MethodPost, "/v1/me/library?"+q.Encode(), nil, nil)
 }
 
 // ArtistOf finds the artist of a song, in the library or the catalog.

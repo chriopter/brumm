@@ -35,8 +35,7 @@ const (
 // Covers never change at an address; Prune bounds the cache by dropping the
 // least recently used.
 func Cached(ctx context.Context, client *http.Client, dir, url string) (image.Image, error) {
-	sum := sha256.Sum256([]byte(url))
-	path := filepath.Join(dir, hex.EncodeToString(sum[:12]))
+	path := cachePath(dir, url)
 	if b, err := os.ReadFile(path); err == nil {
 		if img, err := decode(b); err == nil {
 			now := time.Now()
@@ -65,6 +64,11 @@ func Cached(ctx context.Context, client *http.Client, dir, url string) (image.Im
 		}
 	}
 	return img, nil
+}
+
+func cachePath(dir, url string) string {
+	sum := sha256.Sum256([]byte(url))
+	return filepath.Join(dir, hex.EncodeToString(sum[:12]))
 }
 
 // Prune deletes the least recently used covers in dir until the rest fit

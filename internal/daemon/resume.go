@@ -14,6 +14,7 @@ import (
 // on it — paused, one press of play away.
 type resume struct {
 	IDs     []string `json:"ids"`
+	Station string   `json:"station,omitempty"` // a station plays instead of IDs
 	Source  string   `json:"source"`
 	ID      string   `json:"id"`
 	Pos     float64  `json:"pos"`
@@ -37,7 +38,7 @@ func loadResume() *resume {
 		return nil
 	}
 	var r resume
-	if json.Unmarshal(b, &r) != nil || r.ID == "" || len(r.IDs) == 0 {
+	if json.Unmarshal(b, &r) != nil || !r.playable() {
 		return nil
 	}
 	return &r
@@ -65,14 +66,26 @@ func (r *resume) track(es engine.State) {
 		return
 	}
 	changed := es.ID != r.ID
+	moved := es.Pos != r.Pos
 	r.ID, r.Pos, r.Dur = es.ID, es.Pos, es.Dur
 	r.Title, r.Artist, r.Album, r.Artwork = es.Title, es.Artist, es.Album, es.Artwork
 	if es.Source != "" {
 		r.Source = es.Source
 	}
-	if changed || time.Since(r.savedAt) > 5*time.Second {
+	if changed || (moved && time.Since(r.savedAt) > 5*time.Second) { // paused: nothing to write
 		r.save()
 	}
+}
+
+func (r *resume) playable() bool { return r.Station != "" || (r.ID != "" && len(r.IDs) > 0) }
+
+// play starts what was playing: the station, or the queue at the song and
+// second it stopped.
+func (r *resume) play(eng *engine.Engine) error {
+	if r.Station != "" {
+		return eng.PlayStation(r.Station, r.Source)
+	}
+	return eng.PlayIDs(r.IDs, r.ID, r.Source, r.Pos)
 }
 
 // overlay shows the saved song on an idle player.

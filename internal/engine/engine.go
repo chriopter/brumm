@@ -222,7 +222,13 @@ const launchTimeout = 30 * time.Second
 
 // eval runs js in the page and decodes its value into out.
 func (e *Engine) eval(js string, out any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	return e.evalWait(js, 3*time.Second, false, out)
+}
+
+// evalWait is eval with its own time limit; await makes it wait for a
+// promise the expression returns.
+func (e *Engine) evalWait(js string, limit time.Duration, await bool, out any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	var r struct {
 		Result struct {
@@ -239,6 +245,7 @@ func (e *Engine) eval(js string, out any) error {
 	err := e.cdp.call(ctx, e.session, "Runtime.evaluate", map[string]any{
 		"expression":    js,
 		"returnByValue": true,
+		"awaitPromise":  await,
 	}, &r)
 	if err != nil {
 		return err
@@ -272,6 +279,29 @@ func (e *Engine) State() (State, error) {
 	return s, err
 }
 
+// Watch returns the player state once it is newer than rev — the revision
+// of the last answer, 0 to ask at once — or after heartbeat at the latest.
+// The page answers on its own events, so calling it in a loop follows the
+// player without polling it. A page that has not answered well after the
+// heartbeat is hung, and that is an error.
+func (e *Engine) Watch(rev int64, heartbeat time.Duration) (State, int64, error) {
+	var raw string
+	js := fmt.Sprintf(`window.brumm ? brumm.wait(%d, %d) : new Promise((r) => setTimeout(() => r("{}"), 300))`,
+		rev, heartbeat.Milliseconds())
+	var s State
+	if err := e.evalWait(js, heartbeat+15*time.Second, true, &raw); err != nil {
+		return s, rev, err
+	}
+	var r struct {
+		Rev int64 `json:"rev"`
+	}
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		return s, rev, err
+	}
+	_ = json.Unmarshal([]byte(raw), &r)
+	return s, r.Rev, nil
+}
+
 // Spectrum returns n log-spaced frequency bands, 0–255 each.
 func (e *Engine) Spectrum(n int) ([]int, error) {
 	var bands []int
@@ -299,6 +329,14 @@ func (e *Engine) PlayIDs(ids []string, startID, source string, startAt float64) 
 	}
 	return e.call(`brumm.playIds(%s, %q, %q, %f)`, list, startID, source, startAt)
 }
+
+// PlayStation plays a radio station: endless, chosen by Apple.
+func (e *Engine) PlayStation(id, source string) error {
+	return e.call(`brumm.playStation(%q, %q)`, id, source)
+}
+
+// SetAutoplay lets similar music play on when the queue runs out.
+func (e *Engine) SetAutoplay(on bool) error { return e.call(`brumm.autoplay(%t)`, on) }
 
 // Queue is the current song and what follows it.
 type Queue struct {

@@ -6,12 +6,29 @@
 <script>
 // brumm's playback page. Headless Chrome (with Widevine) loads it from a
 // loopback origin — a secure context, which EME requires — and the daemon
-// drives it through Runtime.evaluate. Everything here is synchronous or
-// fire-and-forget; the daemon polls brumm.state() and brumm.spectrum().
+// drives it through Runtime.evaluate. Commands are synchronous or
+// fire-and-forget. The daemon does not poll for state: it parks one call in
+// brumm.wait(), which returns the moment anything changes (and at least
+// every heartbeat), so a paused player does no work at all. It polls
+// brumm.spectrum() only while someone watches the visualizer.
 //
 // The host substitutes the configuration object for the CFG placeholder.
 const CFG = __BRUMM_CFG__;
-const B = window.brumm = { ready: false, err: '', needsAuth: false, m: null, source: '', gen: 0, pending: null, pv: null, pgen: 0 };
+const B = window.brumm = { m: null, gen: 0, pending: null, pgen: 0, rev: 0 };
+
+// touch says the state changed. Bursts (a song change fires half a dozen
+// MusicKit events) are folded into one answer to the waiting daemon.
+let waiter = null, flushing = 0;
+function touch() {
+  B.rev++;
+  if (waiter && !flushing) flushing = setTimeout(() => { flushing = 0; if (waiter) waiter(); }, 30);
+}
+
+// The fields the daemon reads wake it when they change.
+const seen = { ready: false, err: '', needsAuth: false, source: '', pv: null };
+for (const k of Object.keys(seen)) {
+  Object.defineProperty(B, k, { get: () => seen[k], set: (v) => { if (seen[k] !== v) { seen[k] = v; touch(); } } });
+}
 
 window.addEventListener('error', (e) => { if (!B.ready) B.err = 'page: ' + (e.message || 'script error'); });
 
@@ -47,6 +64,11 @@ document.addEventListener('musickitloaded', async () => {
       if (m.isPlaying) viz.ctx.resume();
       else if (viz.ctx.state === 'running') viz.ctx.suspend();
     });
+    for (const ev of ['playbackStateDidChange', 'nowPlayingItemDidChange', 'queueItemsDidChange',
+                      'queuePositionDidChange', 'playbackDurationDidChange', 'playbackVolumeDidChange',
+                      'shuffleModeDidChange', 'repeatModeDidChange', 'mediaItemStateDidChange']) {
+      m.addEventListener(ev, touch);
+    }
     m.addEventListener('mediaPlaybackError', (e) => {
       B.err = 'playback: ' + errText(e && (e.error || e));
       if (isAuthError(e && (e.error || e))) B.needsAuth = true;
@@ -54,7 +76,9 @@ document.addEventListener('musickitloaded', async () => {
     B.m = m;
     B.ready = true;
     // A play asked for while MusicKit was still loading runs now.
+    if (B.autoplayOn !== undefined) B.autoplay(B.autoplayOn);
     if (B.pending) { const p = B.pending; B.pending = null; B.playIds(...p); }
+    if (B.pendingStation) { const p = B.pendingStation; B.pendingStation = null; B.playStation(...p); }
   } catch (e) {
     B.err = 'musickit: ' + errText(e);
     if (isAuthError(e)) B.needsAuth = true;
@@ -91,6 +115,14 @@ function settle(m) {
     m.addEventListener('playbackStateDidChange', done);
     setTimeout(done, 200);
   });
+}
+
+// dropPreview ends a preview clip without resuming what it interrupted:
+// the caller is starting something else. A clip still loading is cancelled.
+function dropPreview() {
+  B.pgen++;
+  if (viz.clip) viz.clip.pause();
+  B.pv = null;
 }
 
 async function play(m) {
@@ -133,6 +165,7 @@ Object.assign(B, {
   async playIds(ids, startId, source, startAt) {
     const m = B.m;
     if (!m) { B.pending = [ids, startId, source, startAt]; return; }
+    dropPreview();
     const gen = ++B.gen;
     B.err = '';
     const k = Math.max(0, ids.indexOf(startId));
@@ -164,19 +197,52 @@ Object.assign(B, {
       if (isAuthError(e)) B.needsAuth = true;
     }
   },
+  // playStation plays a station; the queue is Apple's, endless.
+  async playStation(id, source) {
+    const m = B.m;
+    if (!m) { B.pendingStation = [id, source]; return; }
+    dropPreview();
+    const gen = ++B.gen;
+    B.err = '';
+    try {
+      await settle(m);
+      if (gen !== B.gen) return;
+      await m.setQueue({ station: id });
+      if (gen !== B.gen) return;
+      B.source = source;
+      await play(m);
+    } catch (e) {
+      if (gen !== B.gen) return;
+      B.err = 'station: ' + errText(e);
+      if (isAuthError(e)) B.needsAuth = true;
+    }
+  },
+  // autoplay keeps similar music coming after the queue ends. MusicKit
+  // does not document it; where it is missing this does nothing.
+  autoplay(on) {
+    B.autoplayOn = on;
+    if (B.m) try { B.m.autoplayEnabled = on; } catch (_) {}
+  },
+  // During a preview, play/pause is about the clip: toggle ends it and
+  // resumes the music (as letting go of space does), pause just ends it.
   toggle() {
     const m = B.m;
     if (!m) return;
+    if (B.pv) { B.stopPreview(); return; }
     if (m.isPlaying) m.pause(); else play(m).catch((e) => { B.err = 'play: ' + errText(e); });
   },
-  play() { if (B.m && !B.m.isPlaying) play(B.m).catch((e) => { B.err = 'play: ' + errText(e); }); },
-  pause() { if (B.m) B.m.pause(); },
-  next() { if (B.m) B.m.skipToNextItem().catch(() => {}); },
+  play() {
+    dropPreview();
+    if (B.m && !B.m.isPlaying) play(B.m).catch((e) => { B.err = 'play: ' + errText(e); });
+  },
+  pause() { dropPreview(); if (B.m) B.m.pause(); },
+  next() { dropPreview(); if (B.m) B.m.skipToNextItem().catch(() => {}); },
   // Previous restarts the song once it is past three seconds in, like
   // every hardware player; before that it goes back a song.
   prev() {
     const m = B.m;
     if (!m) return;
+    dropPreview();
     if ((m.currentPlaybackTime || 0) > 3) m.seekToTime(0).catch(() => {});
     else m.skipToPreviousItem().catch(() => {});
   },
@@ -194,7 +260,7 @@ Object.assign(B, {
     }
     return JSON.stringify(out);
   },
-  jump(i) { if (B.m) B.m.changeToMediaAtIndex(i).then(() => play(B.m)).catch((e) => { B.err = 'play: ' + errText(e); }); },
+  jump(i) { dropPreview(); if (B.m) B.m.changeToMediaAtIndex(i).then(() => play(B.m)).catch((e) => { B.err = 'play: ' + errText(e); }); },
   // enqueue adds songs after the current one (next) or at the end.
   async enqueue(ids, next) {
     const m = B.m;
@@ -256,10 +322,21 @@ Object.assign(B, {
   },
   setToken(t) { if (B.m) { B.m.musicUserToken = t; B.needsAuth = false; B.err = ''; } },
 
+  // wait answers with the state once it is newer than rev, or after ms.
+  wait(rev, ms) {
+    if (waiter) waiter(); // a stale call: answer it so it does not linger
+    return new Promise((resolve) => {
+      if (B.rev !== rev) { resolve(B.state()); return; }
+      const done = () => { clearTimeout(t); if (waiter === done) waiter = null; resolve(B.state()); };
+      const t = setTimeout(done, ms);
+      waiter = done;
+    });
+  },
+
   state() {
     const m = B.m;
     const s = {
-      ready: B.ready, err: B.err, needsAuth: B.needsAuth, playing: false,
+      rev: B.rev, ready: B.ready, err: B.err, needsAuth: B.needsAuth, playing: false,
       title: '', artist: '', album: '', artwork: '', pos: 0, dur: 0,
       index: -1, length: 0, source: B.source, volume: 1, id: '', shuffle: false, repeat: 0,
       preview: B.pv ? { title: B.pv.title, artist: B.pv.artist, artwork: B.pv.artwork } : null,
@@ -321,6 +398,13 @@ Object.assign(B, {
     return out;
   },
 });
+
+// A command changes state a moment after it runs; tell the daemon then too.
+for (const k of ['playIds', 'playStation', 'autoplay', 'toggle', 'play', 'pause', 'next', 'prev', 'jump', 'enqueue', 'seek',
+                 'volume', 'shuffle', 'repeat', 'preview', 'stopPreview', 'setToken']) {
+  const f = B[k];
+  B[k] = function (...a) { const r = f.apply(B, a); touch(); setTimeout(touch, 300); return r; };
+}
 </script>
 <script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"
         onerror="window.brumm.err = 'could not load MusicKit JS'"></script>

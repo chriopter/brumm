@@ -19,18 +19,23 @@ import (
 
 // Commands.
 const (
+	CmdAdd       = "add"       // add IDs (of kind List: songs, albums, playlists) to the library
 	CmdSubscribe = "subscribe" // push state (and spectrum when Bands > 0)
 	CmdList      = "list"      // List: one of the lists below → Items or Tracks
-	CmdOpen      = "open"      // Item → Tracks (playlist, album) or Items (artist)
-	CmdSearch    = "search"    // Query → Results
+	CmdOpen      = "open"      // Item → Tracks (playlist, album) or Shelves (artist, charts)
+	CmdSearch    = "search"    // Query → Shelves
+	CmdHome      = "home"      // → Shelves: recently played, radio, recommendations…
+	CmdStation   = "station"   // Item (a station, or an artist) or Start (a song): play its station
+	CmdPlaylist  = "playlist"  // IDs to Start (a playlist id), or to a new playlist named Query → Items
+	CmdAutoplay  = "autoplay"  // Value 1: similar music plays on when the queue ends
 	CmdPlay      = "play"      // IDs, Start, Source
 	CmdAlbum     = "album"     // Start: a song id → Items: its album
 	CmdPreview   = "preview"   // Start: a song id; Value 0 stops the preview
 	CmdQueue     = "queue"     // Value: how many → Tracks from the current song, Pos
 	CmdJump      = "jump"      // Value: queue index to play
 	CmdEnqueue   = "enqueue"   // IDs; Value 1 plays them next, 0 at the end
-	CmdLoved     = "loved"     // IDs → IDs: those marked as favorites
-	CmdLove      = "love"      // Start: a song id; Value 1 favorite, 0 not
+	CmdRatings   = "ratings"   // Refs → Ratings: those loved (1) or disliked (-1)
+	CmdRate      = "rate"      // Refs[0]; Value 1 love, -1 dislike, 0 neither
 	CmdArtist    = "artist"    // Start: a song id → Items: its artist
 	CmdLink      = "link"      // Start: a song id → Link: its music.apple.com address
 	CmdUpdate    = "update"    // Value 1 installs the available update; 0 checks for one
@@ -63,8 +68,10 @@ type Request struct {
 	Start  string      `json:"start,omitempty"`
 	Source string      `json:"source,omitempty"`
 	Value  float64     `json:"value,omitempty"`
+	Refs   []apple.Ref `json:"refs,omitempty"`
 	Bands  int         `json:"bands,omitempty"`
 	Wave   int         `json:"wave,omitempty"` // waveform samples wanted per frame
+	FPS    int         `json:"fps,omitempty"`  // spectrum frames per second wanted; 25 by default
 }
 
 // Status is the daemon's lifecycle phase.
@@ -93,7 +100,8 @@ type Message struct {
 	Error    string         `json:"error,omitempty"`
 	Items    []apple.Item   `json:"items,omitempty"`
 	Tracks   []apple.Track  `json:"tracks,omitempty"`
-	Results  *apple.Results `json:"results,omitempty"`
+	Shelves  []apple.Shelf  `json:"shelves,omitempty"`
+	Ratings  map[string]int `json:"ratings,omitempty"`
 	State    *State         `json:"state,omitempty"`
 	Spectrum []int          `json:"spectrum,omitempty"`
 	Wave     []int          `json:"wave,omitempty"`

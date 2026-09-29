@@ -6,12 +6,20 @@
 
 ## Features
 
-- **Everything in Apple Music:** playlists, albums, artists, your songs, a catalog search that answers as you type, and the queue. Paste a music.apple.com link to open it.
-- **Keyboard and mouse:** <kbd>←</kbd> <kbd>→</kbd> switch sections, <kbd>shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> seek; click to open or play, drag the divider, click the bar to seek; <kbd>?</kbd> lists every key.
-- **Preview:** hold <kbd>space</kbd> (or press <kbd>o</kbd>) on a song to hear it; your music continues after.
+- **Everything in Apple Music:** your playlists, albums, artists and songs, and the queue. Paste a music.apple.com link to open it.
+- **Home:** recently played and recently added, heavy rotation, Apple's picks for you, and the top charts.
+- **Search as you type:** suggestions, top results, the catalog by kind (stations too), and matches in your own library.
+- **Artists:** their station, top songs, latest release, albums, singles, and artists like them. Click the artist or album under the title to open it.
+- **Radio:** a tab with your station, Apple's live radio and the stations you played; <kbd>R</kbd> starts a station from the selected song or artist; with autoplay on, similar music plays on when the queue ends.
+- **Your library:** <kbd>*</kbd> loves and <kbd>d</kbd> dislikes a song, album, playlist or station; <kbd>i</kbd> adds from the catalog to your library; <kbd>P</kbd> adds to a playlist or makes a new one. Albums show their year, label, quality and Apple's notes.
+- **Queue and preview:** <kbd>z</kbd> queues, <kbd>Z</kbd> plays next; hold <kbd>space</kbd> (or press <kbd>O</kbd>) on a song to hear its clip, and your music continues after. Scrolling shows the selected cover on top of the playing one for a moment.
+- **Keyboard and mouse:** <kbd>←</kbd> <kbd>→</kbd> or <kbd>1</kbd>–<kbd>8</kbd> switch sections, <kbd>shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> seek; click to open or play, drag the divider, click the bar to seek. <kbd>?</kbd> lists every key, and the options can put each key right on its button; the footer's keys are buttons too.
 - **Visualizer:** <kbd>f</kbd> for fullscreen, ten styles from Winamp bars to a MilkDrop ring.
-- **Favorites and queue:** <kbd>*</kbd> to love a song, <kbd>z</kbd> to queue it, <kbd>Z</kbd> to play it next.
-- **At home in Omarchy:** your theme's colors, media keys, a widget in the bar; music keeps playing when the window closes and picks up where you left off.
+- **Options:** <kbd>o</kbd> opens a few switches: covers as pixel art, smooth, or the original image (kitty, Ghostty), the level meter, scrolling names, cover cards, autoplay, keys right on the buttons, and the visualizer at 30, 60 or 120 fps. Changes show at once.
+- **Light in the background:** nothing polls while music is paused, the visualizer runs only while you can see it, and after ten idle minutes the player quits until you press play.
+- **At home in Omarchy:** your theme's colors, media keys, a widget in the bar. <kbd>Q</kbd> or closing the window leaves the music playing, and it picks up where you left off; <kbd>q</kbd> stops it and quits.
+
+What Apple's API does not allow, brumm cannot do either: deleting or renaming playlists and removing songs from them or from the library (use the Music app), lyrics, lossless or Dolby Atmos playback (MusicKit on the web streams 256 kbps AAC), crossfade, and Replay.
 
 ## Install
 
@@ -20,7 +28,7 @@ curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.s
 brumm login
 ```
 
-Then run `brumm`, or click the music widget in the bar. You need an Apple Music subscription.
+`brumm login` opens the player once you are signed in. Later, run `brumm` or click the music widget in the bar. You need an Apple Music subscription.
 
 To check the installer before running it, download it, verify that GitHub built it from this repository, then run it:
 

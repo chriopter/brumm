@@ -265,8 +265,17 @@ func Args() []string {
 		"--disable-blink-features=AutomationControlled",
 		// Keep Chrome from registering its own MPRIS player and grabbing
 		// media keys: brumm's daemon is the one player.
-		"--disable-features=HardwareMediaKeyHandling,MediaSessionService,CertificateTransparencyComponentUpdater",
+		"--disable-features=HardwareMediaKeyHandling,MediaSessionService,CertificateTransparencyComponentUpdater,Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
 		"--disable-component-update",
+		// Nothing a music page needs, and each one is a timer or a request.
+		"--disable-sync",
+		"--disable-extensions",
+		"--disable-default-apps",
+		"--disable-client-side-phishing-detection",
+		"--disable-domain-reliability",
+		"--disable-breakpad",
+		"--metrics-recording-only",
+		"--no-pings",
 		// Memory: no GPU process, no /dev/shm pressure, capped V8 heap.
 		"--disable-gpu",
 		"--disable-dev-shm-usage",
