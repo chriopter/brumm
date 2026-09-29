@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
+	"os/exec"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -23,17 +26,47 @@ const (
 var coverStyles = []string{coverPixel, coverSmooth, coverOriginal}
 
 // The fullscreen visualizer's frame rates; the renderer allows up to 120.
-var drawRates = []int{30, 60, 120}
+// 0 is auto: the screen's own refresh rate.
+var drawRates = []int{0, 30, 60, 120}
 
 const maxDrawFPS = 120
 
-func (o options) drawFPS() int {
-	for _, r := range drawRates {
-		if r == o.VizFPS {
-			return r
+// drawFPS is the rate the fullscreen visualizer draws at.
+func (m *Model) drawFPS() int {
+	if r := m.opts.VizFPS; r == 30 || r == 60 || r == 120 {
+		return r
+	}
+	return m.refresh
+}
+
+// screenRefresh is the focused monitor's refresh rate, as Hyprland reports
+// it, kept between 30 and what the renderer allows; 60 if unknown.
+func screenRefresh() int {
+	out, err := exec.Command("hyprctl", "monitors", "-j").Output()
+	if err != nil {
+		return 60
+	}
+	var mons []struct {
+		Focused bool    `json:"focused"`
+		Rate    float64 `json:"refreshRate"`
+	}
+	if json.Unmarshal(out, &mons) != nil {
+		return 60
+	}
+	for _, mon := range mons {
+		if mon.Focused && mon.Rate > 0 {
+			return max(30, min(maxDrawFPS, int(math.Round(mon.Rate))))
 		}
 	}
 	return 60
+}
+
+// fpsLabel names the draw rate for the visualizer's button.
+func (m *Model) fpsLabel() string {
+	if m.opts.VizFPS == 0 {
+		return fmt.Sprintf("auto %d fps", m.refresh)
+	}
+	return fmt.Sprintf("%d fps", m.opts.VizFPS)
 }
 
 // options wraps the saved switches with what the menu needs.
@@ -58,7 +91,6 @@ func (o options) cover() string {
 // The menu's rows, in order: two choices, then plain switches.
 const (
 	optCover = iota
-	optViz
 	optMeter
 	optScroll
 	optBarScroll
@@ -108,8 +140,6 @@ func (m *Model) changeOption(i, dir int) tea.Cmd {
 		}
 		m.opts.Cover = step(coverStyles, cur, dir)
 		m.rendered, m.thumbs = map[art.Size][]string{}, map[string][]string{}
-	case optViz:
-		m.opts.VizFPS = step(drawRates, m.opts.drawFPS(), dir)
 	case optMeter:
 		m.opts.NoMeter = !m.opts.NoMeter
 		cmd = m.subscribe() // no meter, no spectrum stream
@@ -150,10 +180,6 @@ func (m *Model) optionsBox() []string {
 		}
 		return strings.Join(out, "    ")
 	}
-	var rates []string
-	for _, r := range drawRates {
-		rates = append(rates, fmt.Sprint(r))
-	}
 	label := func(s string) string { return fmt.Sprintf("%-12s", s) }
 	cover := choice(coverStyles, m.opts.cover())
 	if m.opts.Cover == coverOriginal && !art.KittySupported() {
@@ -161,7 +187,6 @@ func (m *Model) optionsBox() []string {
 	}
 	rows := [numOptions]string{
 		optCover:     label("cover") + cover,
-		optViz:       label("visualizer") + choice(rates, fmt.Sprint(m.opts.drawFPS())) + sDim.Render("  fps"),
 		optMeter:     check(!m.opts.NoMeter) + "   level meter",
 		optScroll:    check(!m.opts.NoScroll) + "   scroll long names",
 		optBarScroll: check(!m.opts.NoBarScroll) + "   scroll in the bar",

@@ -640,6 +640,9 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		reply.Link, err = api.Link(r.Start)
 		return d.authCheck(err)
 	case ipc.CmdUpdate:
+		if r.Value == 2 { // look now and say: Link is the newest release, Pos 1 if it is newer
+			return d.checkNowFor(reply)
+		}
 		if r.Value == 0 { // just look
 			select {
 			case d.checkNow <- struct{}{}:

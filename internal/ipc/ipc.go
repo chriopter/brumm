@@ -110,6 +110,7 @@ type Message struct {
 	Pos      int            `json:"pos,omitempty"`
 	IDs      []string       `json:"ids,omitempty"`
 	Link     string         `json:"link,omitempty"`
+	Version  string         `json:"version,omitempty"` // the daemon's own, with an update check
 }
 
 // Client is one connection to the daemon.

@@ -119,14 +119,15 @@ type (
 		item apple.Item
 		err  error
 	}
-	loginMsg struct{ err error }
-	errMsg   struct{ err error }
-	tickMsg  struct{ seq int }
-	holdMsg  struct{ seq int } // space is still down after holdDelay
-	seekMsg  struct{ seq int } // the last seek key was a moment ago
-	typedMsg struct{ seq int } // the search query stopped changing
-	flashMsg string
-	openMsg  struct { // open an item found by a lookup, select a song in it
+	loginMsg   struct{ err error }
+	errMsg     struct{ err error }
+	tickMsg    struct{ seq int }
+	refreshMsg int               // the screen's refresh rate, found at start
+	holdMsg    struct{ seq int } // space is still down after holdDelay
+	seekMsg    struct{ seq int } // the last seek key was a moment ago
+	typedMsg   struct{ seq int } // the search query stopped changing
+	flashMsg   string
+	openMsg    struct { // open an item found by a lookup, select a song in it
 		item apple.Item
 		song string
 	}
@@ -168,6 +169,9 @@ type Model struct {
 	pending *pendingPlay // a song started and shown, not yet reported playing
 
 	cardSize art.Size // the size cards were last drawn at, for drawing ahead
+	refresh  int      // the screen's refresh rate: the visualizer's auto rate
+
+	upd *updatePopup // the update check's answer, while it shows
 
 	seekTo  float64 // where pending seek keys point
 	seekAt  time.Time
@@ -245,6 +249,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		lastVol:    1,
 		split:      loadSplit(),
 		opts:       loadOptions(),
+		refresh:    60,
 		kitty:      map[string]*kittyImage{},
 		vizStyle:   vizOpening,
 		vizPrev:    -1,
@@ -262,7 +267,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), m.schedule(frameEvery), m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
+	return tea.Batch(m.listen(), m.schedule(frameEvery), func() tea.Msg { return refreshMsg(screenRefresh()) }, m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
 		m.send(ipc.Request{Cmd: ipc.CmdUpdate})) // look for an update on every start
 }
 
@@ -290,8 +295,9 @@ func (m *Model) nextTick() (time.Duration, bool) {
 	case m.full:
 		// The visualizer moves by the clock, so it draws at the display's
 		// pace, not the spectrum's: its motion is as smooth as the rate.
-		return time.Second / time.Duration(m.opts.drawFPS()), true
+		return time.Second / time.Duration(m.drawFPS()), true
 	case m.full || m.marquee || m.flash != "" || m.thumbBusy || m.kittyBusy || len(m.kittyWant) > 0 || m.state.Preview != nil ||
+		(m.upd != nil && (m.upd.checking || m.upd.installing)) ||
 		m.state.Status == ipc.StatusStarting || m.cur().loading:
 		return frameEvery, true
 	case m.cardShown:
@@ -560,6 +566,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case kittyMsg:
 		return m, m.kittySent(msg)
+	case updateMsg:
+		m.updateChecked(msg)
+	case installedMsg:
+		m.updateInstalled(msg)
+	case refreshMsg:
+		m.refresh = int(msg)
 	case thumbMsg:
 		m.thumbBusy = false
 		if len(m.thumbs) > 150 {
@@ -677,6 +689,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.spaceUp()
 		}
 	case tea.KeyPressMsg:
+		if m.upd != nil {
+			return m, m.updateKey(msg.String())
+		}
 		if m.pick != nil {
 			return m, m.pickerKey(msg)
 		}
@@ -700,6 +715,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.key(msg.String())
 	case tea.MouseClickMsg:
+		if m.upd != nil {
+			return m, m.updateClick(msg.Mouse().X, msg.Mouse().Y)
+		}
 		if m.pick != nil {
 			return m, m.pickerClick(msg.Mouse().X, msg.Mouse().Y)
 		}
@@ -1088,6 +1106,10 @@ func (m *Model) fullKey(k string) (tea.Cmd, bool) {
 		m.vizList, m.vizSel, m.vizFrom = true, m.vizStyle, m.vizStyle
 	case "a":
 		m.toggleVizCycle()
+	case "F":
+		m.opts.VizFPS = step(drawRates, m.opts.VizFPS, 1)
+		m.opts.save()
+		m.setFlash("visualizer: " + m.fpsLabel())
 	default:
 		i, ok := vizDigit(k)
 		if !ok {
@@ -1292,17 +1314,7 @@ func (m *Model) key(k string) tea.Cmd {
 	case "y":
 		return m.copyLink()
 	case "U":
-		if m.state.Update == "" {
-			return nil
-		}
-		m.setFlash("installing " + m.state.Update + "…")
-		client := m.client
-		return func() tea.Msg {
-			if _, err := client.Do(ipc.Request{Cmd: ipc.CmdUpdate, Value: 1}); err != nil {
-				return errMsg{err}
-			}
-			return flashMsg("updated — brumm restarts into it at the next pause or song change")
-		}
+		return m.checkUpdate()
 	case "esc", "h", "backspace":
 		if m.help {
 			m.help = false

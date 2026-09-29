@@ -118,6 +118,8 @@ func (m *Model) View() tea.View {
 	case m.full && m.vizList:
 		v.Content = m.overlay(content, m.vizListBox())
 	case m.full:
+	case m.upd != nil:
+		v.Content = m.overlay(content, m.updateBox())
 	case m.pick != nil:
 		v.Content = m.overlay(content, m.pickerBox())
 	case m.optOpen:
@@ -643,7 +645,7 @@ func (m *Model) helpLines() []stageLine {
 		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"← → 1–8", "sections"}, {"/", "search (paste a music.apple.com link to open it)"}, {"a A", "the song's album / artist (or click them)"}, {"c", "go to what's playing"}}},
 		{"play", [][2]string{{"space", "play / pause"}, {"hold space  O", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"R", "radio: a station from the song or artist"}, {"z Z", "add to queue / play next"}, {"shift ← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
 		{"library", [][2]string{{"* d", "love / dislike"}, {"i", "add to your library"}, {"P", "add to a playlist, or a new one"}, {"y", "copy the song's link"}}},
-		{"brumm", [][2]string{{"?", "this list (keys on the buttons: in the options)"}, {"o", "options: covers, autoplay and more"}, {"f", "fullscreen visualizer (tab: next, v: all styles, a: auto-change)"}, {"[ ]", "narrower / wider list"}, {"Q", "close, music keeps playing"}, {"q", "quit: stop the music"}, {"shift+L", "sign in again"}, {"U", "install an available update"}}},
+		{"brumm", [][2]string{{"?", "this list (keys on the buttons: in the options)"}, {"o", "options: covers, autoplay and more"}, {"f", "fullscreen visualizer (tab: next, v: all styles, a: auto-change, F: frame rate)"}, {"[ ]", "narrower / wider list"}, {"Q", "close, music keeps playing"}, {"q", "quit: stop the music"}, {"shift+L", "sign in again"}, {"U", "look for an update, install it"}}},
 	}
 	var out []stageLine
 	for i, g := range groups {
@@ -800,7 +802,8 @@ func (m *Model) fullscreen() string {
 		auto = sDim.Render("○")
 	}
 	buttons := []struct{ key, label, action string }{
-		{"tab", vizNames[m.vizStyle], "tab"}, {"v", "styles", "v"}, {"a", "auto " + auto, "a"}, {"f", "close", "f"},
+		{"tab", vizNames[m.vizStyle], "tab"}, {"v", "styles", "v"}, {"a", "auto " + auto, "a"},
+		{"F", m.fpsLabel(), "F"}, {"f", "close", "f"},
 	}
 	var parts []string
 	for _, b := range buttons {

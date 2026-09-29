@@ -173,3 +173,29 @@ func (d *Daemon) restartForUpdate(playing bool) {
 	log.Printf("restarting into the updated program")
 	os.Exit(ExitUpdated)
 }
+
+// checkNowFor answers "is there an update?" right away: the version running,
+// the newest release, and whether it is newer. A newer one is offered as
+// the daily check would.
+func (d *Daemon) checkNowFor(reply *ipc.Message) error {
+	d.mu.Lock()
+	current := d.version
+	if d.installed != "" {
+		current = d.installed
+	}
+	d.mu.Unlock()
+	reply.Version = current
+	if !update.Managed(d.version) {
+		return fmt.Errorf("this brumm (%s) was built from source; update it with bin/update", d.version)
+	}
+	tag, err := update.Latest()
+	if err != nil {
+		return err
+	}
+	reply.Link = tag
+	if update.Newer(tag, current) {
+		reply.Pos = 1
+		d.offerUpdate(tag)
+	}
+	return nil
+}

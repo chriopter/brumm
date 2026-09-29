@@ -296,3 +296,41 @@ func TestCardDrawnAtOnce(t *testing.T) {
 		t.Fatalf("the next row's card is not drawn ahead: %+v", w)
 	}
 }
+
+// U always answers: checking, then the newest already or one to install.
+func TestUpdatePopup(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height = 120, 35
+	m.upd = &updatePopup{checking: true}
+	if !strings.Contains(ansi.Strip(m.View().Content), "looking for a new release") {
+		t.Fatal("no word while checking")
+	}
+	m.updateChecked(updateMsg{reply: ipc.Message{Version: "v0.5.2", Link: "v0.5.2"}})
+	if !strings.Contains(ansi.Strip(m.View().Content), "v0.5.2 is the newest version") {
+		t.Fatal("no word that this is the newest")
+	}
+	m.updateKey("esc")
+	if m.upd != nil {
+		t.Fatal("esc does not close")
+	}
+	m.upd = &updatePopup{}
+	m.updateChecked(updateMsg{reply: ipc.Message{Version: "v0.5.2", Link: "v0.5.3", Pos: 1}})
+	if out := ansi.Strip(m.View().Content); !strings.Contains(out, "v0.5.3 is available") || !strings.Contains(out, "install") {
+		t.Fatal("a newer release is not offered")
+	}
+}
+
+// The visualizer draws at the screen's rate unless told otherwise; F steps.
+func TestAutoFPS(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.refresh = 144
+	if m.drawFPS() != 144 || m.fpsLabel() != "auto 144 fps" {
+		t.Fatalf("auto draws at %d (%s)", m.drawFPS(), m.fpsLabel())
+	}
+	m.full = true
+	m.fullKey("F")
+	if m.drawFPS() != 30 {
+		t.Fatalf("F went to %d", m.drawFPS())
+	}
+}
