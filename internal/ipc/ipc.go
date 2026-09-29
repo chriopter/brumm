@@ -129,6 +129,11 @@ func Dial() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewClient(conn), nil
+}
+
+// NewClient talks to a daemon over conn.
+func NewClient(conn net.Conn) *Client {
 	c := &Client{
 		conn:    conn,
 		enc:     json.NewEncoder(conn),
@@ -136,7 +141,7 @@ func Dial() (*Client, error) {
 		events:  make(chan Message, 256),
 	}
 	go c.read()
-	return c, nil
+	return c
 }
 
 func (c *Client) read() {

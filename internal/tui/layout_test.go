@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
+	"net"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 
 	"github.com/chriopter/brumm/internal/apple"
 	"github.com/chriopter/brumm/internal/art"
+	"github.com/chriopter/brumm/internal/ipc"
 )
 
 // lastCover is the size the stage's cover is drawn at.
@@ -244,7 +247,7 @@ func withNext(m *Model, n int) {
 		q = append(q, track(fmt.Sprint(i+2), al), track(fmt.Sprint(i+100), al))
 		m.covers[al+".jpg"] = solid(color.RGBA{uint8(40 * i), 90, 200, 255})
 	}
-	m.setNext(upcoming(q, 0, m.coverURL))
+	m.setNext(upcoming(q, 0, m.coverURL), nil, 0)
 	m.View()
 	for w := m.nextThumbWant(); w.key != ""; w = m.nextThumbWant() {
 		m.thumbs[w.key] = drawCover(m.opts.cover(), m.covers[w.url], w.size)
@@ -311,7 +314,7 @@ func TestUpNextStrip(t *testing.T) {
 	}
 
 	m.height, m.split = 55, 0.72
-	m.setNext(upcoming(nil, 0, m.coverURL))
+	m.setNext(upcoming(nil, 0, m.coverURL), nil, 0)
 	widths(t, m)
 	if m.geo.upnext[0] != (rect{}) {
 		t.Fatal("up next with nothing coming")
@@ -321,5 +324,268 @@ func TestUpNextStrip(t *testing.T) {
 	widths(t, m)
 	if m.geo.upnext[0] != (rect{}) {
 		t.Fatal("up next with nothing playing")
+	}
+}
+
+// albumQueue is the playing song and n more of its album, the kth by
+// someone else.
+func albumQueue(m *Model, n, k int) []apple.Track {
+	q := []apple.Track{{ID: m.state.ID, Title: m.state.Title, Artist: m.state.Artist, Album: m.state.Album, Artwork: m.coverURL, Number: 1}}
+	for i := range n {
+		t := apple.Track{ID: fmt.Sprint(i + 2), Title: fmt.Sprintf("song %d", i+2), Artist: m.state.Artist,
+			Album: m.state.Album, Artwork: m.coverURL, Number: i + 2, Duration: 200}
+		if i == k {
+			t.Artist = "M83 feat. Zola"
+		}
+		q = append(q, t)
+	}
+	return q
+}
+
+// With only the rest of the album coming, its songs are listed instead:
+// as many as fit, a click plays the one clicked, drawn once. Another
+// album coming brings the covers back.
+func TestUpNextSongs(t *testing.T) {
+	m := playingModel(120, 60)
+	m.nextSeq = 1
+	q := albumQueue(m, 11, 2)
+	m.gotNext(nextMsg{seq: 1, tracks: q, pos: 4, ok: true})
+	if m.next != nil || len(m.songs) != songMax || m.ahead != 11 {
+		t.Fatalf("covers %v, songs %d, ahead %d", m.next, len(m.songs), m.ahead)
+	}
+	widths(t, m)
+	r := m.geo.upsongs
+	if r == (rect{}) || r.y0 <= m.geo.play.y0 || r.x1-r.x0 != m.stageW() {
+		t.Fatalf("songs at %v, controls %v", r, m.geo.play)
+	}
+	n := r.y1 - r.y0
+	out := ansi.Strip(m.View().Content)
+	for _, s := range []string{"up next", " 2  song 2", "song 4  M83 feat. Zola", "3:20", fmt.Sprintf("+%d more", 11-n)} {
+		if !strings.Contains(out, s) {
+			t.Fatalf("no %q in\n%s", s, out)
+		}
+	}
+	if strings.Contains(out, "song 3  M83") {
+		t.Fatal("the playing artist repeated")
+	}
+	for i := range n {
+		if pos := m.nextAt(r.x0+3, r.y0+i); pos != 5+i {
+			t.Fatalf("row %d plays %d, want %d", i, pos, 5+i)
+		}
+		if m.shapeAt(r.x1-1, r.y0+i) != shapePointer {
+			t.Fatal("no hand over a song up next")
+		}
+	}
+	if m.nextAt(r.x0, r.y1) != -1 || m.shapeAt(r.x0, r.y1) == shapePointer {
+		t.Fatal("the more line plays")
+	}
+	if _, ok := m.nextClick(r.x0, r.y0); !ok {
+		t.Fatal("a click on a song plays nothing")
+	}
+
+	// Drawn once: the next frame splices the same rows, and the same
+	// answer again changes nothing.
+	rows := &m.songDraw.rows[0]
+	m.state.Pos = 100
+	m.gotNext(nextMsg{seq: 1, tracks: q, pos: 4, ok: true})
+	m.View()
+	if &m.songDraw.rows[0] != rows {
+		t.Fatal("the list was drawn again")
+	}
+
+	// Short: fewer rows, then none below two.
+	for h := 50; h >= 20; h-- {
+		m.height = h
+		widths(t, m)
+		if r := m.geo.upsongs; r != (rect{}) && (r.y1-r.y0 < 1 || r.y0 <= m.geo.play.y0 || r.y1 > m.height-2) {
+			t.Fatalf("height %d: songs at %v, controls %v", h, r, m.geo.play)
+		}
+	}
+	m.height = 20
+	widths(t, m)
+	if m.geo.upsongs != (rect{}) || m.upSongs(m.stageW(), 3) != nil {
+		t.Fatal("songs up next in too little room")
+	}
+	if l := m.upSongs(m.stageW(), 4); len(l) != 4 || !strings.Contains(ansi.Strip(l[3].text), "more") {
+		t.Fatal("two rows free: not one song and how many more")
+	}
+
+	// Two songs left: no more line.
+	m.height = 60
+	m.gotNext(nextMsg{seq: 1, tracks: q[:3], pos: 4, ok: true})
+	widths(t, m)
+	if r := m.geo.upsongs; r.y1-r.y0 != 2 || strings.Contains(ansi.Strip(m.View().Content), "more") {
+		t.Fatalf("two songs at %v", r)
+	}
+
+	// Another album after: its cover, not the songs.
+	q = append(q, track("20", "B"))
+	m.gotNext(nextMsg{seq: 1, tracks: q, pos: 4, ok: true})
+	widths(t, m)
+	if len(m.next) != 1 || m.songs != nil || m.geo.upsongs != (rect{}) {
+		t.Fatalf("covers %v, songs %v at %v", m.next, m.songs, m.geo.upsongs)
+	}
+
+	// Nothing after the playing song, nothing playing: nothing.
+	m.gotNext(nextMsg{seq: 1, tracks: q[:1], pos: 4, ok: true})
+	widths(t, m)
+	if m.songs != nil || m.geo.upsongs != (rect{}) || strings.Contains(ansi.Strip(m.View().Content), "up next") {
+		t.Fatal("up next with nothing coming")
+	}
+	m.gotNext(nextMsg{seq: 1, tracks: albumQueue(m, 3, -1), pos: 4, ok: true})
+	m.state.Title, m.state.ID = "", ""
+	widths(t, m)
+	if m.geo.upsongs != (rect{}) {
+		t.Fatal("up next with nothing playing")
+	}
+}
+
+// A tall window with the stage as narrow as it goes, a playlist of songs
+// from as many albums: covers still come up next, fewer but each worth
+// showing, and nothing leaves the stage.
+func TestUpNextNarrow(t *testing.T) {
+	for _, aspect := range []float64{1.65, 2, 2.2, 2.5} {
+		m := playingModel(120, 55)
+		m.cellAspect, m.split = aspect, 0.95
+		m.nextSeq = 1
+		q := []apple.Track{{ID: m.state.ID, Title: m.state.Title, Artist: m.state.Artist, Album: m.state.Album, Artwork: m.coverURL}}
+		for i := range 20 {
+			q = append(q, track(fmt.Sprintf("i.%d", i), fmt.Sprint("album ", i)))
+		}
+		m.gotNext(nextMsg{seq: 1, tracks: q, pos: 0, ok: true})
+		widths(t, m)
+		g := m.geo.upnext
+		if g[0] == (rect{}) || g[0].y1-g[0].y0 < nextMinH || g[1] == (rect{}) {
+			t.Fatalf("aspect %.2f, stage %d wide: up next at %v", aspect, m.stageW(), g)
+		}
+		for _, r := range g {
+			if r != (rect{}) && (r.x0 < m.geo.bar.x0 || r.x1 > m.geo.bar.x1) {
+				t.Fatalf("aspect %.2f: a cover at %v past the stage %v", aspect, r, m.geo.bar)
+			}
+		}
+	}
+}
+
+// fakeDaemon is a client whose daemon answers the queue with q and
+// hands the jumps it is asked for on to reqs.
+func fakeDaemon(t *testing.T, q *[]apple.Track) (*ipc.Client, <-chan ipc.Request) {
+	a, b := net.Pipe()
+	t.Cleanup(func() { a.Close() })
+	reqs := make(chan ipc.Request, 16)
+	go func() {
+		dec, enc := json.NewDecoder(b), json.NewEncoder(b)
+		for {
+			var r ipc.Request
+			if dec.Decode(&r) != nil {
+				return
+			}
+			reply := ipc.Message{ID: r.ID}
+			switch r.Cmd {
+			case ipc.CmdQueue:
+				reply.Tracks = *q
+			case ipc.CmdJump:
+				reqs <- r
+			}
+			if enc.Encode(reply) != nil {
+				return
+			}
+		}
+	}()
+	return ipc.NewClient(a), reqs
+}
+
+// runAll runs cmd and whatever batch it stands for.
+func runAll(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	if b, ok := cmd().(tea.BatchMsg); ok {
+		for _, c := range b {
+			runAll(c)
+		}
+	}
+}
+
+// at is where text shows on screen, found in what View drew.
+func at(t *testing.T, m *Model, text string) (x, y int) {
+	t.Helper()
+	for y, l := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+		if i := strings.Index(l, text); i >= 0 {
+			return lipgloss.Width(l[:i]), y
+		}
+	}
+	t.Fatalf("no %q on screen", text)
+	return 0, 0
+}
+
+// Clicking what comes up next, the way a mouse does: the hand shows over
+// it and a left click jumps there, before and after a resize, songs and
+// covers alike.
+func TestUpNextClicks(t *testing.T) {
+	m := playingModel(120, 60)
+	m.cellAspect = 2
+	q := albumQueue(m, 11, -1)
+	var reqs <-chan ipc.Request
+	m.client, reqs = fakeDaemon(t, &q)
+	fetch := func() {
+		m.Update(m.fetchNext(true)())
+	}
+	click := func(what string, x, y, want int) {
+		t.Helper()
+		m.Update(tea.MouseMotionMsg{X: x, Y: y})
+		if m.pointer != shapePointer {
+			t.Fatalf("%s: no hand at %d,%d", what, x, y)
+		}
+		_, cmd := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+		if cmd == nil {
+			t.Fatalf("%s: a click at %d,%d does nothing", what, x, y)
+		}
+		runAll(cmd)
+		select {
+		case r := <-reqs:
+			if r.Cmd != ipc.CmdJump || int(r.Value) != want {
+				t.Fatalf("%s: a click sent %s %v, want jump %d", what, r.Cmd, r.Value, want)
+			}
+		default:
+			t.Fatalf("%s: a click at %d,%d sent nothing", what, x, y)
+		}
+	}
+
+	fetch()
+	for _, size := range [][2]int{{120, 60}, {100, 50}, {90, 55}} {
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		x, y := at(t, m, "song 5")
+		click(fmt.Sprint("song at ", size), x, y, 4)
+		x, y = at(t, m, "up next")
+		click(fmt.Sprint("first song at ", size), x, y+1, 1)
+	}
+
+	q = append(q[:2], track("20", "B"), track("21", "C"))
+	fetch()
+	for _, size := range [][2]int{{120, 60}, {100, 50}} {
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m.split = 0.72
+		x, y := at(t, m, "up next  B")
+		click(fmt.Sprint("cover at ", size), x, y+1, 2)
+		click(fmt.Sprint("second cover at ", size), x+m.nextDraw.tw+2, y+m.nextDraw.th, 3)
+	}
+}
+
+// BenchmarkViewSongs is BenchmarkView's frame with the rest of the album
+// listed under the player.
+func BenchmarkViewSongs(b *testing.B) {
+	m := playingModel(200, 55)
+	m.termBg = color.Black
+	m.split = 0.7
+	m.nextSeq = 1
+	m.gotNext(nextMsg{seq: 1, tracks: albumQueue(m, 11, 2), pos: 0, ok: true})
+	m.View()
+	if m.geo.upsongs == (rect{}) {
+		b.Fatal("no songs up next")
+	}
+	b.ResetTimer()
+	for i := range b.N {
+		m.state.Pos = float64(i % 240)
+		m.View()
 	}
 }

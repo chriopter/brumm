@@ -102,6 +102,7 @@ type geometry struct {
 	prev, play, next, shuffle, repeat, volume, bar rect
 	artist, album                                  rect          // under the now-playing title
 	upnext                                         [nextMax]rect // the covers coming up (upnext.go)
+	upsongs                                        rect          // or the songs, one row each
 	options                                        rect          // the options menu
 	foot                                           []footHit
 	optRow0                                        int // its first row

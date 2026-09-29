@@ -170,7 +170,7 @@ func TestOptionsMenu(t *testing.T) {
 		if !strings.Contains(row, "▌  "+want[i]) {
 			t.Fatalf("row %d reads %q", i, row)
 		}
-		h := optHints[i]
+		h := optHint(i)
 		if !strings.Contains(box, h) || h[0] < 'A' || h[0] > 'Z' || !strings.HasSuffix(h, ".") {
 			t.Fatalf("hint %q for %s", h, want[i])
 		}
@@ -178,7 +178,7 @@ func TestOptionsMenu(t *testing.T) {
 			t.Fatal("no keys")
 		}
 		for j := range numOptions {
-			if j != i && strings.Contains(box, optHints[j]) {
+			if j != i && strings.Contains(box, optHint(j)) {
 				t.Fatalf("%s shows the hint of %s", want[i], want[j])
 			}
 		}
@@ -190,8 +190,7 @@ func TestOptionsMenu(t *testing.T) {
 	}
 }
 
-// Without kitty graphics original is no choice, and a saved original
-// draws as smooth; with them it is the third.
+// original is always a choice; without kitty graphics it draws as smooth.
 func TestCoverChoices(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	old := hasKitty
@@ -200,19 +199,21 @@ func TestCoverChoices(t *testing.T) {
 	m.optOpen = true
 	hasKitty = false
 	m.opts.Cover = coverOriginal
-	if m.opts.cover() != coverSmooth || strings.Contains(m.View().Content, "original") {
-		t.Fatalf("original offered without kitty, drawn as %s", m.opts.cover())
+	if m.opts.cover() != coverSmooth || !strings.Contains(m.View().Content, "original") {
+		t.Fatalf("original not offered without kitty, or drawn as %s", m.opts.cover())
+	}
+	if m.optSel = optCover; !strings.Contains(ansi.Strip(m.View().Content), "original needs kitty or Ghostty") {
+		t.Fatal("no word on what original needs")
 	}
 	m.optSel = optCover
-	for _, want := range []string{coverPixel, coverSmooth, coverPixel} {
+	for _, want := range []string{coverPixel, coverSmooth, coverOriginal, coverPixel} {
 		if m.optionsKey("right"); m.opts.Cover != want {
 			t.Fatalf("stepped to %s, want %s", m.opts.Cover, want)
 		}
 	}
-	hasKitty = true
-	m.optionsKey("left")
-	if m.opts.Cover != coverOriginal || !strings.Contains(m.View().Content, "original") {
-		t.Fatalf("left from pixel: %s", m.opts.Cover)
+	hasKitty, m.opts.Cover = true, coverOriginal
+	if m.opts.cover() != coverOriginal {
+		t.Fatalf("with kitty, original draws as %s", m.opts.cover())
 	}
 }
 

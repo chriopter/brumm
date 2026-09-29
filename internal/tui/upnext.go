@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"math"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,13 +22,30 @@ import (
 // queue, one per album, so while an album plays through it shows the ones
 // after it. A click plays from there. The queue is asked for only when the
 // song or the queue changes; the row is drawn once and then only spliced.
+// When only the rest of the playing album comes, its songs show instead,
+// one line each.
 
 const (
 	nextMax  = 5   // covers in the row at most
 	nextFour = 4   // a cover is at most a quarter of the row, however few come
 	nextLook = 150 // queue songs looked through for them
 	nextMinH = 4   // rows a cover needs to be worth showing
+	songMax  = 8   // songs listed at most, when no other cover comes
 )
+
+// nextSong is a song coming up, listed when no other cover does.
+type nextSong struct {
+	title, artist string // artist only when not the playing one's
+	num           int
+	dur           float64
+	pos           int
+}
+
+// nextList is the list as last drawn, for drawing it again as it is.
+type nextList struct {
+	gen, w, n int
+	rows      []string // w wide, then "+N more" when more follow
+}
 
 // nextUp is a cover coming up and the first queue position that shows it.
 type nextUp struct {
@@ -63,7 +83,7 @@ type nextStrip struct {
 func (m *Model) fetchNext(force bool) tea.Cmd {
 	st := m.state
 	if st.ID == "" || m.client == nil {
-		m.setNext(nil)
+		m.setNext(nil, nil, 0)
 		return nil
 	}
 	k := nextKey{st.ID, st.Index, st.Length, st.Shuffle}
@@ -83,18 +103,22 @@ func (m *Model) fetchNext(force bool) tea.Cmd {
 }
 
 // gotNext takes the queue's answer: its distinct covers after the
-// playing song's, whose images are then fetched.
+// playing song's, whose images are then fetched; with none, its songs.
 func (m *Model) gotNext(msg nextMsg) tea.Cmd {
 	if msg.seq != m.nextSeq {
 		return nil
 	}
 	if !msg.ok || msg.pos < 0 { // the player was not ready: ask again on its next change
 		m.nextAsked = nextKey{}
-		m.setNext(nil)
+		m.setNext(nil, nil, 0)
 		return nil
 	}
 	next := upcoming(msg.tracks, msg.pos, m.coverURL)
-	m.setNext(next)
+	var songs []nextSong
+	if next == nil {
+		songs = songsAhead(msg.tracks, msg.pos)
+	}
+	m.setNext(next, songs, max(0, len(msg.tracks)-1))
 	var cmds []tea.Cmd
 	for _, n := range next {
 		if m.covers[n.url] == nil {
@@ -132,36 +156,55 @@ func upcoming(tracks []apple.Track, pos int, playing string) []nextUp {
 	return out
 }
 
-// setNext replaces the covers coming up, if they changed.
-func (m *Model) setNext(next []nextUp) {
-	if len(next) == len(m.next) {
-		same := true
-		for i := range next {
-			same = same && next[i] == m.next[i]
-		}
-		if same {
-			return
-		}
+// songsAhead is the queue's first songs after the playing one.
+func songsAhead(tracks []apple.Track, pos int) []nextSong {
+	if len(tracks) < 2 {
+		return nil
 	}
-	m.next = next
+	out := make([]nextSong, 0, min(songMax, len(tracks)-1))
+	for i, t := range tracks[1:min(len(tracks), songMax+1)] {
+		s := nextSong{t.Title, t.Artist, t.Number, t.Duration, pos + i + 1}
+		if s.num == 0 {
+			s.num = i + 1 // not on an album: its place in the queue
+		}
+		if t.Artist == tracks[0].Artist {
+			s.artist = ""
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// setNext replaces the covers or songs coming up and the count of songs
+// ahead, if they changed.
+func (m *Model) setNext(next []nextUp, songs []nextSong, ahead int) {
+	if slices.Equal(next, m.next) && slices.Equal(songs, m.songs) && (ahead == m.ahead || songs == nil) {
+		return
+	}
+	m.next, m.songs, m.ahead = next, songs, ahead
 	m.nextGen++
 }
 
 // nextFit sizes the row for a column colW wide with free rows under the
 // player: how many covers and each one's size; n is 0 when none fits. A
-// gap and the label take two rows. Held back by the height, the covers
-// are smaller and one more fits.
+// gap and the label take two rows. In a narrow column fewer come, each
+// still nextMinH rows high; held back by the height, they are smaller
+// and one more fits.
 func (m *Model) nextFit(colW, free int) (n, tw, th int) {
 	if len(m.next) == 0 {
 		return 0, 0, 0
 	}
 	tw = (colW - 2*(nextFour-1)) / nextFour
 	th = int(float64(tw) / m.cellAspect)
+	if th < nextMinH {
+		th = nextMinH
+		tw = int(math.Ceil(float64(th) * m.cellAspect))
+	}
 	if th > free-2 {
 		th = free - 2
 		tw = int(float64(th) * m.cellAspect)
 	}
-	if th < nextMinH || tw < 1 {
+	if th < nextMinH || tw < 1 || tw > colW {
 		return 0, 0, 0
 	}
 	return min(len(m.next), nextMax, (colW+2)/(tw+2)), tw, th
@@ -169,6 +212,9 @@ func (m *Model) nextFit(colW, free int) (n, tw, th int) {
 
 // upNext is the stage's lines for the row, none when it does not fit.
 func (m *Model) upNext(colW, free int) []stageLine {
+	if len(m.next) == 0 {
+		return m.upSongs(colW, free)
+	}
 	n, tw, th := m.nextFit(colW, free)
 	if n == 0 {
 		return nil
@@ -261,12 +307,73 @@ func (m *Model) nextThumbWant() thumbReq {
 	return thumbReq{}
 }
 
-// nextAt is the queue position of the cover at x, y, or -1.
+// upSongs is the stage's lines for the songs coming up, as many as fit
+// under a gap and the label, the last one saying how many more follow;
+// none when fewer than two fit.
+func (m *Model) upSongs(colW, free int) []stageLine {
+	k := min(free-2, songMax)
+	if len(m.songs) == 0 || k < 2 {
+		return nil
+	}
+	n := min(len(m.songs), k)
+	if m.ahead > n && n == k {
+		n-- // room for the line saying more follow
+	}
+	rows := m.songRows(colW, n)
+	out := make([]stageLine, 0, len(rows)+2)
+	out = append(out, stageLine{}, stageLine{text: songLabel, width: 7})
+	for i, r := range rows {
+		l := stageLine{text: r, width: colW}
+		if i == 0 {
+			l.hit = func(x, y int) { m.geo.upsongs = rect{x, y, x + colW, y + n} }
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+var songLabel = sDim.Render("up next")
+
+// songRows is the list, colW wide: drawn again only when the songs, the
+// width or how many fit change. Like the list's rows, calmer: dim number,
+// the title, the artist when not the playing one's, the time on the right.
+func (m *Model) songRows(colW, n int) []string {
+	d := &m.songDraw
+	if d.gen == m.nextGen && d.w == colW && d.n == n && d.rows != nil {
+		return d.rows
+	}
+	*d = nextList{gen: m.nextGen, w: colW, n: n, rows: make([]string, 0, n+1)}
+	for _, s := range m.songs[:n] {
+		text := sDim.Render(fmt.Sprintf("%2d  ", s.num)) + s.title
+		if s.artist != "" {
+			text += "  " + sDim.Render(s.artist)
+		}
+		dur := ""
+		if s.dur > 0 {
+			dur = clock(s.dur)
+		}
+		avail := colW - 2 - len(dur)
+		if dur == "" || avail < 1 { // no time, or too narrow for it
+			d.rows = append(d.rows, fit(text, colW))
+			continue
+		}
+		d.rows = append(d.rows, fit(text, avail)+"  "+sDim.Render(dur))
+	}
+	if more := m.ahead - n; more > 0 {
+		d.rows = append(d.rows, fit(sDim.Render(fmt.Sprintf("    +%d more", more)), colW))
+	}
+	return d.rows
+}
+
+// nextAt is the queue position of the cover or song at x, y, or -1.
 func (m *Model) nextAt(x, y int) int {
 	for i, r := range m.geo.upnext {
 		if r.has(x, y) && i < len(m.next) {
 			return m.next[i].pos
 		}
+	}
+	if r := m.geo.upsongs; r.has(x, y) && y-r.y0 < len(m.songs) {
+		return m.songs[y-r.y0].pos
 	}
 	return -1
 }

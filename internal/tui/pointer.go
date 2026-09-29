@@ -69,7 +69,7 @@ func (m *Model) shapeAt(x, y int) string {
 			return shapePointer
 		}
 	}
-	for _, r := range []rect{g.search, g.crumb, g.play, g.prev, g.next, g.shuffle, g.repeat, g.volume, g.bar} {
+	for _, r := range []rect{g.search, g.crumb, g.play, g.prev, g.next, g.shuffle, g.repeat, g.volume, g.bar, g.upsongs} {
 		if r.has(x, y) {
 			return shapePointer
 		}

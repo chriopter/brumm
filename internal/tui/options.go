@@ -99,13 +99,17 @@ func (o options) cover() string {
 	return coverPixel
 }
 
-// coverChoices are the cover styles this terminal can show.
-func coverChoices() []string {
-	if hasKitty {
-		return coverStyles
+// chosen is the cover style picked in the menu, whatever this terminal shows.
+func (o options) chosen() string {
+	if o.Cover == coverSmooth || o.Cover == coverOriginal {
+		return o.Cover
 	}
-	return coverStyles[:2]
+	return coverPixel
 }
+
+// coverChoices are the cover styles on offer: all three everywhere, so
+// original can be picked ahead of a terminal that shows it (see cover).
+func coverChoices() []string { return coverStyles }
 
 // The menu's rows, in order.
 const (
@@ -137,6 +141,15 @@ var (
 		optBar:      "The playing song in Omarchy's top bar; click it for controls.",
 	}
 )
+
+// optHint explains row i; the cover's says what original needs where the
+// terminal cannot show it.
+func optHint(i int) string {
+	if i == optCover && !hasKitty {
+		return "Covers as pixels or smooth; original needs kitty or Ghostty."
+	}
+	return optHints[i]
+}
 
 // optShown: the top bar's row only where omarchy can switch it.
 func (m *Model) optShown(i int) bool { return i != optBar || m.hasOmarchy }
@@ -185,7 +198,7 @@ func (m *Model) changeOption(i, dir int) tea.Cmd {
 	var cmd tea.Cmd
 	switch i {
 	case optCover:
-		m.opts.Cover = step(coverChoices(), m.opts.cover(), dir)
+		m.opts.Cover = step(coverChoices(), m.opts.chosen(), dir)
 		m.rendered, m.thumbs = map[art.Size][]string{}, map[string][]string{}
 	case optColors:
 		m.opts.NoCoverColors = !m.opts.NoCoverColors // the next frame picks them (accent.go)
@@ -215,7 +228,7 @@ func (m *Model) optionsBox() []string {
 	}
 	var choice []string
 	for _, v := range coverChoices() {
-		if v == m.opts.cover() {
+		if v == m.opts.chosen() {
 			choice = append(choice, sHere.Render("●")+" "+v)
 		} else {
 			choice = append(choice, sDim.Render("○ "+v))
@@ -233,7 +246,7 @@ func (m *Model) optionsBox() []string {
 	w := lipgloss.Width(keys)
 	for i := range numOptions {
 		if m.optShown(i) {
-			w = max(w, 16+lipgloss.Width(values[i]), len(optHints[i]))
+			w = max(w, 16+lipgloss.Width(values[i]), len(optHint(i)))
 		}
 	}
 	w = min(w+3, m.width-2*margin-6) // the box as wide as its widest hint: it keeps its size
@@ -253,7 +266,7 @@ func (m *Model) optionsBox() []string {
 	}
 	hint := ""
 	if m.optSel >= 0 && m.optSel < numOptions {
-		hint = optHints[m.optSel]
+		hint = optHint(m.optSel)
 	}
 	lines = append(append([]string{""}, lines...), "", "   "+fit(sDim.Render(hint), w-3), "   "+fit(keys, w-3), "")
 	for i := range lines {

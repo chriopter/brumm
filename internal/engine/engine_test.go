@@ -31,3 +31,15 @@ func TestPageDefinesCalls(t *testing.T) {
 		t.Error("player.html lost its config placeholder")
 	}
 }
+
+// The queue's songs carry every field the player reads from them: without
+// their covers, nothing comes up next.
+func TestQueueFields(t *testing.T) {
+	i := strings.Index(page, "  queue(n) {")
+	body := page[i : i+strings.Index(page[i:], "\n  },")]
+	for _, f := range []string{"id", "title", "artist", "album", "duration", "artwork", "number"} {
+		if !regexp.MustCompile(`\b` + f + `:`).MatchString(body) {
+			t.Errorf("queue leaves out %s", f)
+		}
+	}
+}

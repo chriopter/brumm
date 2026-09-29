@@ -265,9 +265,11 @@ Object.assign(B, {
     const items = m.queue.items || [];
     out.pos = typeof m.nowPlayingItemIndex === 'number' ? m.nowPlayingItemIndex : -1;
     for (let i = Math.max(0, out.pos); i < items.length && out.items.length < n; i++) {
-      const it = items[i], a = it.attributes || {};
+      const it = items[i], a = it.attributes || {}, art = it.artwork || a.artwork;
       out.items.push({ id: it.id, title: it.title || a.name || '', artist: it.artistName || a.artistName || '',
-                       album: it.albumName || a.albumName || '', duration: (it.playbackDuration || a.durationInMillis || 0) / 1000 });
+                       album: it.albumName || a.albumName || '', duration: (it.playbackDuration || a.durationInMillis || 0) / 1000,
+                       artwork: art && art.url ? MusicKit.formatArtworkURL(art, 600, 600) : '',
+                       number: it.trackNumber || a.trackNumber || 0 });
     }
     return JSON.stringify(out);
   },

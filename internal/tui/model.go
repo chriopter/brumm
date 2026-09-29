@@ -229,8 +229,11 @@ type Model struct {
 	next      []nextUp // the queue's next covers (upnext.go)
 	nextAsked nextKey  // the state they were last asked for in
 	nextSeq   int
-	nextGen   int       // counts changes to next, for the row's cache
-	nextDraw  nextStrip // the row as last drawn
+	nextGen   int        // counts changes to next, for the row's cache
+	nextDraw  nextStrip  // the row as last drawn
+	songs     []nextSong // the queue's next songs, when no other cover comes
+	ahead     int        // songs in the queue after the playing one
+	songDraw  nextList   // their list as last drawn
 
 	filtering bool    // typing into the list's filter (filter.go)
 	optOpen   bool    // the options menu shows
