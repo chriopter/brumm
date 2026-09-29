@@ -14,6 +14,7 @@ import (
 type updatePopup struct {
 	checking   bool
 	installing bool
+	installed  bool // done: offer to restart into it now
 	current    string
 	latest     string
 	newer      bool
@@ -61,12 +62,30 @@ func (m *Model) installUpdate() tea.Cmd {
 }
 
 func (m *Model) updateInstalled(msg installedMsg) {
-	m.upd = nil
 	if msg.err != nil {
+		m.upd = nil
 		m.setFlash("update: " + msg.err.Error())
 		return
 	}
-	m.setFlash("updated — brumm restarts into it at the next pause or song change")
+	if m.upd == nil {
+		m.upd = &updatePopup{}
+	}
+	m.upd.installing, m.upd.installed = false, true
+}
+
+// restartNow has the player restart into the new release at once; it
+// picks up where it was, and the window follows (closedMsg).
+func (m *Model) restartNow() tea.Cmd {
+	m.upd = nil
+	m.setFlash("restarting…")
+	client := m.client
+	return func() tea.Msg {
+		_, err := client.Do(ipc.Request{Cmd: ipc.CmdUpdate, Value: 3})
+		if err != nil {
+			return errMsg{err}
+		}
+		return nil
+	}
 }
 
 // updateKey: enter installs a newer release, anything else closes.
@@ -74,6 +93,14 @@ func (m *Model) updateKey(k string) tea.Cmd {
 	u := m.upd
 	switch {
 	case u.installing:
+		return nil
+	case u.installed && (k == "enter" || k == "U"):
+		return m.restartNow()
+	case u.installed:
+		if k == "esc" || k == "q" || k == "space" || k == " " {
+			m.upd = nil
+			m.setFlash("brumm restarts into it at the next pause or song change")
+		}
 		return nil
 	case (k == "enter" || k == "U") && u.newer:
 		return m.installUpdate()
@@ -102,6 +129,13 @@ func (m *Model) updateBox() []string {
 		lines = []string{sDim.Render(spinner[m.frame%len(spinner)] + "  looking for a new release…")}
 	case u.installing:
 		lines = []string{sDim.Render(spinner[m.frame%len(spinner)] + "  installing " + u.latest + "…")}
+	case u.installed:
+		name := u.latest
+		if name == "" {
+			name = "the update"
+		}
+		lines = []string{sPlays.Render("✓") + " " + sBold.Render(name) + " is installed", sDim.Render("the music goes on where it is"), "",
+			sKey.Render("enter") + sDim.Render(" restart now  ") + sKey.Render("esc") + sDim.Render(" at the next pause")}
 	case u.err != "":
 		lines = []string{sErr.Render(u.err), "", sKey.Render("esc") + sDim.Render(" close")}
 	case u.newer:

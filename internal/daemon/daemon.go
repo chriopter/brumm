@@ -643,6 +643,14 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		if r.Value == 2 { // look now and say: Link is the newest release, Pos 1 if it is newer
 			return d.checkNowFor(reply)
 		}
+		if r.Value == 3 { // installed: restart into it now, playback continues
+			playing := d.playing()
+			go func() {
+				time.Sleep(200 * time.Millisecond) // the reply goes out first
+				d.restartForUpdate(playing)
+			}()
+			return nil
+		}
 		if r.Value == 0 { // just look
 			select {
 			case d.checkNow <- struct{}{}:

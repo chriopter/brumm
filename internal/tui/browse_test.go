@@ -398,3 +398,29 @@ func TestFilterHere(t *testing.T) {
 		t.Fatalf("tab does not search all of Apple Music (section %d, %q)", m.section, m.query)
 	}
 }
+
+// Once an update is installed, the popup offers to restart into it; esc
+// leaves that to the next pause.
+func TestUpdateOffersRestart(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height = 120, 35
+	m.upd = &updatePopup{latest: "v9.9.9", newer: true, installing: true}
+	m.updateInstalled(installedMsg{})
+	if m.upd == nil || !m.upd.installed {
+		t.Fatal("no restart offer after installing")
+	}
+	if box := ansi.Strip(strings.Join(m.updateBox(), "\n")); !strings.Contains(box, "v9.9.9 is installed") || !strings.Contains(box, "restart now") {
+		t.Fatalf("offer reads %q", box)
+	}
+	if cmd := m.updateKey("x"); cmd != nil || m.upd == nil {
+		t.Fatal("another key closed the offer")
+	}
+	m.updateKey("esc")
+	if m.upd != nil {
+		t.Fatal("esc keeps the offer open")
+	}
+	m.upd = &updatePopup{installed: true}
+	if m.updateKey("enter") == nil || m.upd != nil {
+		t.Fatal("enter does not restart")
+	}
+}
