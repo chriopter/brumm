@@ -2,7 +2,24 @@ package tui
 
 import "math"
 
-// ─── 2. scope ──────────────────────────────────────────────────────────────
+// vizScope is the oscilloscope's state.
+type vizScope struct {
+	wv   []float64
+	ph   []float32 // phosphor, one value per dot
+	gain float64
+}
+
+// vizRidge is the ridgelines' state.
+type vizRidge struct {
+	rg       []float32 // history rows, P points each
+	rgLive   []float32
+	rgNoise  []float32
+	rgHz     []int
+	rgR, rgP int
+	rgHead   int
+}
+
+// ─── scope ──────────────────────────────────────────────────────────────
 // Oscilloscope: the waveform traced as a continuous braille line into a
 // phosphor canvas that fades over a third of a second, so the trace leaves
 // green afterglow over a dotted graticule. A trigger on a rising zero
@@ -12,17 +29,17 @@ import "math"
 func (v *visualizer) drawScope(wave []float64, dt float64) {
 	w, h := v.w, v.h
 	W, H := w*2, h*4
-	if len(v.ph) != W*H {
-		v.ph = make([]float32, W*H)
+	if len(v.scope.ph) != W*H {
+		v.scope.ph = make([]float32, W*H)
 	}
 	decay := float32(math.Exp(-dt * 7))
-	for i := range v.ph {
-		v.ph[i] *= decay
+	for i := range v.scope.ph {
+		v.scope.ph[i] *= decay
 	}
-	if cap(v.wv) < W {
-		v.wv = make([]float64, W)
+	if cap(v.scope.wv) < W {
+		v.scope.wv = make([]float64, W)
 	}
-	s := v.wv[:W]
+	s := v.scope.wv[:W]
 	a := &v.au
 
 	peak := 0.0
@@ -92,13 +109,13 @@ func (v *visualizer) drawScope(wave []float64, dt float64) {
 		target = min(4, 0.85/pk)
 	}
 	target *= 0.3 + 0.7*a.live
-	if v.gain == 0 {
-		v.gain = target
+	if v.scope.gain == 0 {
+		v.scope.gain = target
 	}
-	v.gain += (target - v.gain) * min(1, dt*4)
+	v.scope.gain += (target - v.scope.gain) * min(1, dt*4)
 
 	mid := float64(H-1) / 2
-	amp := mid * v.gain
+	amp := mid * v.scope.gain
 	thick := float32(0.6 * a.beat)
 	py := -1
 	for x := 0; x < W; x++ {
@@ -112,14 +129,14 @@ func (v *visualizer) drawScope(wave []float64, dt float64) {
 			}
 		}
 		for yy := y0; yy <= y1; yy++ {
-			v.ph[yy*W+x] = 1
+			v.scope.ph[yy*W+x] = 1
 		}
 		if thick > 0.2 {
 			if y0 > 0 {
-				v.ph[(y0-1)*W+x] = max(v.ph[(y0-1)*W+x], thick)
+				v.scope.ph[(y0-1)*W+x] = max(v.scope.ph[(y0-1)*W+x], thick)
 			}
 			if y1 < H-1 {
-				v.ph[(y1+1)*W+x] = max(v.ph[(y1+1)*W+x], thick)
+				v.scope.ph[(y1+1)*W+x] = max(v.scope.ph[(y1+1)*W+x], thick)
 			}
 		}
 		py = y
@@ -129,7 +146,7 @@ func (v *visualizer) drawScope(wave []float64, dt float64) {
 	if a.beat > 0.5 {
 		ramp[7] = vcBWhite
 	}
-	v.glow(v.ph, 0.1, &ramp)
+	v.glow(v.scope.ph, nil, 0.1, &ramp)
 
 	midRow := h / 2
 	gx := max(4, w/12)
@@ -150,7 +167,7 @@ func (v *visualizer) drawScope(wave []float64, dt float64) {
 	}
 }
 
-// ─── 3. ridge ──────────────────────────────────────────────────────────────
+// ─── ridge ──────────────────────────────────────────────────────────────
 // Unknown Pleasures: the spectrum (bass in the middle, flat noisy edges) is
 // frozen into a ridgeline ten times a second and recedes toward a horizon in
 // perspective, each line hiding what lies behind it (floating horizon). The
@@ -162,36 +179,36 @@ func (v *visualizer) drawRidge(style int, dt float64) {
 	W, H := w*2, h*4
 	R := min(max(H/7, 3), 40)
 	P := min(max(W/4, 16), 128)
-	if v.rgR != R || v.rgP != P {
-		v.rg = make([]float32, R*P)
-		v.rgLive = make([]float32, P)
-		v.rgNoise = make([]float32, P)
-		v.rgR, v.rgP, v.rgHead = R, P, 0
+	if v.ridge.rgR != R || v.ridge.rgP != P {
+		v.ridge.rg = make([]float32, R*P)
+		v.ridge.rgLive = make([]float32, P)
+		v.ridge.rgNoise = make([]float32, P)
+		v.ridge.rgR, v.ridge.rgP, v.ridge.rgHead = R, P, 0
 	}
-	if cap(v.rgHz) < W {
-		v.rgHz = make([]int, W)
+	if cap(v.ridge.rgHz) < W {
+		v.ridge.rgHz = make([]int, W)
 	}
-	hz := v.rgHz[:W]
+	hz := v.ridge.rgHz[:W]
 	a := &v.au
 
 	pushes := v.ticks(style, dt, 10, 2)
 	if pushes > 0 {
-		for p := range v.rgNoise {
-			v.rgNoise[p] = float32(v.rf())
+		for p := range v.ridge.rgNoise {
+			v.ridge.rgNoise[p] = float32(v.rf())
 		}
 	}
-	for p := range v.rgLive {
+	for p := range v.ridge.rgLive {
 		u := float64(p) / float64(P-1)
 		d := math.Abs(u-0.5) * 2
 		// flat edges, the music in the middle
 		e := min(max((d-0.5)/0.45, 0), 1)
 		env := 1 - e*e*(3-2*e)
-		n := float64(v.rgNoise[p])
-		v.rgLive[p] = float32(env*vizAt(a.sm, d/0.95)*(0.8+0.4*n) + 0.015*n)
+		n := float64(v.ridge.rgNoise[p])
+		v.ridge.rgLive[p] = float32(env*vizAt(a.sm, d/0.95)*(0.8+0.4*n) + 0.015*n)
 	}
 	for ; pushes > 0; pushes-- {
-		v.rgHead = (v.rgHead + 1) % R
-		copy(v.rg[v.rgHead*P:(v.rgHead+1)*P], v.rgLive)
+		v.ridge.rgHead = (v.ridge.rgHead + 1) % R
+		copy(v.ridge.rg[v.ridge.rgHead*P:(v.ridge.rgHead+1)*P], v.ridge.rgLive)
 	}
 
 	v.dotReset()
@@ -232,10 +249,10 @@ func (v *visualizer) drawRidge(style int, dt float64) {
 			py = y
 		}
 	}
-	line(v.rgLive, 0, 0, 1+0.25*a.beat)
+	line(v.ridge.rgLive, 0, 0, 1+0.25*a.beat)
 	for j := 0; j < R; j++ {
-		k := ((v.rgHead-j)%R + R) % R
-		line(v.rg[k*P:(k+1)*P], float64(j)+f, uint8(1+j*5/R), 1)
+		k := ((v.ridge.rgHead-j)%R + R) % R
+		line(v.ridge.rg[k*P:(k+1)*P], float64(j)+f, uint8(1+j*5/R), 1)
 	}
 	v.dotFlush(vizRidgePal[:])
 }

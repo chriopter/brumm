@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +85,161 @@ func TestVizRender(t *testing.T) {
 	}
 	if len(vizNames) != vizCount {
 		t.Fatalf("vizNames has %d entries, want %d", len(vizNames), vizCount)
+	}
+}
+
+// Only the theme's 16 colors, foreground and background: no 256-color or
+// truecolor sequences, and every SGR a plain color, default or reset.
+func TestVizThemeColors(t *testing.T) {
+	sgr := regexp.MustCompile(`\x1b\[([0-9;]*)m`)
+	for style := range vizNames {
+		var v visualizer
+		vizTick(&v)
+		for f := 0; f < 60; f++ {
+			spec, wave := vizData("random", 48, f)
+			for _, l := range v.render(style, spec, wave, 100, 30, f, f < 45) {
+				for _, m := range sgr.FindAllStringSubmatch(l, -1) {
+					for _, p := range strings.Split(m[1], ";") {
+						n, err := strconv.Atoi(p)
+						ok := err == nil && (n == 0 || n == 39 || n == 49 ||
+							(n >= 30 && n <= 37) || (n >= 90 && n <= 97) ||
+							(n >= 40 && n <= 47) || (n >= 100 && n <= 107))
+						if !ok {
+							t.Fatalf("%s: SGR %q is not a theme color", vizNames[style], m[0])
+						}
+					}
+				}
+				if strings.Contains(ansi.Strip(l), "\x1b") {
+					t.Fatalf("%s: stray escape", vizNames[style])
+				}
+			}
+		}
+	}
+}
+
+// A dissolve mixes two styles block by block: well formed all the way,
+// the old style at 0, the new one at 1, both in between.
+func TestVizMix(t *testing.T) {
+	var v, b visualizer
+	vizTick(&v)
+	vizTick(&b)
+	sizes := [][2]int{{80, 24}, {1, 1}, {7, 3}, {200, 60}}
+	for f := 0; f < 80; f++ {
+		sz := sizes[(f/20)%len(sizes)]
+		spec, wave := vizData("random", 48, f)
+		from, to := f%vizCount, (f*5+3)%vizCount
+		lines := v.renderMix(from, to, float64(f%20)/19, spec, wave, sz[0], sz[1], true)
+		if len(lines) != sz[1] {
+			t.Fatalf("mix %d lines, want %d", len(lines), sz[1])
+		}
+		for i, l := range lines {
+			if got := lipgloss.Width(l); got != sz[0] {
+				t.Fatalf("mix %v line %d: width %d", sz, i, got)
+			}
+		}
+	}
+	// the ends: all old, all new (fresh visualizers see the same clock)
+	spec, wave := vizData("random", 48, 1)
+	mix0 := v.renderMix(vzScope, vzLED, 0, spec, wave, 60, 20, true)
+	full := strings.Count(strings.Join(b.render(vzLED, spec, wave, 60, 20, 0, true), ""), "▆")
+	if strings.Contains(strings.Join(mix0, ""), "▆") {
+		t.Fatalf("mix at 0 shows the incoming LED style")
+	}
+	mix1 := v.renderMix(vzScope, vzLED, 1, spec, wave, 60, 20, true)
+	if n := strings.Count(strings.Join(mix1, ""), "▆"); n != full {
+		t.Fatalf("mix at 1 shows %d LED segments, want %d", n, full)
+	}
+	half := strings.Join(v.renderMix(vzScope, vzLED, 0.5, spec, wave, 60, 20, true), "")
+	if n := strings.Count(half, "▆"); n == 0 || n == full {
+		t.Fatalf("mix at 0.5 shows %d of %d LED segments", n, full)
+	}
+}
+
+// Unchanged rows come back as the very same string, not a new encoding.
+func TestVizRowReuse(t *testing.T) {
+	var v visualizer
+	vizTick(&v)
+	a := v.render(vzLED, nil, nil, 40, 10, 0, false)
+	b := v.render(vzLED, nil, nil, 40, 10, 1, false)
+	same := 0
+	for i := range a {
+		if a[i] == b[i] {
+			same++
+		}
+	}
+	if same == 0 {
+		t.Fatalf("no row reused")
+	}
+}
+
+// Drawn at 120 fps with the spectrum arriving at 30 and a kick every half
+// second, the full-screen styles must move evenly: about the same number
+// of cells changing every frame, no screen-wide jolt on the beat. (The old
+// plasma, whose speed and palette lurched on every kick, scored cv 0.62
+// with single frames repainting 72% of the screen.)
+func TestVizSmooth(t *testing.T) {
+	for _, style := range []int{vzPlasma, vzFire, vzLava} {
+		var v visualizer
+		tm := time.Unix(0, 0)
+		v.now = func() time.Time { tm = tm.Add(time.Second / 120); return tm }
+		const w, h = 120, 40
+		var prev []rune
+		var pc, pb []uint8
+		var ch []float64
+		for f := 0; f < 600; f++ {
+			spec, wave := vizData("random", 48, f/4)
+			v.render(style, spec, wave, w, h, f, true)
+			if f > 60 {
+				n := 0
+				for j := range prev {
+					if prev[j] != v.glyph[j] || pc[j] != v.col[j] || pb[j] != v.bg[j] {
+						n++
+					}
+				}
+				ch = append(ch, float64(n))
+			}
+			prev = append(prev[:0], v.glyph...)
+			pc = append(pc[:0], v.col...)
+			pb = append(pb[:0], v.bg...)
+		}
+		var sum, sq, mx float64
+		for _, x := range ch {
+			sum += x
+			sq += x * x
+			mx = max(mx, x)
+		}
+		m := sum / float64(len(ch))
+		cv := math.Sqrt(sq/float64(len(ch))-m*m) / m
+		// lava's picture is mostly still, so its kick swells stand out in
+		// cv; what no style may do is repaint most of the screen at once
+		if (cv > 0.35 && style != vzLava) || mx > 0.3*w*h {
+			t.Errorf("%s: changed cells/frame mean %.0f cv %.2f max %.0f: jerky", vizNames[style], m, cv, mx)
+		}
+	}
+}
+
+// Beyond its output strings a frame allocates nothing.
+func TestVizAllocs(t *testing.T) {
+	const w, h = 200, 60
+	var specs, waves [24][]float64
+	for i := range specs {
+		specs[i], waves[i] = vizData("random", 48, i)
+	}
+	for style := range vizNames {
+		var v visualizer
+		vizTick(&v)
+		f := 0
+		frame := func() {
+			v.render(style, specs[f%24], waves[f%24], w, h, f, true)
+			f++
+		}
+		for range 200 { // warm up: canvases, particles, drops
+			frame()
+		}
+		// at most h strings and the slice holding them
+		if n := testing.AllocsPerRun(50, frame); n > h+1 {
+			t.Errorf("%s: %.0f allocations a frame, want ≤ %d", vizNames[style], n, h+1)
+		}
 	}
 }
 

@@ -121,7 +121,7 @@ type (
 	}
 	loginMsg struct{ err error }
 	errMsg   struct{ err error }
-	tickMsg  struct{}
+	tickMsg  struct{ seq int }
 	holdMsg  struct{ seq int } // space is still down after holdDelay
 	seekMsg  struct{ seq int } // the last seek key was a moment ago
 	typedMsg struct{ seq int } // the search query stopped changing
@@ -143,12 +143,14 @@ type Model struct {
 	cellAspect    float64 // cell height ÷ width, measured in pixels
 	frame         int     // animation clock in 100 ms steps, read fresh on every update
 	start         time.Time
-	ticking       bool // a tick is on its way; none is while nothing animates
-	blurred       bool // the terminal lost focus: stop what only a viewer would see
-	eqShown       bool // the last render drew the playing row's equalizer
-	cardShown     bool // the last render laid a card on the cover (card.go)
-	marquee       bool // the last render scrolled a selected row
-	specFPS       int  // the rate the spectrum arrives at
+	ticking       bool      // a tick is on its way; none is while nothing animates
+	tickAt        time.Time // when it comes
+	tickSeq       int       // the number of the tick that counts
+	blurred       bool      // the terminal lost focus: stop what only a viewer would see
+	eqShown       bool      // the last render drew the playing row's equalizer
+	cardShown     bool      // the last render laid a card on the cover (card.go)
+	marquee       bool      // the last render scrolled a selected row
+	specFPS       int       // the rate the spectrum arrives at
 
 	state   ipc.State
 	stateAt time.Time
@@ -164,6 +166,8 @@ type Model struct {
 	rating map[string]int // loves (1) and dislikes (-1) seen so far, by id
 
 	pending *pendingPlay // a song started and shown, not yet reported playing
+
+	cardSize art.Size // the size cards were last drawn at, for drawing ahead
 
 	seekTo  float64 // where pending seek keys point
 	seekAt  time.Time
@@ -217,6 +221,9 @@ type Model struct {
 	loginTried bool // the sign-in page opened on its own once
 
 	full     bool // fullscreen visualizer
+	vizList  bool // the list of styles shows over it
+	vizSel   int
+	vizFrom  int // the style before the list opened: esc goes back to it
 	vizStyle int
 	vizPrev  int       // style fading out, -1 when none
 	vizAt    time.Time // when the current style came in
@@ -232,7 +239,6 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		state:      initial,
 		stateAt:    time.Now(),
 		start:      time.Now(),
-		ticking:    true, // Init starts the first tick
 		specFPS:    meterFPS,
 		rendered:   map[art.Size][]string{},
 		cellAspect: cellAspect(),
@@ -256,14 +262,20 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), tick(frameEvery), m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
+	return tea.Batch(m.listen(), m.schedule(frameEvery), m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
 		m.send(ipc.Request{Cmd: ipc.CmdUpdate})) // look for an update on every start
 }
 
 const frameEvery = 100 * time.Millisecond
 
-func tick(every time.Duration) tea.Cmd {
-	return tea.Tick(every, func(time.Time) tea.Msg { return tickMsg{} })
+// schedule sets the next frame of the screen's own, replacing any later
+// one: only the tick with the newest number counts, so there is always at
+// most one chain of ticks however often they are rescheduled.
+func (m *Model) schedule(every time.Duration) tea.Cmd {
+	m.tickSeq++
+	m.ticking, m.tickAt = true, time.Now().Add(every)
+	seq := m.tickSeq
+	return tea.Tick(every, func(time.Time) tea.Msg { return tickMsg{seq} })
 }
 
 // nextTick says when the screen next needs a frame of its own, if ever.
@@ -444,14 +456,19 @@ type thumbReq struct {
 	size     art.Size
 }
 
-// renderThumb dithers the wanted preview card off the event loop.
+// renderThumb draws a card off the event loop, one at a time: the one the
+// screen wants, else one for a row next to the selection, so moving on
+// finds its card drawn.
 func (m *Model) renderThumb() tea.Cmd {
-	w := m.thumbWant
-	img := m.covers[w.url]
-	if m.thumbBusy || w.key == "" || img == nil {
+	if m.thumbBusy {
 		return nil
 	}
-	if _, ok := m.thumbs[w.key]; ok {
+	w := m.thumbWant
+	if _, done := m.thumbs[w.key]; done || w.key == "" || m.covers[w.url] == nil {
+		w = m.nextThumb()
+	}
+	img := m.covers[w.url]
+	if w.key == "" || img == nil {
 		return nil
 	}
 	m.thumbBusy = true
@@ -459,19 +476,21 @@ func (m *Model) renderThumb() tea.Cmd {
 	return func() tea.Msg { return thumbMsg{w.key, drawCover(style, img, w.size)} }
 }
 
-// prefetchCovers loads the covers of the rows on screen and just beyond,
-// so a song's cover is ready the moment it plays.
+// prefetchCovers loads the covers of the rows on screen and a page either
+// side, so a card or a song's cover is ready the moment it is wanted. Most
+// come from the disk cache; the rest download side by side.
 func (m *Model) prefetchCovers(v *view) tea.Cmd {
 	var cmds []tea.Cmd
 	seen := map[string]bool{}
-	lo, hi := max(0, v.off-10), min(len(v.rows), v.off+m.listRows()+10)
+	page := m.listRows()
+	lo, hi := max(0, v.off-page), min(len(v.rows), v.off+2*page)
 	// The selected row first: its preview card shows it.
 	order := []int{v.sel}
 	for i := lo; i < hi; i++ {
 		order = append(order, i)
 	}
 	for _, i := range order {
-		if i < 0 || i >= len(v.rows) || len(cmds) >= 8 {
+		if i < 0 || i >= len(v.rows) || len(cmds) >= 32 {
 			continue
 		}
 		url := ""
@@ -497,13 +516,19 @@ func (m *Model) prefetchCovers(v *view) tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.frame = int(time.Since(m.start) / frameEvery)
 	model, cmd := m.update(msg)
-	if _, isTick := msg.(tickMsg); !isTick && !m.ticking {
+	if _, isTick := msg.(tickMsg); !isTick {
 		// Something happened: give the screen a frame to settle, and more
-		// for as long as it animates.
-		m.ticking = true
-		cmd = tea.Batch(cmd, tick(frameEvery))
+		// for as long as it animates. A tick far off (a card waiting to
+		// go) is brought forward when something now needs frames sooner.
+		if !m.ticking {
+			cmd = tea.Batch(cmd, m.schedule(frameEvery))
+		} else if every, ok := m.nextTick(); ok && every < time.Until(m.tickAt) {
+			cmd = tea.Batch(cmd, m.schedule(every))
+		}
 	}
-	return model, cmd
+	// A cover that just arrived, or a card the last frame lacked, is drawn
+	// at once rather than on the next tick.
+	return model, tea.Batch(cmd, m.renderThumb())
 }
 
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -518,8 +543,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.cellAspect = cellAspect()
 	case tickMsg:
+		if msg.seq != m.tickSeq {
+			return m, nil // replaced by a sooner one
+		}
 		m.ticking = false
-		if m.full && time.Since(m.vizAt) > vizEvery {
+		if m.full && !m.opts.NoVizCycle && time.Since(m.vizAt) > vizEvery {
 			m.showViz((m.vizStyle + 1) % len(vizNames))
 		}
 		if m.flash != "" && time.Since(m.flashAt) > 4*time.Second {
@@ -527,15 +555,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds := []tea.Cmd{m.renderThumb(), m.kittySend()}
 		if every, ok := m.nextTick(); ok {
-			m.ticking = true
-			cmds = append(cmds, tick(every))
+			cmds = append(cmds, m.schedule(every))
 		}
 		return m, tea.Batch(cmds...)
 	case kittyMsg:
 		return m, m.kittySent(msg)
 	case thumbMsg:
 		m.thumbBusy = false
-		if len(m.thumbs) > 60 {
+		if len(m.thumbs) > 150 {
 			m.thumbs = map[string][]string{}
 		}
 		m.thumbs[msg.key] = msg.lines
@@ -685,6 +712,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.click(msg.Mouse())
 	case tea.MouseMotionMsg:
+		if m.full && m.vizList {
+			if i := msg.Mouse().Y - m.geo.optRow0; m.geo.options.has(msg.Mouse().X, msg.Mouse().Y) && i >= 0 && i < len(vizNames) {
+				m.vizSel = i
+				m.previewViz(i)
+			}
+			return m, nil
+		}
 		if m.dragging {
 			m.setSplit(float64(msg.X-margin) / float64(max(1, m.width-2*margin)))
 		}
@@ -1009,7 +1043,7 @@ func (m *Model) spaceUp() tea.Cmd {
 // toggleFull switches the fullscreen visualizer, asking the daemon for
 // waveform data only while it shows.
 func (m *Model) toggleFull() tea.Cmd {
-	m.full = !m.full
+	m.full, m.vizList = !m.full, false
 	if m.full {
 		m.vizStyle, m.vizPrev, m.vizAt = vizOpening, -1, time.Now()
 	}
@@ -1017,33 +1051,95 @@ func (m *Model) toggleFull() tea.Cmd {
 }
 
 // fullKey handles the keys that mean something else in fullscreen.
+// In fullscreen, tab steps through the styles, v lists them, a switches
+// the minutely change on and off; other keys (n, space…) work as ever.
 func (m *Model) fullKey(k string) (tea.Cmd, bool) {
 	n := len(vizNames)
+	if m.vizList {
+		switch k {
+		case "up", "k", "shift+tab":
+			m.vizSel = (m.vizSel + n - 1) % n
+			m.previewViz(m.vizSel)
+		case "down", "j", "tab":
+			m.vizSel = (m.vizSel + 1) % n
+			m.previewViz(m.vizSel)
+		case "enter", "space", " ", "l", "v":
+			m.vizList = false // keep what shows
+		case "esc", "q", "h":
+			m.previewViz(m.vizFrom) // back to the style before the list
+			m.vizList = false
+		case "a":
+			m.toggleVizCycle()
+		default:
+			if i, ok := vizDigit(k); ok {
+				m.pickViz(i)
+			}
+		}
+		return nil, true
+	}
 	switch k {
 	case "esc", "f", "q":
 		return m.toggleFull(), true
-	case "v", "tab", "down", "j":
+	case "tab", "right", "down", "j", "l":
 		m.showViz((m.vizStyle + 1) % n)
-	case "V", "shift+tab", "up", "k":
+	case "shift+tab", "left", "up", "k", "h":
 		m.showViz((m.vizStyle + n - 1) % n)
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0":
-		i := int(k[0]-'0') - 1
-		if k == "0" {
-			i = 9
+	case "v":
+		m.vizList, m.vizSel, m.vizFrom = true, m.vizStyle, m.vizStyle
+	case "a":
+		m.toggleVizCycle()
+	default:
+		i, ok := vizDigit(k)
+		if !ok {
+			return nil, false
 		}
-		if i < n && i != m.vizStyle {
+		if i != m.vizStyle {
 			m.showViz(i)
 		}
-	default:
-		return nil, false
 	}
 	return nil, true
+}
+
+// vizDigit maps 1–9 and 0 to the first ten styles.
+func vizDigit(k string) (int, bool) {
+	if len(k) != 1 || k[0] < '0' || k[0] > '9' {
+		return 0, false
+	}
+	i := int(k[0]-'0') - 1
+	if k == "0" {
+		i = 9
+	}
+	return i, i < len(vizNames)
+}
+
+// previewViz shows style i at once, without the dissolve: moving through
+// the list shows each style as the cursor lands on it.
+func (m *Model) previewViz(i int) {
+	if i != m.vizStyle {
+		m.vizPrev, m.vizStyle, m.vizAt = -1, i, time.Now()
+	}
+}
+
+// pickViz shows style i and closes the list.
+func (m *Model) pickViz(i int) {
+	m.vizList = false
+	if i != m.vizStyle {
+		m.showViz(i)
+	}
+}
+
+// toggleVizCycle switches the minutely change of style, and remembers it.
+func (m *Model) toggleVizCycle() {
+	m.opts.NoVizCycle = !m.opts.NoVizCycle
+	m.opts.save()
+	m.vizAt = time.Now() // switched back on: the next change is a minute away
+	m.setFlash(map[bool]string{false: "styles change every minute", true: "style stays"}[m.opts.NoVizCycle])
 }
 
 // Fullscreen opens on the showpiece and moves on every minute, dissolving
 // from one style into the next.
 const (
-	vizOpening = 9 // milkdrop
+	vizOpening = 0 // milkdrop
 	vizEvery   = time.Minute
 	vizFade    = 1500 * time.Millisecond
 )
@@ -1361,6 +1457,9 @@ func (m *Model) move(k string) tea.Cmd {
 // click maps a mouse click onto the layout recorded by the last render.
 // A click plays a song or opens an item; right click goes back.
 func (m *Model) click(ms tea.Mouse) tea.Cmd {
+	if m.full {
+		return m.fullClick(ms)
+	}
 	g := m.geo
 	if ms.Button == tea.MouseRight {
 		m.back()
@@ -1529,4 +1628,29 @@ func (m *Model) warm(v *view) tea.Cmd {
 		_, _ = client.Do(ipc.Request{Cmd: ipc.CmdWarm, IDs: ids})
 		return nil
 	}
+}
+
+// fullClick handles the mouse over the fullscreen visualizer: its buttons,
+// and the list of styles while it shows.
+func (m *Model) fullClick(ms tea.Mouse) tea.Cmd {
+	if ms.Button != tea.MouseLeft {
+		return nil
+	}
+	if m.vizList {
+		if !m.geo.options.has(ms.X, ms.Y) {
+			m.vizList = false
+			return nil
+		}
+		if i := ms.Y - m.geo.optRow0; i >= 0 && i < len(vizNames) {
+			m.pickViz(i)
+		}
+		return nil
+	}
+	for _, f := range m.geo.foot {
+		if f.r.has(ms.X, ms.Y) {
+			cmd, _ := m.fullKey(f.action)
+			return cmd
+		}
+	}
+	return nil
 }

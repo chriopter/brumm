@@ -79,7 +79,8 @@ func (m *Model) cardLines(c *card, size art.Size) []string {
 			return lines
 		}
 	}
-	key := fmt.Sprintf("%s:%s@%dx%d", m.opts.cover(), c.art, size.Width, size.Height)
+	m.cardSize = size
+	key := m.thumbKey(c.art, size)
 	if lines, ok := m.thumbs[key]; ok {
 		return lines
 	}
@@ -91,6 +92,38 @@ func (m *Model) cardLines(c *card, size art.Size) []string {
 		icon = icSong
 	}
 	return placeholder(size, icon)
+}
+
+func (m *Model) thumbKey(art string, size art.Size) string {
+	return fmt.Sprintf("%s:%s@%dx%d", m.opts.cover(), art, size.Width, size.Height)
+}
+
+// nextThumb is a card worth drawing ahead: the rows around the selection,
+// nearest first, whose cover is loaded and card not drawn yet.
+func (m *Model) nextThumb() thumbReq {
+	v, size := m.cur(), m.cardSize
+	if size.Width == 0 || m.opts.NoCards {
+		return thumbReq{}
+	}
+	for _, d := range []int{1, -1, 2, -2, 3, 4, 5, -3} {
+		i := v.sel + d
+		if i < 0 || i >= len(v.rows) {
+			continue
+		}
+		url := ""
+		if t := v.rows[i].track; t != nil {
+			url = t.Artwork
+		} else if it := v.rows[i].item; it != nil {
+			url = it.Artwork
+		}
+		if url == "" || m.covers[url] == nil {
+			continue
+		}
+		if key := m.thumbKey(url, size); m.thumbs[key] == nil {
+			return thumbReq{key, url, size}
+		}
+	}
+	return thumbReq{}
 }
 
 // caption is a card's one line: its name, then artist or facts.

@@ -115,6 +115,8 @@ func (m *Model) View() tea.View {
 	v.KeyboardEnhancements.ReportEventTypes = true // hold space to preview
 	v.ReportFocus = true
 	switch {
+	case m.full && m.vizList:
+		v.Content = m.overlay(content, m.vizListBox())
 	case m.full:
 	case m.pick != nil:
 		v.Content = m.overlay(content, m.pickerBox())
@@ -641,7 +643,7 @@ func (m *Model) helpLines() []stageLine {
 		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"← → 1–8", "sections"}, {"/", "search (paste a music.apple.com link to open it)"}, {"a A", "the song's album / artist (or click them)"}, {"c", "go to what's playing"}}},
 		{"play", [][2]string{{"space", "play / pause"}, {"hold space  O", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"R", "radio: a station from the song or artist"}, {"z Z", "add to queue / play next"}, {"shift ← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
 		{"library", [][2]string{{"* d", "love / dislike"}, {"i", "add to your library"}, {"P", "add to a playlist, or a new one"}, {"y", "copy the song's link"}}},
-		{"brumm", [][2]string{{"?", "this list (keys on the buttons: in the options)"}, {"o", "options: covers, autoplay and more"}, {"f", "fullscreen visualizer (v: next)"}, {"[ ]", "narrower / wider list"}, {"Q", "close, music keeps playing"}, {"q", "quit: stop the music"}, {"shift+L", "sign in again"}, {"U", "install an available update"}}},
+		{"brumm", [][2]string{{"?", "this list (keys on the buttons: in the options)"}, {"o", "options: covers, autoplay and more"}, {"f", "fullscreen visualizer (tab: next, v: all styles, a: auto-change)"}, {"[ ]", "narrower / wider list"}, {"Q", "close, music keeps playing"}, {"q", "quit: stop the music"}, {"shift+L", "sign in again"}, {"U", "install an available update"}}},
 	}
 	var out []stageLine
 	for i, g := range groups {
@@ -780,50 +782,80 @@ func (m *Model) fullscreen() string {
 		m.vizSpec[i] = v * v * v
 	}
 	h := m.height - 1
-	lines := m.viz.render(m.vizStyle, m.vizSpec, m.wave, m.width, h, m.frame, m.state.Playing)
-	if f := float64(time.Since(m.vizAt)) / float64(vizFade); m.vizPrev >= 0 && f < 1 {
-		old := m.viz.render(m.vizPrev, m.vizSpec, m.wave, m.width, h, m.frame, m.state.Playing)
-		lines = dissolve(old, lines, m.width, f)
-	} else {
-		m.vizPrev = -1
+	// A new style dissolves in over the old one, block by block, mixed
+	// in the visualizer's own grid.
+	from, f := m.vizPrev, float64(time.Since(m.vizAt))/float64(vizFade)
+	if from < 0 || f >= 1 {
+		from, f, m.vizPrev = -1, 1, -1
 	}
+	lines := m.viz.renderMix(from, m.vizStyle, f, m.vizSpec, m.wave, m.width, h, m.state.Playing)
 	st := m.state
 	info := sDim.Render("nothing playing")
 	if st.Title != "" {
 		info = sBold.Render(st.Title) + sDim.Render("  "+st.Artist+"  ·  "+clock(m.position())+" / "+clock(st.Dur))
 	}
-	hint := sDim.Render(vizNames[m.vizStyle]+"  ") + sKey.Render("v") + sDim.Render(" next  ") + sKey.Render("f") + sDim.Render(" close")
+	// The buttons on the right: each one a click target too.
+	auto := sHere.Render("●")
+	if m.opts.NoVizCycle {
+		auto = sDim.Render("○")
+	}
+	buttons := []struct{ key, label, action string }{
+		{"tab", vizNames[m.vizStyle], "tab"}, {"v", "styles", "v"}, {"a", "auto " + auto, "a"}, {"f", "close", "f"},
+	}
+	var parts []string
+	for _, b := range buttons {
+		parts = append(parts, sKey.Render(b.key)+" "+sDim.Render(b.label))
+	}
+	hint := strings.Join(parts, "   ")
 	if m.flash != "" {
 		hint = sDim.Render(m.flash+"   ") + hint
 	}
 	gap := max(1, m.width-4-lipgloss.Width(info)-lipgloss.Width(hint))
 	status := "  " + ansi.Truncate(info+strings.Repeat(" ", gap)+hint, m.width-4, "…")
+	m.geo = geometry{} // the browser is not on screen: nothing of it is clickable
+	x := 2 + lipgloss.Width(info) + gap
+	if m.flash != "" {
+		x += lipgloss.Width(m.flash) + 3
+	}
+	for i, b := range buttons {
+		w := lipgloss.Width(parts[i])
+		if x+w <= m.width-2 {
+			m.geo.foot = append(m.geo.foot, footHit{rect{x, h, x + w, h + 1}, b.action})
+		}
+		x += w + 3
+	}
 	return strings.Join(append(lines, status), "\n")
 }
 
-// dissolve blends two frames: the screen is cut into blocks, each switching
-// from a to b once f passes its own threshold, so the new picture appears
-// as a scatter of tiles that fills in.
-func dissolve(a, b []string, w int, f float64) []string {
-	const bw, bh = 6, 2 // block size in cells
-	out := make([]string, len(b))
-	for y := range b {
-		if y >= len(a) {
-			out[y] = b[y]
-			continue
+// vizListBox is the list of styles, over the visualizer's lower left.
+func (m *Model) vizListBox() []string {
+	var lines []string
+	for i, name := range vizNames {
+		gutter := "  "
+		if i == m.vizSel {
+			gutter = sHere.Render("▌") + " "
 		}
-		var sb strings.Builder
-		for x := 0; x < w; x += bw {
-			src := a[y]
-			// A fixed pseudo-random threshold per block.
-			hsh := uint32(x/bw)*2654435761 ^ uint32(y/bh)*2246822519
-			hsh ^= hsh >> 15
-			if float64(hsh%1000)/1000 < f {
-				src = b[y]
-			}
-			sb.WriteString(ansi.Cut(src, x, min(w, x+bw)))
+		dot := sDim.Render("○")
+		if i == m.vizStyle {
+			dot = sHere.Render("●")
 		}
-		out[y] = sb.String()
+		digit := " " // 1–9 and 0 pick the first ten
+		if i < 10 {
+			digit = fmt.Sprint((i + 1) % 10)
+		}
+		lines = append(lines, gutter+sKey.Render(digit)+"  "+dot+" "+name)
 	}
-	return out
+	auto := "on"
+	if m.opts.NoVizCycle {
+		auto = "off"
+	}
+	lines = append(lines, "", sKey.Render("enter")+sDim.Render(" keep  ")+sKey.Render("esc")+sDim.Render(" back  ")+sKey.Render("a")+sDim.Render(" auto: "+auto+"  ")+sKey.Render("v")+sDim.Render(" close"))
+	w := 0
+	for _, l := range lines {
+		w = max(w, lipgloss.Width(l))
+	}
+	for i := range lines {
+		lines[i] = " " + fit(lines[i], w+1)
+	}
+	return strings.Split(box("styles", false, "", lines, w+5, len(lines)+2), "\n")
 }

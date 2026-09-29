@@ -17,6 +17,7 @@ type Options struct {
 	NoAutoplay  bool   `json:"no_autoplay,omitempty"`
 	AlwaysTips  bool   `json:"always_tips,omitempty"`   // keys on their buttons
 	NoBarScroll bool   `json:"no_bar_scroll,omitempty"` // the bar widget's title stays put (read by BarWidget.qml)
+	NoVizCycle  bool   `json:"no_viz_cycle,omitempty"`  // the visualizer keeps its style instead of moving on each minute
 	VizFPS      int    `json:"viz_fps,omitempty"`       // fullscreen frames per second: 30, 60 (default) or 120
 }
 

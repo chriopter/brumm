@@ -12,3 +12,8 @@ Restart=on-failure
 RestartSec=2
 # 75: the program was updated; start the new one.
 RestartForceExitStatus=75
+# Stop only the daemon: it closes Chrome itself. Signalling Chrome too made
+# it abort (and dump core) while the daemon was closing it over the pipe.
+# Anything still running after the timeout is killed.
+KillMode=mixed
+TimeoutStopSec=15

@@ -4,6 +4,7 @@ import (
 	"image"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -229,5 +230,69 @@ func TestPlayShowsAtOnce(t *testing.T) {
 	report(ipc.State{Status: ipc.StatusReady, State: engine.State{ID: "new", Title: "New Song", Pos: 1.2, Playing: true}})
 	if m.pending != nil || m.state.Pos != 1.2 {
 		t.Fatal("the player's own report did not take over")
+	}
+}
+
+// Fullscreen: tab steps, v lists the styles, a stops the minutely change;
+// the buttons on the bottom line do the same when clicked.
+func TestVizControls(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height, m.full = 120, 35, true
+	start := m.vizStyle
+	m.fullKey("tab")
+	if m.vizStyle == start {
+		t.Fatal("tab does not change the style")
+	}
+	m.fullKey("v")
+	if !m.vizList || !strings.Contains(ansi.Strip(m.View().Content), "styles") {
+		t.Fatal("v does not list the styles")
+	}
+	from := m.vizStyle
+	m.fullKey("down")
+	if m.vizStyle == from {
+		t.Fatal("moving in the list does not show the style")
+	}
+	m.fullKey("esc")
+	if m.vizList || m.vizStyle != from {
+		t.Fatal("esc does not go back to the style before the list")
+	}
+	m.fullKey("v")
+	m.fullKey("3")
+	if m.vizList || m.vizStyle != 2 {
+		t.Fatalf("3 in the list shows style %d", m.vizStyle)
+	}
+	m.fullKey("a")
+	if !m.opts.NoVizCycle {
+		t.Fatal("a does not stop the change")
+	}
+	m.View()
+	for _, f := range m.geo.foot {
+		if f.action == "v" {
+			m.fullClick(tea.Mouse{X: f.r.x0, Y: f.r.y0, Button: tea.MouseLeft})
+		}
+	}
+	if !m.vizList {
+		t.Fatal("clicking the styles button does not list them")
+	}
+}
+
+// A cover that arrives is drawn as a card at once, even while the next
+// tick is seconds away (a card waiting to go); and the rows next to the
+// selection are drawn ahead.
+func TestCardDrawnAtOnce(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.width, m.height = 120, 35
+	m.schedule(4 * time.Second)
+	m.thumbWant = thumbReq{"pixel:a.jpg@20x10", "a.jpg", art.Size{Width: 20, Height: 10}}
+	m.Update(coverMsg{"a.jpg", image.NewRGBA(image.Rect(0, 0, 10, 10))})
+	if !m.thumbBusy {
+		t.Fatal("the card waits for the next tick")
+	}
+	m.Update(thumbMsg{"pixel:a.jpg@20x10", []string{"x"}})
+	fill(m.cur(), ipc.Message{Tracks: []apple.Track{{ID: "1", Artwork: "a.jpg"}, {ID: "2", Artwork: "b.jpg"}}})
+	m.cardSize = art.Size{Width: 20, Height: 10}
+	m.covers["b.jpg"] = image.NewRGBA(image.Rect(0, 0, 10, 10))
+	if w := m.nextThumb(); w.url != "b.jpg" {
+		t.Fatalf("the next row's card is not drawn ahead: %+v", w)
 	}
 }

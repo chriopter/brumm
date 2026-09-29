@@ -74,6 +74,7 @@ func (c Config) Save() error {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return err
 	}
+	_ = os.Chmod(Dir(), 0o700) // made by something else first, it may be open to others
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
