@@ -6,17 +6,43 @@
 # To embed a fresh Apple Music developer token, pass the MusicKit key, e.g.
 # from 1Password:
 #   APPLE_KEY_ID=… APPLE_TEAM_ID=… APPLE_PRIVATE_KEY="$(op read op://…)" bin/setup
-# Without it, brumm uses developer_token from ~/.config/brumm/config.json.
+# Without it, the token of the brumm installed now is kept; failing that,
+# brumm uses developer_token from ~/.config/brumm/config.json.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 command -v go >/dev/null || { echo "brumm needs Go: omarchy pkg add go" >&2; exit 1; }
 
 ldflags="-s -w -X main.version=dev-$(git describe --tags --always --dirty 2>/dev/null || echo local)"
+# BRUMM_TOKEN_FROM names another brumm to take the token from, e.g. an
+# unpacked release, when the installed one has none.
+installed="${BRUMM_TOKEN_FROM:-${XDG_BIN_HOME:-$HOME/.local/bin}/brumm}"
 if [[ -n ${APPLE_PRIVATE_KEY:-} ]]; then
   token=$(go run ./tools/devtoken)
-  ldflags+=" -X github.com/chriopter/brumm/internal/config.DevToken=$token"
   echo "embedded a new developer token (valid six months)"
+elif [[ -x $installed ]]; then
+  # Keep the token of the brumm installed now (a release, or an earlier
+  # setup), so a local build plays like the release it replaces. Release
+  # binaries carry it in plain text; the newest-expiring JWT wins.
+  token=""
+  best=0
+  while read -r jwt; do
+    exp=$(cut -d. -f2 <<<"$jwt" | tr '_-' '/+' | { b=$(cat); while (( ${#b} % 4 )); do b+="="; done; base64 -d <<<"$b" 2>/dev/null; } |
+      grep -o '"exp":[0-9]*' | cut -d: -f2)
+    if [[ -n $exp && $exp -gt $best && $exp -gt $(date +%s) ]]; then
+      best=$exp
+      token=$jwt
+    fi
+  done < <(grep -aoE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}' "$installed" | sort -u)
+  if [[ -n $token ]]; then
+    echo "kept the developer token of $installed (valid until $(date -d "@$best" +%F))"
+  else
+    echo "warning: $installed has no developer token; this build cannot play" >&2
+    echo "  reinstall a release, or run with BRUMM_TOKEN_FROM=/path/to/release/brumm" >&2
+  fi
+fi
+if [[ -n ${token:-} ]]; then
+  ldflags+=" -X github.com/chriopter/brumm/internal/config.DevToken=$token"
 fi
 
 stage=$(mktemp -d)

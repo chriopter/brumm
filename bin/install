@@ -43,4 +43,4 @@ echo "verified: signed by the brumm release key"
 tar -xzf brumm-linux-amd64.tar.gz
 ./brumm/brumm setup ./brumm
 echo
-echo "next: brumm login — then run brumm, or click the widget in the bar"
+echo "next: brumm login — it opens the player once you are signed in"

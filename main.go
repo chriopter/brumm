@@ -2,7 +2,7 @@
 //
 //	brumm          open the player (starts the background daemon if needed)
 //	brumm daemon   run the background daemon (usually via systemd)
-//	brumm login    sign in to Apple Music in the browser
+//	brumm login    sign in to Apple Music in the browser, then open the player
 //	brumm update   install the newest release now (it also updates itself daily)
 //	brumm setup D  install from an unpacked release D (used by install.sh)
 package main
@@ -11,6 +11,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/chriopter/brumm/internal/daemon"
 	"github.com/chriopter/brumm/internal/ipc"
@@ -39,6 +41,10 @@ func main() {
 			if c, dialErr := ipc.Dial(); dialErr == nil {
 				_, _ = c.Do(ipc.Request{Cmd: ipc.CmdReload})
 				c.Close()
+			}
+			// Signed in at a terminal: go straight to the music.
+			if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+				err = tui.Run()
 			}
 		}
 	case "setup":
@@ -73,4 +79,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "brumm:", err)
 		os.Exit(1)
 	}
+}
+
+func isTerminal(f *os.File) bool {
+	_, err := unix.IoctlGetTermios(int(f.Fd()), unix.TCGETS)
+	return err == nil
 }
