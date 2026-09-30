@@ -61,6 +61,7 @@ Item {
     // options as switches, and the ways out. Its rows, top to bottom:
     //   {act: key, icon, label} runs what key does · {option: name, label,
     //   hint} is a switch · {heading: text} · {sep: true}
+    property bool addOpen: false   // the + on the stage: to a playlist or the library
     property bool menuOpen: false
     property int menuSel: -1 // the row the keys are on; -1 none (opened by a click)
     readonly property var menuRows: {
@@ -69,6 +70,7 @@ Item {
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to Apple Music…" }, { sep: true })
         rows.push({ act: "f", icon: "󰊓", label: "Full-Screen Visualizer" },
                   { act: "g", icon: "󰆍", label: "Open in Terminal" },
+                  { act: "y", icon: "󰌷", label: "Copy Song Link" },
                   { sep: true }, { heading: "Options" },
                   { option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
                   { option: "autoplay", label: "Autoplay", hint: "Play on after the last song." },
@@ -1264,6 +1266,7 @@ Item {
 
     // dispatch takes a key the way the terminal player names it.
     function dispatch(k, ev) {
+        if (addOpen) { addOpen = false; if (k === "esc") return }
         if (menuOpen) return menuKey(k)
         if (upd) return updateKey(k)
         if (barAsk) {

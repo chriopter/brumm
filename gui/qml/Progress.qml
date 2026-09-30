@@ -120,6 +120,13 @@ Column {
     Item {
         width: parent.width
         height: left.height
+        // Where in the queue, between the times.
+        Text {
+            anchors.centerIn: parent
+            text: p.preview ? "PREVIEW" : store.st.length > 1 && store.st.index >= 0 ? (store.st.index + 1) + " / " + store.st.length : ""
+            color: p.preview ? ui.here : ui.dim
+            font { family: ui.sans; pixelSize: ui.px(11); weight: Font.DemiBold; letterSpacing: p.preview ? 1.2 : 0; features: { "tnum": 1 } }
+        }
         Text {
             id: left
             text: p.preview ? "30 s clip" : clock(p.shownPos)

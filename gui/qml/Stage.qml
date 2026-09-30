@@ -51,7 +51,7 @@ Item {
         visible: stage.has
         anchors.horizontalCenter: parent.horizontalCenter
         y: Math.max(0, Math.round((stage.height - implicitHeight) / 2))
-        width: Math.max(stage.coverSize, Math.min(stage.width, ui.px(440)))
+        width: Math.max(stage.coverSize, Math.min(stage.width, ui.px(540)))
         spacing: 0
 
         // The cover in a flow of what played and comes next, or in a wall
@@ -86,7 +86,7 @@ Item {
                 Text {
                     id: titleText
                     anchors.left: parent.left
-                    width: Math.min(implicitWidth, parent.width - tag.width - ui.px(16) - (heart.visible ? heart.width + ui.px(10) : 0))
+                    width: Math.min(implicitWidth, parent.width - rate.width - ui.px(16))
                     text: stage.title
                     color: ui.bright
                     style: ui.lift
@@ -94,31 +94,18 @@ Item {
                     font { family: ui.sans; pixelSize: ui.px(26); weight: Font.DemiBold }
                     elide: Text.ElideRight
                 }
-                Text {
-                    id: heart
-                    anchors { left: titleText.right; leftMargin: ui.px(10); verticalCenter: titleText.verticalCenter }
-                    readonly property int mark: { store.ratingRev; return stage.preview ? 0 : store.rating[stage.st.id] || 0 }
-                    visible: mark !== 0
-                    text: mark > 0 ? "♥" : "󰔑"
-                    color: mark > 0 ? ui.heart : ui.dim
-                    font { family: ui.mono; pixelSize: ui.px(18) }
-                }
-                Rectangle {
-                    id: tag
+                // Love and dislike, glass as the transport, lit when set.
+                Row {
+                    id: rate
                     anchors { right: parent.right; verticalCenter: titleText.verticalCenter }
-                    width: tagText.implicitWidth + ui.px(16)
-                    height: tagText.implicitHeight + ui.px(6)
-                    radius: height / 2
-                    visible: tagText.text !== ""
-                    color: stage.preview ? ui.here : Qt.alpha(ui.bright, 0.07)
-                    Text {
-                        id: tagText
-                        anchors.centerIn: parent
-                        text: stage.preview ? "PREVIEW" : stage.st.length > 1 && stage.st.index >= 0 ? (stage.st.index + 1) + " / " + stage.st.length : ""
-                        color: stage.preview ? ui.deep : ui.dim
-                        font { family: ui.sans; pixelSize: ui.px(11); weight: Font.DemiBold; letterSpacing: stage.preview ? 1.2 : 0; features: { "tnum": 1 } }
-                    }
+                    spacing: ui.px(10)
+                    visible: !stage.preview
+                    readonly property int mark: { store.ratingRev; return store.rating[stage.st.id] || 0 }
+                    Orb { size: ui.px(34); icon: rate.mark > 0 ? "󰋑" : "󰋕"; on: rate.mark > 0; onClicked: store.ratePlaying(1) }
+                    Orb { size: ui.px(34); icon: "󰔑"; on: rate.mark < 0; onClicked: store.ratePlaying(-1) }
                 }
+                // A right click on the title copies the song's link.
+                TapHandler { acceptedButtons: Qt.RightButton; onTapped: store.linkPlaying() }
             }
 
             // The artist and the album: each opens with a click (A, a).
@@ -153,23 +140,7 @@ Item {
                 }
             }
 
-            // What to do with this song: small glass buttons that open to
-            // show their keys when pointed at.
-            Row {
-                visible: !stage.preview
-                anchors.left: parent.left
-                anchors.leftMargin: -ui.px(10)
-                spacing: 0
-                readonly property int mark: { store.ratingRev; return store.rating[stage.st.id] || 0 }
-                MorphButton { icon: parent.mark > 0 ? "󰋑" : "󰋕"; label: parent.mark > 0 ? "Loved" : "Love"; key: "*"; lit: parent.mark > 0; onClicked: store.ratePlaying(1) }
-                MorphButton { icon: "󰔑"; label: parent.mark < 0 ? "Disliked" : "Dislike"; key: "d"; lit: parent.mark < 0; onClicked: store.ratePlaying(-1) }
-                MorphButton { icon: "󰐒"; label: "Playlist"; key: "P"; onClicked: store.pickPlaying() }
-                MorphButton { icon: "󰋚"; label: "Library"; key: "i"; visible: !(stage.st.id || "").startsWith("i."); onClicked: store.libraryPlaying() }
-                MorphButton { icon: "󰐹"; label: "Radio"; key: "R"; onClicked: store.radioPlaying() }
-                MorphButton { icon: "󰌷"; label: "Link"; key: "y"; onClicked: store.linkPlaying() }
-            }
-
-            Item { width: 1; height: ui.px(10) }
+            Item { width: 1; height: ui.px(16) }
             Progress { width: parent.width }
             Item { width: 1; height: ui.px(12) }
             Controls { width: parent.width }

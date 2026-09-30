@@ -190,11 +190,11 @@ Window {
             anchors { left: sidebar.right; leftMargin: ui.gap; right: parent.right; top: parent.top }
         }
 
-        MouseArea { // a click beside the open menu closes it
+        MouseArea { // a click beside an open menu closes it
             anchors.fill: parent
             z: 1
-            visible: store.menuOpen
-            onClicked: { store.menuOpen = false; store.menuSel = -1 }
+            visible: store.menuOpen || store.addOpen
+            onClicked: { store.menuOpen = false; store.menuSel = -1; store.addOpen = false }
         }
 
         Browser {
