@@ -1,6 +1,9 @@
 // brumm is an Apple Music player for Omarchy.
 //
-//	brumm          open the player (starts the background daemon if needed)
+//	brumm          open the player as picked in its options: tui (default) or gui
+//	brumm --tui    open the player in this terminal (starts the daemon if needed)
+//	brumm --gui    open the player as a window
+//	brumm open     open the player as picked, in a window or a new terminal (the launcher's entry)
 //	brumm daemon   run the background daemon (usually via systemd)
 //	brumm login    sign in to Apple Music in the browser, then open the player
 //	brumm update   install the newest release now and offer to restart into it
@@ -16,7 +19,9 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/chriopter/brumm/internal/daemon"
+	"github.com/chriopter/brumm/internal/gui"
 	"github.com/chriopter/brumm/internal/ipc"
+	"github.com/chriopter/brumm/internal/launch"
 	"github.com/chriopter/brumm/internal/login"
 	"github.com/chriopter/brumm/internal/tui"
 	"github.com/chriopter/brumm/internal/update"
@@ -32,7 +37,25 @@ func main() {
 	}
 	switch cmd {
 	case "":
+		if launch.Default() == launch.GUI {
+			err = launch.Open(launch.GUI) // the window, and the terminal back
+		} else {
+			err = tui.Run()
+		}
+	case "--tui", "tui":
 		err = tui.Run()
+	case "--gui", "gui":
+		err = gui.Run()
+	case "open":
+		ui := launch.Default()
+		if len(os.Args) > 2 {
+			ui = os.Args[2]
+		}
+		if ui == launch.GUI {
+			err = gui.Run()
+		} else {
+			err = launch.Open(launch.TUI)
+		}
 	case "daemon":
 		err = daemon.Run(version)
 	case "login":
@@ -74,7 +97,7 @@ func main() {
 	case "version", "--version":
 		fmt.Println("brumm", version)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: brumm [daemon | login | update | setup DIR | version]")
+		fmt.Fprintln(os.Stderr, "usage: brumm [--tui | --gui | open [tui|gui] | daemon | login | update | setup DIR | version]")
 		os.Exit(2)
 	}
 	if err != nil {

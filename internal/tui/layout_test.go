@@ -379,9 +379,11 @@ func TestUpNextSongs(t *testing.T) {
 	if m.nextAt(r.x0, r.y1) != -1 || m.shapeAt(r.x0, r.y1) == shapePointer {
 		t.Fatal("the more line plays")
 	}
-	if _, ok := m.nextClick(r.x0, r.y0); !ok {
-		t.Fatal("a click on a song plays nothing")
+	st := m.state
+	if _, ok := m.nextClick(r.x0, r.y0); !ok || m.state.ID != q[1].ID || m.state.Index != 5 {
+		t.Fatalf("a click on a song plays nothing, or shows %q at %d", m.state.ID, m.state.Index)
 	}
+	m.state, m.pending, m.wantPlay = st, nil, nil // the rest is about the song playing before
 
 	// Drawn once: the next frame splices the same rows, and the same
 	// answer again changes nothing.

@@ -287,6 +287,13 @@ func (m *Model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 		case "ctrl+u":
 			p.input = ""
+		case "ctrl+w":
+			f := strings.TrimRight(p.input, " ")
+			if i := strings.LastIndex(f, " "); i >= 0 {
+				p.input = f[:i+1]
+			} else {
+				p.input = ""
+			}
 		default:
 			if t := msg.Text; t != "" {
 				p.input += t

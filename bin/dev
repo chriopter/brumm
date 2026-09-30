@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Run a development build: `bin/dev` starts the daemon in the foreground with
-# its logs; `bin/dev ui` opens the TUI against it.
+# its logs; `bin/dev ui` opens the TUI against it, `bin/dev gui` the window.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 mkdir -p tmp
 go build -o tmp/brumm .
 if [[ ${1:-} == ui ]]; then
-  exec tmp/brumm
+  exec tmp/brumm --tui
+fi
+if [[ ${1:-} == gui ]]; then
+  bin/build-gui tmp
+  exec tmp/brumm-gui
 fi
 # The installed daemon would hold the socket and the MPRIS name.
 systemctl --user stop brumm.service 2>/dev/null || true

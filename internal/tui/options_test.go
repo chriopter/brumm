@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chriopter/brumm/internal/ipc"
+	"github.com/chriopter/brumm/internal/launch"
 	"github.com/chriopter/brumm/internal/update"
 )
 
@@ -77,7 +78,7 @@ func TestBarOption(t *testing.T) {
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
 	m.width, m.height = 120, 35
 	m.optOpen = true
-	if strings.Contains(m.View().Content, "top bar player") || m.optLines[optBar] != -1 {
+	if strings.Contains(m.View().Content, "Show in Top Bar") || m.optLines[optBar] != -1 {
 		t.Fatal("the bar widget's row shows without omarchy")
 	}
 	for range numOptions {
@@ -95,7 +96,7 @@ func TestBarOption(t *testing.T) {
 		t.Fatalf("on %v, asking %v", m.barOn, m.barAsk)
 	}
 	m.optOpen = true
-	if !strings.Contains(ansi.Strip(m.View().Content), "top bar player") {
+	if !strings.Contains(ansi.Strip(m.View().Content), "Show in Top Bar") {
 		t.Fatal("no top bar player row")
 	}
 	m.optSel = optBar
@@ -153,7 +154,7 @@ func TestOptionsMenu(t *testing.T) {
 	m := playingModel(80, 24)
 	m.optOpen = true
 	m.View()
-	want := []string{"cover", "cover colors", "autoplay", "reduce motion", "show shortcuts", "top bar player"}
+	want := []string{"Cover Colors", "Autoplay", "Reduce Motion", "Cover Style", "Show Shortcuts", "Show in Top Bar"}
 	for i := range numOptions {
 		m.optSel = i
 		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
@@ -307,5 +308,56 @@ func BenchmarkView(b *testing.B) {
 				m.View()
 			}
 		})
+	}
+}
+
+// g goes over to the window, which brumm opens from then on; without
+// one it says so and stays.
+func TestWindowKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	m := playingModel(100, 30)
+	if cmd := m.key("g"); cmd != nil || !strings.Contains(m.flash, "not installed") || m.opts.Start == launch.GUI {
+		t.Fatalf("no window: flash %q, start %q", m.flash, m.opts.Start)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, launch.GUIName), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if cmd := m.key("g"); cmd == nil || m.opts.Start != launch.GUI {
+		t.Fatalf("a window: start %q", m.opts.Start)
+	}
+}
+
+// → switches an option on and ← off, whatever it was; space flips it.
+func TestOptionArrows(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := playingModel(100, 30)
+	m.optOpen, m.optSel = true, optMotion
+	for _, c := range []struct {
+		key string
+		on  bool
+	}{{"right", true}, {"right", true}, {"left", false}, {"h", false}, {"l", true}, {"space", false}} {
+		if m.optionsKey(c.key); m.opts.ReduceMotion != c.on {
+			t.Fatalf("%s: reduce motion %v", c.key, m.opts.ReduceMotion)
+		}
+	}
+}
+
+// The colors row is a choice of theme or cover, named by what it is now,
+// as in the window's menu: ← the theme's, → the cover's.
+func TestColorsRow(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := playingModel(100, 30)
+	m.optOpen, m.optSel = true, optColors
+	m.optionsKey("left")
+	out := ansi.Strip(m.View().Content)
+	if !m.opts.NoCoverColors || !strings.Contains(out, "Theme Colors") || !strings.Contains(out, "● theme") {
+		t.Fatalf("← leaves cover colors %v", !m.opts.NoCoverColors)
+	}
+	m.optionsKey("right")
+	if out = ansi.Strip(m.View().Content); m.opts.NoCoverColors || !strings.Contains(out, "Cover Colors") || !strings.Contains(out, "● cover") {
+		t.Fatal("→ does not choose the cover's colors")
 	}
 }

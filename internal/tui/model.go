@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/chriopter/brumm/internal/art"
 	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/ipc"
+	"github.com/chriopter/brumm/internal/launch"
 	"github.com/chriopter/brumm/internal/login"
 )
 
@@ -173,7 +176,8 @@ type Model struct {
 
 	rating map[string]int // loves (1) and dislikes (-1) seen so far, by id
 
-	pending *pendingPlay // a song started and shown, not yet reported playing
+	pending  *pendingPlay // a song started and shown, not yet reported playing
+	wantPlay *wantPlaying // a pause or play asked for, shown before the player reports it
 
 	cardSize art.Size // the size cards were last drawn at, for drawing ahead
 	refresh  int      // the screen's refresh rate: the visualizer's auto rate
@@ -203,6 +207,7 @@ type Model struct {
 	lastErr string
 	help    bool
 	resumed bool
+	placing bool // asking for a place the window left (place.go): no resuming till it answers
 	lastVol float64
 	geo     geometry
 
@@ -217,7 +222,9 @@ type Model struct {
 	reexec   bool    // the binary was updated: restart into it on quit
 	pointer  string  // the mouse pointer's shape as last sent (pointer.go)
 
-	opts options
+	opts     options
+	sentOpts map[string]any      // the options as last sent to the daemon
+	optQueue chan map[string]any // changes on their way to it, in order
 
 	hasOmarchy bool // omarchy is here: the bar widget can be switched (bar.go)
 	barOn      bool // the bar widget is on, as far as is known
@@ -226,8 +233,10 @@ type Model struct {
 	termBg color.Color // the terminal's background, once it says: accents keep clear of it
 	acc    accent      // the colors of what plays (accent.go)
 
-	next      []nextUp // the queue's next covers (upnext.go)
-	nextAsked nextKey  // the state they were last asked for in
+	next      []nextUp      // the queue's next covers (upnext.go)
+	upTracks  []apple.Track // the queue from the song playing on, as last asked
+	upPos     int           // the queue position of its first song
+	nextAsked nextKey       // the state they were last asked for in
 	nextSeq   int
 	nextGen   int        // counts changes to next, for the row's cache
 	nextDraw  nextStrip  // the row as last drawn
@@ -305,7 +314,8 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), m.schedule(frameEvery), func() tea.Msg { return refreshMsg(screenRefresh()) }, m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
+	m.placing = true
+	return tea.Batch(m.askPlace(), m.listen(), m.schedule(frameEvery), func() tea.Msg { return refreshMsg(screenRefresh()) }, m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
 		m.send(ipc.Request{Cmd: ipc.CmdUpdate}), // look for an update on every start
 		m.readBar(), tea.RequestBackgroundColor, m.fetchNext(false))
 }
@@ -384,7 +394,7 @@ func (m *Model) listen() tea.Cmd {
 // reconnect retries the daemon once a second, starting it if needed.
 func reconnect() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {
-		c, err := connect()
+		c, err := launch.Connect()
 		if err != nil {
 			return connectedMsg{err: err}
 		}
@@ -687,7 +697,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case seekMsg:
 		if msg.seq == m.seekSeq {
 			if d := m.state.Dur; d > 0 && m.seekTo >= d-1 {
-				return m, m.send(ipc.Request{Cmd: ipc.CmdNext})
+				return m, m.skip()
 			}
 			return m, m.send(ipc.Request{Cmd: ipc.CmdSeek, Value: m.seekTo})
 		}
@@ -697,6 +707,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case flashMsg:
 		m.setFlash(string(msg))
+	case placeMsg:
+		return m, m.gotPlace(msg)
 	case openMsg:
 		it := msg.item
 		return m, m.push(&view{title: it.Name, key: it.Key(), item: &it}, msg.song)
@@ -831,6 +843,7 @@ func (m *Model) event(msg ipc.Message) tea.Cmd {
 	if msg.State != nil {
 		wasLoggedOut := m.state.Status == ipc.StatusLoggedOut
 		m.keepShowing(msg.State)
+		m.keepPlaying(msg.State)
 		songChanged := msg.State.ID != m.state.ID
 		m.state, m.stateAt = *msg.State, time.Now()
 		if songChanged && m.section == secQueue && len(m.stack()) == 1 {
@@ -844,6 +857,9 @@ func (m *Model) event(msg ipc.Message) tea.Cmd {
 			cmds = append(cmds, m.load(m.cur()))
 		}
 		cmds = append(cmds, m.maybeFetchCover(), m.maybeResume(), m.autoLogin(), m.fetchNext(false))
+	}
+	if msg.Options != nil {
+		m.optionsChanged(*msg.Options)
 	}
 	if msg.Spectrum != nil {
 		m.feedSpectrum(msg.Spectrum)
@@ -909,16 +925,12 @@ func (m *Model) position() float64 {
 // ── navigation ─────────────────────────────────────────────────────────
 
 func (m *Model) switchTo(s section) tea.Cmd {
-	m.section, m.help = s, false
+	m.section, m.help, m.filtering = s, false, false // a filter stays with its list, the typing does not
 	if s == secQueue {
 		m.stacks[secQueue] = m.stacks[secQueue][:1]
 		m.cur().loaded = false // always fresh
 	}
-	if s != secSearch {
-		m.searching = false // the box stays behind
-	} else if m.cur().key == "search:" {
-		m.searching = true
-	}
+	m.searching = false // the box stays behind; at Search, typing a letter goes into it (typesSearch)
 	if v := m.cur(); !v.loaded {
 		return m.load(v)
 	}
@@ -950,13 +962,14 @@ func (m *Model) push(v *view, song string) tea.Cmd {
 	return m.load(v)
 }
 
-// selectSong selects the row playing id, if the view lists it.
+// selectSong selects the row playing id — or the item id — if the view
+// lists it.
 func (m *Model) selectSong(v *view, id string) {
 	if id == "" {
 		return
 	}
 	for i, r := range v.rows {
-		if r.track != nil && (r.track.ID == id || strings.HasSuffix(r.track.ID, id)) {
+		if (r.track != nil && (r.track.ID == id || strings.HasSuffix(r.track.ID, id))) || (r.item != nil && r.item.ID == id) {
 			v.sel, v.selAt = i, m.frame
 			return
 		}
@@ -991,7 +1004,8 @@ func (m *Model) activate() tea.Cmd {
 		return m.push(&view{title: it.Name, key: it.Key(), item: &it}, "")
 	}
 	if v.key == "queue:" {
-		return m.send(ipc.Request{Cmd: ipc.CmdJump, Value: float64(v.qpos + v.sel)})
+		return tea.Batch(m.showPlayingAt(*r.track, m.state.Source, v.qpos+v.sel),
+			m.send(ipc.Request{Cmd: ipc.CmdJump, Value: float64(v.qpos + v.sel)}))
 	}
 	ids, at := v.songs()
 	i := at[v.sel]
@@ -1114,7 +1128,7 @@ func (m *Model) copyLink() tea.Cmd {
 // report releases just toggle.
 func (m *Model) spaceDownKey(repeat bool) tea.Cmd {
 	if !m.releases {
-		return m.send(ipc.Request{Cmd: ipc.CmdToggle})
+		return m.toggle()
 	}
 	if repeat || m.spaceDown {
 		return nil
@@ -1161,7 +1175,7 @@ func (m *Model) spaceUp() tea.Cmd {
 		m.previewing = false
 		return m.send(ipc.Request{Cmd: ipc.CmdPreview})
 	}
-	return m.send(ipc.Request{Cmd: ipc.CmdToggle})
+	return m.toggle()
 }
 
 // toggleFull switches the fullscreen visualizer, asking the daemon for
@@ -1214,7 +1228,7 @@ func (m *Model) fullKey(k string) (tea.Cmd, bool) {
 		m.toggleVizCycle()
 	case "F":
 		m.opts.VizFPS = step(drawRates, m.opts.VizFPS, 1)
-		m.opts.save()
+		m.saveOptions()
 		m.setFlash("visualizer: " + m.fpsLabel())
 	default:
 		i, ok := vizDigit(k)
@@ -1259,7 +1273,7 @@ func (m *Model) pickViz(i int) {
 // toggleVizCycle switches the minutely change of style, and remembers it.
 func (m *Model) toggleVizCycle() {
 	m.opts.NoVizCycle = !m.opts.NoVizCycle
-	m.opts.save()
+	m.saveOptions()
 	m.vizAt = time.Now() // switched back on: the next change is a minute away
 	m.setFlash(map[bool]string{false: "styles change every minute", true: "style stays"}[m.opts.NoVizCycle])
 }
@@ -1322,7 +1336,7 @@ func (m *Model) jumpToPlaying() tea.Cmd {
 
 // maybeResume lands on what is playing the first time brumm opens mid-song.
 func (m *Model) maybeResume() tea.Cmd {
-	if m.resumed || m.state.Source == "" {
+	if m.resumed || m.placing || m.state.Source == "" {
 		return nil
 	}
 	root := m.stacks[secPlaylists][0]
@@ -1336,12 +1350,28 @@ func (m *Model) maybeResume() tea.Cmd {
 	return m.jumpToPlaying()
 }
 
+// typesSearch is whether k, pressed on the Search section's results with
+// the box not focused, starts typing into it: any character but a digit
+// (the sections) and the few keys that mean something everywhere.
+func (m *Model) typesSearch(k string) bool {
+	if m.section != secSearch || len(m.stack()) != 1 || m.full || utf8.RuneCountInString(k) != 1 {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(k)
+	return unicode.IsPrint(r) && r != ' ' && !unicode.IsDigit(r) && !strings.ContainsRune("/?ofgqQ", r)
+}
+
 func (m *Model) key(k string) tea.Cmd {
+	if m.typesSearch(k) {
+		m.searching, m.help = true, false
+		m.query += k
+		return m.typed()
+	}
 	switch k {
 	case "q":
 		// Done listening: the music stops and brumm with it.
 		return tea.Sequence(m.send(ipc.Request{Cmd: ipc.CmdQuit}), tea.Quit)
-	case "Q", "ctrl+c":
+	case "Q", "ctrl+c", "ctrl+q":
 		return tea.Quit // close the window; the music plays on
 	case "L":
 		return signIn()
@@ -1360,9 +1390,9 @@ func (m *Model) key(k string) tea.Cmd {
 	case "f":
 		return m.toggleFull()
 	case "n":
-		return m.send(ipc.Request{Cmd: ipc.CmdNext})
+		return m.skip()
 	case "p", "b":
-		return m.send(ipc.Request{Cmd: ipc.CmdPrev})
+		return m.goBack()
 	case "shift+left", "shift+right":
 		delta := 10.0
 		if k == "shift+left" {
@@ -1425,6 +1455,8 @@ func (m *Model) key(k string) tea.Cmd {
 		return m.copyLink()
 	case "U":
 		return m.checkUpdate()
+	case "g":
+		return m.toWindow()
 	case "esc", "h", "backspace":
 		if m.help {
 			m.help = false
@@ -1439,6 +1471,10 @@ func (m *Model) key(k string) tea.Cmd {
 		}
 		m.back()
 	case "enter", "l":
+		if v := m.cur(); m.section == secSearch && len(m.stack()) == 1 && (v.sel >= len(v.rows) || !v.rows[v.sel].selectable()) {
+			m.searching = true // no results to open: into the box
+			return nil
+		}
 		return m.activate()
 	default:
 		return m.move(k)
@@ -1488,7 +1524,7 @@ func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "ctrl+u":
 		m.query = ""
-	case "ctrl+c":
+	case "ctrl+c", "ctrl+q":
 		return tea.Quit
 	case "down", "up":
 		m.searching = false // move into the results
@@ -1496,6 +1532,12 @@ func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "left", "right", "tab", "shift+tab":
 		m.searching = false // on to the next section: the box has no cursor to move
 		return m.key(msg.String())
+	case "1", "2", "3", "4", "5", "6", "7", "8":
+		if m.query == "" { // nothing typed yet: a digit is a section, as outside the box
+			m.searching = false
+			return m.key(msg.String())
+		}
+		m.query += msg.Text
 	default:
 		if msg.Text == "" {
 			return nil
@@ -1538,8 +1580,9 @@ func (m *Model) runSearch(final bool) tea.Cmd {
 	if len([]rune(q)) < 2 {
 		return nil
 	}
-	if cur := m.stacks[secSearch][0]; cur.key == "search:"+q {
-		return nil // already showing it
+	if root := m.stacks[secSearch][0]; root.key == "search:"+q {
+		m.stacks[secSearch] = m.stacks[secSearch][:1] // already found: back to the results
+		return nil
 	}
 	m.stacks[secSearch] = []*view{{title: "Search", key: "search:" + q}}
 	return m.load(m.cur())
@@ -1577,7 +1620,7 @@ func (m *Model) step(k string) bool {
 		v.sel -= page
 	case "pgdown", "ctrl+d":
 		v.sel += page
-	case "g", "home":
+	case "home":
 		v.sel = 0
 	case "G", "end":
 		v.sel = n - 1
@@ -1589,7 +1632,7 @@ func (m *Model) step(k string) bool {
 	if v.sel < prev || k == "G" || k == "end" {
 		dir = -1
 	}
-	if k == "g" || k == "home" {
+	if k == "home" {
 		dir = 1
 	}
 	v.sel = nearest(v.rows, v.sel, dir)
@@ -1698,11 +1741,11 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 	case g.crumb.has(ms.X, ms.Y):
 		m.back()
 	case g.play.has(ms.X, ms.Y):
-		return m.send(ipc.Request{Cmd: ipc.CmdToggle})
+		return m.toggle()
 	case g.prev.has(ms.X, ms.Y):
-		return m.send(ipc.Request{Cmd: ipc.CmdPrev})
+		return m.goBack()
 	case g.next.has(ms.X, ms.Y):
-		return m.send(ipc.Request{Cmd: ipc.CmdNext})
+		return m.skip()
 	case g.shuffle.has(ms.X, ms.Y):
 		return m.key("s")
 	case g.repeat.has(ms.X, ms.Y):
@@ -1793,16 +1836,95 @@ func (m *Model) addToLibrary() tea.Cmd {
 type pendingPlay struct {
 	track  apple.Track
 	source string
+	index  int // its place in the queue; -1 when not known
 	at     time.Time
 }
 
 // showPlaying puts track on the stage now, as if it already played.
 func (m *Model) showPlaying(t apple.Track, source string) tea.Cmd {
-	m.pending = &pendingPlay{t, source, time.Now()}
+	return m.showPlayingAt(t, source, -1)
+}
+
+// showPlayingAt is showPlaying for a song at a known place in the queue.
+func (m *Model) showPlayingAt(t apple.Track, source string, index int) tea.Cmd {
+	m.pending = &pendingPlay{t, source, index, time.Now()}
+	m.wantPlay = &wantPlaying{true, time.Now()} // no flash of "paused" while it loads
 	st := m.state
 	m.keepShowing(&st)
 	m.state, m.stateAt = st, time.Now()
 	return m.maybeFetchCover()
+}
+
+// wantPlaying is a pause or play asked for: the button shows it at once,
+// and the player's reports keep showing it until they catch up.
+type wantPlaying struct {
+	playing bool
+	at      time.Time
+}
+
+// keepPlaying lays the pause or play asked for over a report that does
+// not have it yet, for a few seconds at most.
+func (m *Model) keepPlaying(st *ipc.State) {
+	w := m.wantPlay
+	if w == nil {
+		return
+	}
+	if st.Playing == w.playing || time.Since(w.at) > 6*time.Second {
+		m.wantPlay = nil
+		return
+	}
+	st.Playing = w.playing
+}
+
+// toggle pauses or plays, shown at once.
+func (m *Model) toggle() tea.Cmd {
+	if m.state.ID != "" {
+		playing := !m.state.Playing
+		m.state.Pos, m.stateAt = m.position(), time.Now()
+		m.state.Playing = playing
+		m.wantPlay = &wantPlaying{playing, time.Now()}
+	}
+	return m.send(ipc.Request{Cmd: ipc.CmdToggle})
+}
+
+// stayPlaying keeps the button on pause through a change of song: the
+// player reports "not playing" while it loads the next one.
+func (m *Model) stayPlaying() {
+	if m.state.Playing {
+		m.wantPlay = &wantPlaying{true, time.Now()}
+	}
+}
+
+// skip goes to the next song, which shows at once when the queue ahead
+// is known.
+func (m *Model) skip() tea.Cmd {
+	m.stayPlaying()
+	var cmd tea.Cmd
+	if pos, ok := m.afterPlaying(); ok && m.state.Preview == nil {
+		if t, ok := m.upTrack(pos); ok {
+			cmd = m.showPlayingAt(t, m.state.Source, pos)
+		}
+	}
+	return tea.Batch(cmd, m.send(ipc.Request{Cmd: ipc.CmdNext}))
+}
+
+// goBack goes to the previous song, or after 3 s back to the start of
+// this one, as the player does; the playhead shows that at once.
+func (m *Model) goBack() tea.Cmd {
+	m.stayPlaying()
+	if m.state.Dur > 0 && m.position() > 3 {
+		m.seekTo, m.seekAt = 0, time.Now()
+	}
+	return m.send(ipc.Request{Cmd: ipc.CmdPrev})
+}
+
+// jump plays the song at queue position pos, shown at once when known.
+func (m *Model) jump(pos int) tea.Cmd {
+	var cmd tea.Cmd
+	if t, ok := m.upTrack(pos); ok {
+		cmd = m.showPlayingAt(t, m.state.Source, pos)
+	}
+	return tea.Batch(cmd, m.send(ipc.Request{Cmd: ipc.CmdJump, Value: float64(pos)}))
 }
 
 // keepShowing lays the song being started over a report from the player
@@ -1820,6 +1942,9 @@ func (m *Model) keepShowing(st *ipc.State) {
 	t := p.track
 	st.ID, st.Title, st.Artist, st.Album, st.Dur, st.Pos = t.ID, t.Title, t.Artist, t.Album, t.Duration, 0
 	st.Source, st.Playing, st.Preview = p.source, true, nil
+	if p.index >= 0 {
+		st.Index = p.index
+	}
 	if t.Artwork != "" {
 		st.Artwork = t.Artwork
 	}

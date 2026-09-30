@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Build brumm's window, brumm-gui (a Qt 6 Quick program in gui/), into
+# the directory given, tmp/ by default; GUI_BUILD names the build
+# directory, tmp/gui-build by default. Needs qt6-declarative,
+# qt6-shadertools and a C++ compiler (base-devel).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+out=$(realpath -m "${1:-tmp}")
+command -v qmake6 >/dev/null || { echo "building the window needs Qt 6: omarchy pkg add qt6-declarative qt6-shadertools" >&2; exit 1; }
+build=${GUI_BUILD:-tmp/gui-build}
+mkdir -p "$build" "$out"
+root=$PWD
+(cd "$build" && qmake6 "$root/gui/brumm-gui.pro" >/dev/null && make -s -j"$(nproc)")
+# Into place by a rename: a running window keeps its old program.
+cp "$build/brumm-gui" "$out/.brumm-gui.new" && mv -f "$out/.brumm-gui.new" "$out/brumm-gui"

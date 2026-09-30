@@ -56,7 +56,7 @@ func (m *Model) barRead(msg barMsg) {
 	m.barOn = msg.on
 	if m.opts.Bar != onOff(msg.on) {
 		m.opts.Bar = onOff(msg.on)
-		m.opts.save()
+		m.saveOptions()
 	}
 	m.barAsk = !msg.on && !m.opts.BarOffered
 }
@@ -65,13 +65,20 @@ func (m *Model) barRead(msg barMsg) {
 // it back if omarchy refuses.
 func (m *Model) setBar(on bool) tea.Cmd {
 	m.barOn, m.opts.Bar = on, onOff(on)
-	return func() tea.Msg { return barSetMsg{on, update.SetPlugin(on)} }
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return barSetMsg{on, update.SetPlugin(on)}
+		}
+		_, err := client.Do(ipc.Request{Cmd: ipc.CmdOptions, Options: map[string]any{"bar": onOff(on)}})
+		return barSetMsg{on, err}
+	}
 }
 
 func (m *Model) barSet(msg barSetMsg) {
 	if msg.err != nil {
 		m.barOn, m.opts.Bar = !msg.on, onOff(!msg.on)
-		m.opts.save()
+		m.saveOptions()
 		m.setFlash("bar widget: " + msg.err.Error())
 		return
 	}
@@ -91,7 +98,7 @@ func (m *Model) barAnswer(yes bool) tea.Cmd {
 	if yes {
 		cmd = m.setBar(true)
 	}
-	m.opts.save()
+	m.saveOptions()
 	return cmd
 }
 

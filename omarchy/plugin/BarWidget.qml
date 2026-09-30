@@ -27,11 +27,17 @@ BarWidget {
   // from its options file.
   property bool barScroll: true
 
+  // What brumm opens, as last used: the window or the terminal player.
+  property bool window: false
+
   function readOptions(text) {
     try {
-      root.barScroll = !JSON.parse(text).no_bar_scroll
+      const o = JSON.parse(text)
+      root.barScroll = !o.no_bar_scroll
+      root.window = o.start === "gui"
     } catch (e) {
       root.barScroll = true
+      root.window = false
     }
   }
 
@@ -41,7 +47,7 @@ BarWidget {
     printErrors: false
     onLoaded: root.readOptions(text())
     onFileChanged: reload() // text() is stale in the change signal itself
-    onLoadFailed: root.barScroll = true
+    onLoadFailed: { root.barScroll = true; root.window = false }
   }
 
   function close() { popupOpen = false }
@@ -49,8 +55,8 @@ BarWidget {
     const s = Math.max(0, Math.floor(sec))
     return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0")
   }
-  function openTui() {
-    Quickshell.execDetached(["omarchy-launch-or-focus-tui", "brumm"])
+  function openPlayer() {
+    Quickshell.execDetached(["brumm", "open"]) // the window or the terminal player, as last used
     popupOpen = false
   }
 
@@ -126,7 +132,7 @@ BarWidget {
     onClicked: function(mouse) {
       if (!root.player) return
       if (mouse.button === Qt.MiddleButton) root.player.togglePlaying()
-      else if (mouse.button === Qt.RightButton) root.openTui()
+      else if (mouse.button === Qt.RightButton) root.openPlayer()
       else root.popupOpen = !root.popupOpen
     }
     onWheel: function(wheel) {
@@ -322,10 +328,10 @@ BarWidget {
         Button {
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          iconText: "󰆍"
-          tooltipText: "Open brumm"
+          iconText: root.window ? "󰖯" : "󰆍"
+          tooltipText: root.window ? "Open the brumm window" : "Open brumm in the terminal"
           foreground: root.bar.foreground
-          onClicked: root.openTui()
+          onClicked: root.openPlayer()
         }
       }
     }

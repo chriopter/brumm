@@ -2,8 +2,9 @@
 Type=Application
 Name=brumm
 GenericName=Music Player
-Comment=Apple Music in your terminal
-Exec=omarchy-launch-or-focus-tui brumm
+Comment=Apple Music in your terminal or a window
+StartupWMClass=brumm
+Exec=brumm open
 Icon=multimedia-audio-player
 Categories=AudioVideo;Audio;Player;
 Keywords=apple;music;player;

@@ -228,7 +228,7 @@ func (m *Model) footer() string {
 		preview = entry{"O", "preview", "O"}
 	}
 	keys := []entry{{"enter", "play", "enter"}, {"/", "find", "/"}, preview, {"o", "options", "o"},
-		{"f", "visualizer", "f"}, {"?", "keys", "?"}}
+		{"f", "visualizer", "f"}, {"g", "gui", "g"}, {"?", "keys", "?"}}
 	if m.showTips() { // the rest is on the buttons: the footer has what is not
 		keys = []entry{{"esc", "back", "esc"}, {"f", "visualizer", "f"}, {"c", "now playing", "c"},
 			{"Q", "close, music plays on", "Q"}, {"q", "quit", "q"}, {"?", "all keys", "?"}}
@@ -688,10 +688,10 @@ func (m *Model) helpLines() []stageLine {
 		name string
 		keys [][2]string
 	}{
-		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"← → 1–8", "sections"}, {"/", "filter the list; tab searches all of Apple Music (or paste a link)"}, {"a A", "the song's album / artist (or click them)"}, {"c", "go to what's playing"}}},
+		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"← → tab 1–8", "sections"}, {"/", "filter the list; tab searches all of Apple Music (or paste a link)"}, {"a A", "the song's album / artist (or click them)"}, {"c", "go to what's playing"}}},
 		{"play", [][2]string{{"space", "play / pause"}, {"hold space  O", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"R", "radio: a station from the song or artist"}, {"z Z", "add to queue / play next"}, {"shift ← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
 		{"library", [][2]string{{"* d", "love / dislike"}, {"i", "add to your library"}, {"P", "add to a playlist, or a new one"}, {"y", "copy the song's link"}}},
-		{"brumm", [][2]string{{"?", "this list (keys on the buttons: in the options)"}, {"o", "options: covers, autoplay and more"}, {"f", "fullscreen visualizer (tab: next, v: all styles, a: auto-change, F: frame rate)"}, {"[ ]", "narrower / wider list"}, {"Q", "close, music keeps playing"}, {"q", "quit: stop the music"}, {"shift+L", "sign in again"}, {"U", "look for an update, install it"}}},
+		{"brumm", [][2]string{{"?", "this list (keys on the buttons: in the options)"}, {"o", "options: covers, autoplay and more"}, {"f", "fullscreen visualizer (tab: next, v: all styles, a: auto-change, F: frame rate)"}, {"[ ]", "narrower / wider list"}, {"g", "go over to the gui (and g there comes back)"}, {"Q", "close, music keeps playing"}, {"q", "quit: stop the music"}, {"shift+L", "sign in again"}, {"U", "look for an update, install it"}}},
 	}
 	var out []stageLine
 	for i, g := range groups {

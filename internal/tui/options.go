@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os/exec"
+	"reflect"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,6 +15,7 @@ import (
 	"github.com/chriopter/brumm/internal/art"
 	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/ipc"
+	"github.com/chriopter/brumm/internal/launch"
 )
 
 // Cover styles.
@@ -84,6 +86,54 @@ func loadOptions() options {
 
 func (o options) save() { _ = o.Options.Save() }
 
+// saveOptions keeps the options: the daemon saves them and tells every
+// player; without one (tests) they go to the file here.
+func (m *Model) saveOptions() {
+	if m.client == nil {
+		m.opts.save()
+		return
+	}
+	// Only what changed, and in order: a switch set in the window
+	// meanwhile is not overwritten by an old copy from here.
+	now := m.opts.Fields()
+	delete(now, "bar") // switched by setBar alone: it can be refused
+	set := map[string]any{}
+	for k, v := range now {
+		if m.sentOpts == nil || !reflect.DeepEqual(m.sentOpts[k], v) {
+			set[k] = v
+		}
+	}
+	m.sentOpts = now
+	if len(set) == 0 {
+		return
+	}
+	if m.optQueue == nil {
+		m.optQueue = make(chan map[string]any, 32)
+		go func(client *ipc.Client, q chan map[string]any) {
+			for set := range q {
+				_, _ = client.Do(ipc.Request{Cmd: ipc.CmdOptions, Options: set})
+			}
+		}(m.client, m.optQueue)
+	}
+	select {
+	case m.optQueue <- set:
+	default: // 32 behind: the daemon is gone; the next start reads the file
+	}
+}
+
+// optionsChanged takes options another player set.
+func (m *Model) optionsChanged(o config.Options) {
+	if o.Cover != m.opts.Cover {
+		m.rendered, m.thumbs = map[art.Size][]string{}, map[string][]string{}
+	}
+	m.opts = options{o}
+	m.sentOpts = o.Fields() // what the daemon has now
+	delete(m.sentOpts, "bar")
+	if m.hasOmarchy && o.Bar != "" {
+		m.barOn = o.Bar == "on"
+	}
+}
+
 // hasKitty: the terminal shows real images, as guessed once at start.
 var hasKitty = art.KittySupported()
 
@@ -111,12 +161,14 @@ func (o options) chosen() string {
 // original can be picked ahead of a terminal that shows it (see cover).
 func coverChoices() []string { return coverStyles }
 
-// The menu's rows, in order.
+// The menu's rows, in order: those the window's menu has too, in its
+// order and words (gui/qml/Store.qml menuRows), the terminal's own before
+// the top bar's.
 const (
-	optCover = iota
-	optColors
+	optColors = iota
 	optAutoplay
 	optMotion
+	optCover
 	optKeys
 	optBar
 	numOptions
@@ -125,20 +177,20 @@ const (
 // optLabels and optHints name each row and say what it does.
 var (
 	optLabels = [numOptions]string{
-		optCover:    "cover",
-		optColors:   "cover colors",
-		optAutoplay: "autoplay",
-		optMotion:   "reduce motion",
-		optKeys:     "show shortcuts",
-		optBar:      "top bar player",
+		optColors:   "Cover Colors",
+		optAutoplay: "Autoplay",
+		optMotion:   "Reduce Motion",
+		optCover:    "Cover Style",
+		optKeys:     "Show Shortcuts",
+		optBar:      "Show in Top Bar",
 	}
 	optHints = [numOptions]string{
+		optColors:   "Use the cover's colors for the app.",
 		optCover:    "How album covers are drawn.",
-		optColors:   "Tint the progress bar and buttons with the cover's colors.",
-		optAutoplay: "When the queue ends, keep playing similar music.",
-		optMotion:   "Keep long titles still and covers from sliding in.",
-		optKeys:     "Show each button's key on the button.",
-		optBar:      "The playing song in Omarchy's top bar; click it for controls.",
+		optAutoplay: "Play on after the last song.",
+		optMotion:   "No scrolling text, fewer wobbles.",
+		optKeys:     "Show keys on the buttons.",
+		optBar:      "The song in Omarchy's top bar.",
 	}
 )
 
@@ -149,6 +201,14 @@ func optHint(i int) string {
 		return "Covers as pixels or smooth; original needs kitty or Ghostty."
 	}
 	return optHints[i]
+}
+
+// optLabel names row i; the colors' by what they are now.
+func (m *Model) optLabel(i int) string {
+	if i == optColors && m.opts.NoCoverColors {
+		return "Theme Colors"
+	}
+	return optLabels[i]
 }
 
 // optShown: the top bar's row only where omarchy can switch it.
@@ -172,10 +232,15 @@ func (m *Model) optionsKey(k string) tea.Cmd {
 		m.stepOption(-1)
 	case "down", "j", "tab":
 		m.stepOption(1)
-	case "space", " ", "enter", "right", "l":
+	case "space", " ", "enter":
 		return m.changeOption(m.optSel, 1)
-	case "left", "h":
-		return m.changeOption(m.optSel, -1)
+	case "right", "l", "left", "h":
+		// The cover style steps either way; a switch goes on to the right,
+		// off to the left, whatever it was (colors: cover to the right).
+		on := k == "right" || k == "l"
+		if m.optSel == optCover || m.optionOn(m.optSel) != on {
+			return m.changeOption(m.optSel, map[bool]int{true: 1, false: -1}[on])
+		}
 	case "o", "esc", "q":
 		m.optOpen = false
 	}
@@ -191,6 +256,60 @@ func step[T comparable](list []T, cur T, dir int) T {
 		}
 	}
 	return list[(i+dir+len(list))%len(list)]
+}
+
+// choices draws a pick of one, cur marked.
+func choices(list []string, cur string) string {
+	var out []string
+	for _, v := range list {
+		if v == cur {
+			out = append(out, sHere.Render("●")+" "+v)
+		} else {
+			out = append(out, sDim.Render("○ "+v))
+		}
+	}
+	return strings.Join(out, "   ")
+}
+
+// toWindow is g: brumm goes over to its window, which is what it opens
+// from now on; g there comes back here. The music plays on.
+func (m *Model) toWindow() tea.Cmd {
+	if _, err := launch.GUIPath(); err != nil {
+		m.setFlash(err.Error())
+		return nil
+	}
+	m.opts.Start = launch.GUI
+	m.setFlash("opening the gui…")
+	client, o, here := m.client, m.opts, m.here()
+	return func() tea.Msg {
+		leavePlace(client, here) // the window opens where this was
+		if client == nil {
+			o.save()
+		} else if _, err := client.Do(ipc.Request{Cmd: ipc.CmdOptions, Options: map[string]any{"start": launch.GUI}}); err != nil {
+			return errMsg{err}
+		}
+		if err := launch.Open(launch.GUI); err != nil {
+			return errMsg{err}
+		}
+		return tea.QuitMsg{}
+	}
+}
+
+// optionOn says whether switch i is on.
+func (m *Model) optionOn(i int) bool {
+	switch i {
+	case optColors:
+		return !m.opts.NoCoverColors
+	case optAutoplay:
+		return !m.opts.NoAutoplay
+	case optMotion:
+		return m.opts.ReduceMotion
+	case optKeys:
+		return m.opts.AlwaysTips
+	case optBar:
+		return m.barOn
+	}
+	return false
 }
 
 // changeOption flips a switch, or steps a choice by dir.
@@ -212,7 +331,7 @@ func (m *Model) changeOption(i, dir int) tea.Cmd {
 	case optBar:
 		cmd = m.setBar(!m.barOn)
 	}
-	m.opts.save()
+	m.saveOptions()
 	return cmd
 }
 
@@ -226,21 +345,12 @@ func (m *Model) optionsBox() []string {
 		}
 		return sDim.Render("󰄱")
 	}
-	var choice []string
-	for _, v := range coverChoices() {
-		if v == m.opts.chosen() {
-			choice = append(choice, sHere.Render("●")+" "+v)
-		} else {
-			choice = append(choice, sDim.Render("○ "+v))
-		}
-	}
 	values := [numOptions]string{
-		optCover:    strings.Join(choice, "   "),
-		optColors:   check(!m.opts.NoCoverColors),
-		optAutoplay: check(!m.opts.NoAutoplay),
-		optMotion:   check(m.opts.ReduceMotion),
-		optKeys:     check(m.opts.AlwaysTips),
-		optBar:      check(m.barOn),
+		optColors: choices([]string{"theme", "cover"}, map[bool]string{true: "cover", false: "theme"}[m.optionOn(optColors)]),
+		optCover:  choices(coverChoices(), m.opts.chosen()),
+	}
+	for _, i := range []int{optAutoplay, optMotion, optKeys, optBar} {
+		values[i] = check(m.optionOn(i))
 	}
 	keys := sKey.Render("↑↓") + sDim.Render(" move   ") + sKey.Render("space") + sDim.Render(" change   ") + sKey.Render("esc") + sDim.Render(" close")
 	w := lipgloss.Width(keys)
@@ -262,7 +372,7 @@ func (m *Model) optionsBox() []string {
 			gutter = sHere.Render("▌") + "  "
 		}
 		m.optLines = append(m.optLines, len(lines)+1) // +1: the padding line
-		lines = append(lines, gutter+fit(fmt.Sprintf("%-16s", optLabels[i])+values[i], w-3))
+		lines = append(lines, gutter+fit(fmt.Sprintf("%-16s", m.optLabel(i))+values[i], w-3))
 	}
 	hint := ""
 	if m.optSel >= 0 && m.optSel < numOptions {

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Measure what the players cost: the terminal player and the window, each
+# against the stand-in daemon (tools/fakedaemon) — paused, playing, and
+# with the visualizer — as the share of one CPU core they use, averaged
+# over SECONDS (10), and for the window the frames it draws a second.
+# Off screen no display paces the window, so it is paced as a 60 Hz one
+# would. Prints a Markdown table.
+#   bin/bench [SECONDS]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+secs=${1:-10}
+build=${GUI_BUILD:-tmp/gui-build-bench}
+bin/build-gui "$build" >/dev/null
+go build -o "$build/fakedaemon" ./tools/fakedaemon
+go build -o "$build/brumm" .
+
+# cpu PID [FRAMES]: the CPU it takes over $secs seconds, in percent of one core.
+cpu() {
+  local hz t0 t1 f0 f1
+  hz=$(getconf CLK_TCK)
+  t0=$(awk '{print $14+$15}' "/proc/$1/stat")
+  f0=$(frames "$2")
+  sleep "$secs"
+  t1=$(awk '{print $14+$15}' "/proc/$1/stat")
+  f1=$(frames "$2")
+  awk -v d=$((t1 - t0)) -v hz="$hz" -v s="$secs" 'BEGIN { printf "%.1f %%", 100 * d / hz / s }'
+  [[ -n $2 ]] && awk -v a="$f0" -v b="$f1" 'BEGIN { split(a, x, " "); split(b, y, " "); if (y[2] > x[2]) printf " · %.0f fps", (y[1] - x[1]) * 1000 / (y[2] - x[2]) }'
+  return 0
+}
+
+# frames FILE: the frames the window has drawn so far and when it counted
+# them, as it keeps them in FILE (none for the terminal player).
+frames() { [[ -n $1 ]] && cat "$1" 2>/dev/null || echo "0 0"; }
+
+# run MODE PAUSED KEYS: start the stand-in and one player, let it settle,
+# measure it.
+run() {
+  local mode=$1 paused=$2 keys=$3 run pid fake count=""
+  run=$(mktemp -d)
+  FAKE_PAUSED=$paused XDG_RUNTIME_DIR=$run "$build/fakedaemon" 2>/dev/null &
+  fake=$!
+  while [[ ! -S $run/brumm.sock ]]; do sleep 0.1; done
+  if [[ $mode == gui ]]; then
+    env -u QT_QPA_PLATFORMTHEME PATH=/nonexistent QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=rhi QSG_RHI_BACKEND=opengl \
+      XDG_RUNTIME_DIR="$run" XDG_CACHE_HOME="$run/cache" XDG_CONFIG_HOME="$run/config" \
+      BRUMM_GUI_KEYS="$keys" BRUMM_GUI_PACE=60 BRUMM_GUI_FRAMES="$run/frames" "$build/brumm-gui" >/dev/null 2>&1 &
+    pid=$!
+    count=$run/frames
+  else
+    # The terminal player in a pseudo-terminal of 160×45; keys go in by its input.
+    ( sleep 2; [[ -n $keys ]] && printf '%s' "$keys"; sleep $((secs + 10)) ) |
+      env PATH=/nonexistent XDG_RUNTIME_DIR="$run" XDG_CACHE_HOME="$run/cache" XDG_CONFIG_HOME="$run/config" TERM=xterm-256color \
+      /usr/bin/script -qfc "/usr/bin/stty cols 160 rows 45; exec $build/brumm --tui" /dev/null >/dev/null 2>&1 &
+    sleep 1
+    pid=$(pgrep -f -n "$build/brumm --tui" || true)
+  fi
+  sleep 4
+  if [[ -n ${pid:-} ]] && [[ -e /proc/$pid ]]; then cpu "$pid" "$count"; else printf 'n/a'; fi
+  kill "$pid" 2>/dev/null || true
+  pkill -f "$build/brumm --tui" 2>/dev/null || true
+  kill "$fake" 2>/dev/null || true
+  wait 2>/dev/null || true
+  rm -rf "$run"
+}
+
+echo "| | paused | playing | visualizer |"
+echo "|---|---|---|---|"
+echo "| terminal player (\`brumm --tui\`) | $(run tui 1 "") | $(run tui "" "") | $(run tui "" f) |"
+echo "| window (\`brumm --gui\`) | $(run gui 1 "") | $(run gui "" "") | $(run gui "" f) |"

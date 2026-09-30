@@ -48,6 +48,11 @@ const (
 	CmdShuffle   = "shuffle" // Value: 0 or 1
 	CmdRepeat    = "repeat"  // Value: 0 off, 1 one, 2 all
 	CmdReload    = "reload"  // re-read credentials after a login
+	CmdOptions   = "options" // Options set (a partial set of config.Options fields) → Options; pushed to subscribers when they change
+	CmdLogin     = "login"   // open the Apple Music sign-in in the browser; the player reloads once signed in
+	CmdShow      = "show"    // Query "tui", "gui" or "" (as the options say): open that player, or bring it to the front
+	CmdResolve   = "resolve" // Query: a music.apple.com link → Items: what it names, IDs: the song it points at
+	CmdPlace     = "place"   // Place set: where a player is (section, open views, selection); none → Place: where the last one was
 	CmdQuit      = "quit"    // stop the daemon
 )
 
@@ -73,6 +78,12 @@ type Request struct {
 	Bands  int         `json:"bands,omitempty"`
 	Wave   int         `json:"wave,omitempty"` // waveform samples wanted per frame
 	FPS    int         `json:"fps,omitempty"`  // spectrum frames per second wanted; 25 by default
+	// Options changes the named options, by their JSON names; the rest
+	// stay as they are.
+	Options map[string]any `json:"options,omitempty"`
+	// Place is where a player is, for the other one to open there: kept
+	// by the daemon as it comes, never read by it.
+	Place json.RawMessage `json:"place,omitempty"`
 }
 
 // Status is the daemon's lifecycle phase.
@@ -97,20 +108,23 @@ type State struct {
 }
 
 type Message struct {
-	ID       int            `json:"id,omitempty"`
-	Error    string         `json:"error,omitempty"`
-	Items    []apple.Item   `json:"items,omitempty"`
-	Tracks   []apple.Track  `json:"tracks,omitempty"`
-	Shelves  []apple.Shelf  `json:"shelves,omitempty"`
-	Ratings  map[string]int `json:"ratings,omitempty"`
-	State    *State         `json:"state,omitempty"`
-	Spectrum []int          `json:"spectrum,omitempty"`
-	Wave     []int          `json:"wave,omitempty"`
-	Library  bool           `json:"library,omitempty"` // the cached library changed
-	Pos      int            `json:"pos,omitempty"`
-	IDs      []string       `json:"ids,omitempty"`
-	Link     string         `json:"link,omitempty"`
-	Version  string         `json:"version,omitempty"` // the daemon's own, with an update check
+	ID       int             `json:"id,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	Items    []apple.Item    `json:"items,omitempty"`
+	Tracks   []apple.Track   `json:"tracks,omitempty"`
+	Shelves  []apple.Shelf   `json:"shelves,omitempty"`
+	Ratings  map[string]int  `json:"ratings,omitempty"`
+	State    *State          `json:"state,omitempty"`
+	Spectrum []int           `json:"spectrum,omitempty"`
+	Wave     []int           `json:"wave,omitempty"`
+	Library  bool            `json:"library,omitempty"` // the cached library changed
+	Pos      int             `json:"pos,omitempty"`
+	IDs      []string        `json:"ids,omitempty"`
+	Link     string          `json:"link,omitempty"`
+	Version  string          `json:"version,omitempty"` // the daemon's own, with an update check
+	Options  *config.Options `json:"options,omitempty"` // the saved options, answering or announcing a change
+	Omarchy  bool            `json:"omarchy,omitempty"` // with the options: omarchy is here, the bar widget can be switched
+	Place    json.RawMessage `json:"place,omitempty"`   // where a player last was (CmdPlace)
 }
 
 // Client is one connection to the daemon.

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 )
 
 // Options are the few switches in the player's options menu, each a plain
@@ -20,6 +22,7 @@ type Options struct {
 	VizFPS        int    `json:"viz_fps,omitempty"`       // fullscreen frames per second: 30, 60 (default) or 120
 	Bar           string `json:"bar,omitempty"`           // the bar widget as last set or seen: on or off; empty: never known
 	BarOffered    bool   `json:"bar_offered,omitempty"`   // the first start asked about the bar widget
+	Start         string `json:"start,omitempty"`         // what plain brumm opens: tui (default) or gui
 }
 
 // legacy are switches reduce motion took over: any of them set starts it on.
@@ -40,6 +43,18 @@ func LoadOptions() Options {
 		o.ReduceMotion = o.ReduceMotion || o.NoBarScroll || l.NoScroll || l.NoCards
 	}
 	return o
+}
+
+// Fields are the options by their JSON names, every one, zero or not:
+// what a player sends the daemon to set them all.
+func (o Options) Fields() map[string]any {
+	out := map[string]any{}
+	v, t := reflect.ValueOf(o), reflect.TypeOf(o)
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		out[name] = v.Field(i).Interface()
+	}
+	return out
 }
 
 func (o Options) Save() error {

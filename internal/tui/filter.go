@@ -119,10 +119,10 @@ func (m *Model) filterKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "ctrl+u":
 		v.filter = ""
-	case "ctrl+c":
+	case "ctrl+c", "ctrl+q":
 		return tea.Quit
-	case "down", "up":
-		m.filtering = false
+	case "down", "up", "pgdown", "pgup":
+		m.filtering = false // into the rows that are left
 		return m.move(msg.String())
 	default:
 		if msg.Text == "" {

@@ -111,8 +111,18 @@ func (m *Model) gotNext(msg nextMsg) tea.Cmd {
 	if !msg.ok || msg.pos < 0 { // the player was not ready: ask again on its next change
 		m.nextAsked = nextKey{}
 		m.setNext(nil, nil, 0)
+		m.upTracks = nil
 		return nil
 	}
+	// A song shown before the player moved on to it (showPlaying) is
+	// further down the queue it answered with: count from there.
+	for i, t := range msg.tracks {
+		if t.ID == m.state.ID {
+			msg.tracks, msg.pos = msg.tracks[i:], msg.pos+i
+			break
+		}
+	}
+	m.upTracks, m.upPos = msg.tracks, msg.pos
 	next := upcoming(msg.tracks, msg.pos, m.coverURL)
 	var songs []nextSong
 	if next == nil {
@@ -381,7 +391,27 @@ func (m *Model) nextAt(x, y int) int {
 // nextClick plays from the cover at x, y, if there is one.
 func (m *Model) nextClick(x, y int) (tea.Cmd, bool) {
 	if pos := m.nextAt(x, y); pos >= 0 {
-		return m.send(ipc.Request{Cmd: ipc.CmdJump, Value: float64(pos)}), true
+		return m.jump(pos), true
 	}
 	return nil, false
+}
+
+// upTrack is the song at queue position pos, when the queue ahead as last
+// asked holds it.
+func (m *Model) upTrack(pos int) (apple.Track, bool) {
+	if i := pos - m.upPos; i >= 0 && i < len(m.upTracks) {
+		return m.upTracks[i], true
+	}
+	return apple.Track{}, false
+}
+
+// afterPlaying is the queue position after the song playing, when the
+// queue ahead holds it.
+func (m *Model) afterPlaying() (int, bool) {
+	for i, t := range m.upTracks {
+		if t.ID == m.state.ID {
+			return m.upPos + i + 1, true
+		}
+	}
+	return 0, false
 }

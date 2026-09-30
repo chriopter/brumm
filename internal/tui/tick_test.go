@@ -82,7 +82,7 @@ func TestOptionsOverlay(t *testing.T) {
 			t.Fatalf("line %d is %d wide", i, w)
 		}
 	}
-	if !strings.Contains(out, "options") || !strings.Contains(out, "reduce motion") {
+	if !strings.Contains(out, "options") || !strings.Contains(out, "Reduce Motion") {
 		t.Fatal("the menu is missing")
 	}
 	// A click on a row flips it.

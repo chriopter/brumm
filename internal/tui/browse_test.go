@@ -39,7 +39,7 @@ func TestShelvesSkipHeadings(t *testing.T) {
 	if v.rows[v.sel].item.Name != "Blue" {
 		t.Fatalf("up landed on %+v", v.rows[v.sel])
 	}
-	m.move("g")
+	m.move("home")
 	if !v.rows[v.sel].selectable() {
 		t.Fatal("g landed on a heading")
 	}
@@ -113,14 +113,16 @@ func TestArrowsLeaveSearch(t *testing.T) {
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
 	m.width, m.height = 120, 35
 	m.switchTo(secSearch)
-	if !m.searching {
-		t.Fatal("the empty search does not focus its box")
+	if m.searching {
+		t.Fatal("arriving at search focused its box")
 	}
+	m.key("/")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.section != secQueue {
 		t.Fatalf("→ from search went to section %d", m.section)
 	}
 	m.switchTo(secSearch)
+	m.key("/")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if m.section != secSongs {
 		t.Fatalf("← from search went to section %d", m.section)
@@ -133,6 +135,7 @@ func TestClickLeavesSearch(t *testing.T) {
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
 	m.width, m.height = 120, 35
 	m.switchTo(secSearch)
+	m.key("/")
 	if !strings.Contains(ansi.Strip(m.View().Content), "esc done") {
 		t.Fatal("the focused box does not say esc leaves it")
 	}
@@ -422,5 +425,144 @@ func TestUpdateOffersRestart(t *testing.T) {
 	m.upd = &updatePopup{installed: true}
 	if m.updateKey("enter") == nil || m.upd != nil {
 		t.Fatal("enter does not restart")
+	}
+}
+
+// Pause and play show at once; reports the player sends before it has
+// caught up do not take it back, its own does.
+func TestPauseShowsAtOnce(t *testing.T) {
+	m := playingModel(120, 35)
+	m.state.Playing = true
+	m.key("n") // no queue known: nothing to show yet, the button stays
+	if !m.state.Playing || m.state.ID != "1" {
+		t.Fatalf("n without a queue shows %q playing %v", m.state.ID, m.state.Playing)
+	}
+	m.wantPlay = nil
+	m.toggle()
+	if m.state.Playing {
+		t.Fatal("pause did not show at once")
+	}
+	report := func(playing bool) { st := m.state; st.Playing = playing; m.keepPlaying(&st); m.state = st } // as event does
+	report(true)
+	if m.state.Playing {
+		t.Fatal("an older report took the pause back")
+	}
+	report(false)
+	if m.wantPlay != nil {
+		t.Fatal("the player's own report did not take over")
+	}
+	report(true)
+	if !m.state.Playing {
+		t.Fatal("a later play was held back")
+	}
+}
+
+// n shows the next song of the queue at once, and again for a second n
+// before the player answers; a click on a song up next shows it too.
+func TestNextShowsAtOnce(t *testing.T) {
+	m := playingModel(120, 35)
+	m.state.Playing, m.state.Index, m.state.Length = true, 4, 20
+	m.nextSeq = 1
+	q := albumQueue(m, 5, -1)
+	m.gotNext(nextMsg{seq: 1, tracks: q, pos: 4, ok: true})
+	m.key("n")
+	if m.state.ID != q[1].ID || m.state.Index != 5 || !m.state.Playing {
+		t.Fatalf("n shows %q at %d", m.state.ID, m.state.Index)
+	}
+	m.key("n")
+	if m.state.ID != q[2].ID || m.state.Index != 6 {
+		t.Fatalf("n again shows %q at %d", m.state.ID, m.state.Index)
+	}
+	// The queue asked for while the player is still a song behind counts
+	// from the song on the stage.
+	m.nextSeq = 2
+	m.gotNext(nextMsg{seq: 2, tracks: q, pos: 4, ok: true})
+	if m.upPos != 6 || m.upTracks[0].ID != q[2].ID {
+		t.Fatalf("queue counted from %d", m.upPos)
+	}
+	m.jump(8)
+	if m.state.ID != q[4].ID || m.state.Index != 8 {
+		t.Fatalf("a jump shows %q at %d", m.state.ID, m.state.Index)
+	}
+}
+
+// p after 3 s goes back to the start, and the playhead shows it at once.
+func TestPrevRestartsAtOnce(t *testing.T) {
+	m := playingModel(120, 35)
+	m.state.Pos = 42
+	m.key("p")
+	if p := m.position(); p != 0 {
+		t.Fatalf("p shows the playhead at %v", p)
+	}
+}
+
+// Seeking to the end goes on to the next song, shown at once.
+func TestSeekToEndSkips(t *testing.T) {
+	m := playingModel(120, 35)
+	m.nextSeq = 1
+	q := albumQueue(m, 2, -1)
+	m.gotNext(nextMsg{seq: 1, tracks: q, pos: 0, ok: true})
+	m.seek(1000)
+	m.Update(seekMsg{m.seekSeq})
+	if m.state.ID != q[1].ID {
+		t.Fatalf("seeking to the end shows %q", m.state.ID)
+	}
+}
+
+// Another section leaves the filter's box; its list keeps the filter.
+func TestSectionLeavesFilter(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.section = secSongs
+	fill(m.cur(), ipc.Message{Tracks: []apple.Track{{ID: "1", Title: "A"}, {ID: "2", Title: "B"}}})
+	m.key("/")
+	m.switchTo(secAlbums)
+	if m.filtering {
+		t.Fatal("the filter box followed to another section")
+	}
+}
+
+// Searching again for what the results show goes back to them.
+func TestSearchAgainShowsResults(t *testing.T) {
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	m.query = "daft punk"
+	m.runSearch(true)
+	m.stacks[secSearch][0].loading = false
+	m.stacks[secSearch] = append(m.stacks[secSearch], &view{title: "Discovery", key: "cat:album:1"})
+	m.runSearch(true)
+	if len(m.stack()) != 1 || m.cur().key != "search:daft punk" {
+		t.Fatalf("search again shows %q", m.cur().key)
+	}
+}
+
+// Arriving at Search leaves the box alone: a digit goes on to its
+// section, a letter starts a search with it typed.
+func TestSearchNotATrap(t *testing.T) {
+	press := func(m *Model, s string) {
+		for _, r := range s {
+			m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+	}
+	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
+	press(m, "61")
+	if m.section != secHome || m.query != "" || m.searching {
+		t.Fatalf("6 then 1: section %d, query %q", m.section, m.query)
+	}
+	press(m, "6d")
+	if m.section != secSearch || !m.searching || m.query != "d" {
+		t.Fatalf("6 then d: searching %v for %q", m.searching, m.query)
+	}
+	press(m, "2")
+	if m.query != "d2" {
+		t.Fatalf("a digit after words types: %q", m.query)
+	}
+	m.query = ""
+	press(m, "3")
+	if m.section != secAlbums || m.searching {
+		t.Fatal("a digit into an empty box is not its section")
+	}
+	press(m, "6")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.searching {
+		t.Fatal("enter with no results does not go into the box")
 	}
 }

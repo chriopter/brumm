@@ -12,7 +12,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
@@ -25,6 +24,7 @@ import (
 	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/engine"
 	"github.com/chriopter/brumm/internal/ipc"
+	"github.com/chriopter/brumm/internal/launch"
 	"github.com/chriopter/brumm/internal/mpris"
 )
 
@@ -665,6 +665,18 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 	case ipc.CmdQuit:
 		d.quitOnce.Do(func() { close(d.quit) })
 		return nil
+	case ipc.CmdOptions:
+		return d.options(r.Options, reply)
+	case ipc.CmdLogin:
+		d.login()
+		return nil
+	case ipc.CmdShow:
+		return launch.Open(r.Query)
+	case ipc.CmdResolve:
+		return d.resolve(r.Query, reply)
+	case ipc.CmdPlace:
+		d.place(r.Place, reply)
+		return nil
 	}
 
 	eng := d.engine()
@@ -1093,11 +1105,11 @@ func (d *Daemon) SetRepeat(mode int) {
 	d.do(func(e *engine.Engine) error { return e.SetRepeat(mode) })
 }
 
-// Raise focuses the brumm TUI, opening one if none is running.
+// Raise brings the player to the front — the window or the terminal
+// player, as the options pick — opening it if none is running.
 func (d *Daemon) Raise() {
-	cmd := exec.Command("omarchy-launch-or-focus-tui", "brumm")
-	if cmd.Start() == nil {
-		go func() { _ = cmd.Wait() }()
+	if err := launch.Open(""); err != nil {
+		log.Printf("raise: %v", err)
 	}
 }
 

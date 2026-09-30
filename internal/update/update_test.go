@@ -2,6 +2,7 @@ package update
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -55,5 +56,41 @@ func TestReleaseSignature(t *testing.T) {
 	list[0] ^= 1
 	if verify(list, sig) == nil {
 		t.Fatal("tampered checksums accepted")
+	}
+}
+
+// A release with the window installs it next to brumm; one without it
+// still installs.
+func TestInstallWindow(t *testing.T) {
+	for _, withGUI := range []bool{true, false} {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("PATH", "") // no systemctl, no omarchy: nothing outside the test home
+		from := t.TempDir()
+		files := []string{"brumm", "omarchy/brumm.service", "omarchy/brumm.desktop", "omarchy/plugin/manifest.json"}
+		if withGUI {
+			files = append(files, "brumm-gui")
+		}
+		for _, f := range files {
+			p := filepath.Join(from, f)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(f), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := Install(from); err != nil {
+			t.Fatal(err)
+		}
+		if b, err := os.ReadFile(BinPath()); err != nil || string(b) != "brumm" {
+			t.Fatalf("brumm: %q %v", b, err)
+		}
+		fi, err := os.Stat(guiPath())
+		if withGUI && (err != nil || fi.Mode()&0o111 == 0) {
+			t.Fatalf("brumm-gui not installed: %v", err)
+		}
+		if !withGUI && err == nil {
+			t.Fatal("brumm-gui from nowhere")
+		}
 	}
 }

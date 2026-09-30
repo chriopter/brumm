@@ -4,6 +4,7 @@
 // Layout:
 //
 //	~/.local/bin/brumm                          the program
+//	~/.local/bin/brumm-gui                      its window, where the release has it
 //	~/.local/share/brumm/                       the release's Omarchy files
 //	~/.config/systemd/user/brumm.service        the daemon's unit
 //	~/.local/share/applications/brumm.desktop   the launcher entry
@@ -58,6 +59,7 @@ func home() string { h, _ := os.UserHomeDir(); return h }
 
 // Paths of an installation.
 func BinPath() string    { return filepath.Join(home(), ".local", "bin", "brumm") }
+func guiPath() string    { return filepath.Join(home(), ".local", "bin", "brumm-gui") }
 func shareDir() string   { return filepath.Join(home(), ".local", "share", "brumm") }
 func unitPath() string   { return filepath.Join(home(), ".config", "systemd", "user", "brumm.service") }
 func pluginLink() string { return filepath.Join(home(), ".config", "omarchy", "plugins", pluginID) }
@@ -334,6 +336,14 @@ func Install(from string) error {
 		return fmt.Errorf("stage launcher: %w", err)
 	}
 	defer os.Remove(desktop)
+	// The window, where the release has it: older ones do not.
+	var window string
+	if _, err := os.Stat(filepath.Join(from, "brumm-gui")); err == nil {
+		if window, err = stage(filepath.Join(from, "brumm-gui"), guiPath(), 0o755); err != nil {
+			return fmt.Errorf("stage window: %w", err)
+		}
+		defer os.Remove(window)
+	}
 
 	// Commit: Omarchy files, then the program; undo the files if needed.
 	old := staged + ".old"
@@ -352,6 +362,11 @@ func Install(from string) error {
 		return fmt.Errorf("install program: %w", err)
 	}
 	os.RemoveAll(old)
+	if window != "" {
+		if err := os.Rename(window, guiPath()); err != nil {
+			return fmt.Errorf("install window: %w", err)
+		}
+	}
 
 	// Renames in the same directories; the program is already in place.
 	if err := os.Rename(unit, unitPath()); err != nil {

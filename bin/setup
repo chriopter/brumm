@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build brumm from this checkout and install it, like a release would be:
-# the program, the systemd unit, the launcher entry and the bar widget.
+# the program and its window, the systemd unit, the launcher entry and the
+# bar widget.
 # Safe to re-run. Development builds never update themselves from GitHub.
 #
 # To embed a fresh Apple Music developer token, pass the MusicKit key, e.g.
@@ -49,6 +50,12 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 echo "building brumm"
 go build -trimpath -ldflags "$ldflags" -o "$stage/brumm" .
+if command -v qmake6 >/dev/null; then
+  echo "building the window"
+  bin/build-gui "$stage"
+else
+  echo "skipping the window (brumm --gui): it needs qt6-declarative, qt6-shadertools and base-devel" >&2
+fi
 cp -r omarchy "$stage/"
 "$stage/brumm" setup "$stage"
 
