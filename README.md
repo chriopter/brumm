@@ -4,9 +4,9 @@
 
 ### ⇄ Terminal or window: switch any time with <kbd>g</kbd>
 
-brumm is one player with two faces. `brumm --tui` is the terminal player, `brumm --gui` the window, lit like the PSP's XMB. Press <kbd>g</kbd> in either and you are in the other — same keys, same queue, and the music never stops. Whichever you used last is what `brumm` and the launcher open.
-
-![brumm](docs/screenshot.png)
+| terminal · `brumm --tui` | window · `brumm --gui` |
+|---|---|
+| ![brumm in the terminal](docs/tui.webp) | ![brumm as a window](docs/gui.webp) |
 
 <div align="center">
 
@@ -16,6 +16,10 @@ brumm login
 ```
 
 </div>
+
+brumm is one player with two faces: the terminal player, and a window lit like the PSP's XMB. Press <kbd>g</kbd> in either and you are in the other, right where you were — same keys, same queue, and the music never stops. Whichever you used last is what `brumm` and the launcher open.
+
+![switching with g](docs/switch.webp)
 
 ## Features
 
@@ -31,7 +35,11 @@ brumm login
 - 🐧 Theme colors, media keys, bar widget
 - ⇄ Terminal and window, <kbd>g</kbd> to switch, music plays on
 
-![twelve visualizers](docs/visualizer.webp)
+| | |
+|---|---|
+| ![the visualizer in the terminal](docs/tui-visualizer.webp) | ![the visualizer in the window](docs/gui-visualizer.webp) |
+
+Twelve visualizers, the same in both: <kbd>f</kbd>, then <kbd>tab</kbd> for the next or <kbd>v</kbd> for all.
 
 ## Keys
 
@@ -82,7 +90,14 @@ bin/gui-shot  # Screenshot the window against a stand-in daemon (tools/fakedaemo
 bin/update    # Pull and reinstall
 ```
 
-One background service plays the music; everything you see talks to it, and each can come and go while the music plays on:
+One background service is the core: it plays the music and keeps the queue, the library, your options, the sign-in and where you were. Everything you see talks to it, and each can come and go while the music plays on:
+
+What they cost, as a share of one CPU core (`bin/bench`, against the stand-in daemon):
+
+| | paused | playing | visualizer |
+|---|---|---|---|
+| terminal player | 5 % | 10 % | 20 % |
+| window | 0 % | 2 % | 7 % |
 
 ```mermaid
 flowchart TB
