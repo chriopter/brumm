@@ -42,5 +42,17 @@ echo "verified: signed by the brumm release key"
 
 tar -xzf brumm-linux-amd64.tar.gz
 ./brumm/brumm setup ./brumm
+
+# Straight on to the music: sign in first if needed (the player opens
+# once signed in), else the player. Piped into bash, the keys come from
+# the terminal itself.
+brumm="${XDG_BIN_HOME:-$HOME/.local/bin}/brumm"
+if [[ -r /dev/tty && -w /dev/tty ]]; then
+  cd ~ && rm -rf "$work" # exec skips the EXIT trap
+  if grep -q '"user_token"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
+    exec "$brumm" </dev/tty >/dev/tty 2>&1
+  fi
+  exec "$brumm" login </dev/tty >/dev/tty 2>&1
+fi
 echo
 echo "next: brumm login — it opens the player once you are signed in"

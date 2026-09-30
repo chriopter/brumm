@@ -2,24 +2,20 @@
 
 **Apple Music for [Omarchy](https://omarchy.org).** Full tracks, your theme's colors — in your terminal *and* as a window.
 
-### ⇄ Terminal or window: switch any time with <kbd>g</kbd>
-
-| terminal · `brumm --tui` | window · `brumm --gui` |
-|---|---|
-| ![brumm in the terminal](docs/tui.webp) | ![brumm as a window](docs/gui.webp) |
-
-<div align="center">
+## Install
 
 ```sh
 curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
-brumm login
 ```
 
-</div>
+<table>
+<tr>
+<td width="50%"><img src="docs/tui.webp" alt="brumm in the terminal"><br><img src="docs/gui.webp" alt="brumm as a window"></td>
+<td width="50%"><img src="docs/switch.webp" alt="switching with g"></td>
+</tr>
+</table>
 
-brumm is one player with two faces: the terminal player, and a window lit like the PSP's XMB. Press <kbd>g</kbd> in either and you are in the other, right where you were — same keys, same queue, and the music never stops. Whichever you used last is what `brumm` and the launcher open.
-
-![switching with g](docs/switch.webp)
+One player, two faces: `brumm --tui` in the terminal, `brumm --gui` as a window lit like the PSP's XMB. <kbd>g</kbd> switches, right where you were; the music never stops.
 
 ## Features
 
@@ -35,11 +31,7 @@ brumm is one player with two faces: the terminal player, and a window lit like t
 - 🐧 Theme colors, media keys, bar widget
 - ⇄ Terminal and window, <kbd>g</kbd> to switch, music plays on
 
-| | |
-|---|---|
-| ![the visualizer in the terminal](docs/tui-visualizer.webp) | ![the visualizer in the window](docs/gui-visualizer.webp) |
-
-Twelve visualizers, the same in both: <kbd>f</kbd>, then <kbd>tab</kbd> for the next or <kbd>v</kbd> for all.
+![the visualizer, terminal and window](docs/visualizer.webp)
 
 ## Keys
 
@@ -59,45 +51,28 @@ Twelve visualizers, the same in both: <kbd>f</kbd>, then <kbd>tab</kbd> for the 
 
 Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
 
-## Installing, in detail
+## More
 
-`brumm login` opens the player once you are signed in. Later, run `brumm` or click the music widget in the bar. You need an Apple Music subscription.
-
-The window is a Qt Quick app in the spirit of the PSP's XMB, lit in the colors of your Omarchy theme and of the cover, with the terminal player's twelve visualizer styles (<kbd>f</kbd>) redrawn as shaders. It draws only what changes: in the background it stands still.
-
-To check the installer before running it, download it, verify that GitHub built it from this repository, then run it:
+- 🔑 Needs an Apple Music subscription; the installer signs you in and starts brumm
+- ▶️ Later: `brumm`, the launcher, or the bar widget — whichever face you used last
+- 🔄 Updates: <kbd>U</kbd> when offered, or `brumm update`
+- 🔏 Signed releases (Ed25519) and GitHub-attested builds — check the installer first:
 
 ```sh
 curl -fsSLO https://github.com/chriopter/brumm/releases/latest/download/install.sh
-gh attestation verify install.sh -R chriopter/brumm
-bash install.sh
+gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 ```
-
-## Update
-
-brumm checks for a new version every time it starts; press <kbd>U</kbd> when it offers one. Or run `brumm update`.
-
-Updates are signed: brumm and the installer only install a release whose checksums carry this project's Ed25519 signature for that exact version. Every build also has a GitHub attestation (`gh attestation verify brumm-linux-amd64.tar.gz -R chriopter/brumm`).
-
-Inspired by [vibez](https://github.com/simonepelosi/vibez).
 
 ## Development
 
 ```sh
-bin/setup     # Build and install from this checkout (the window too, with Qt 6)
-bin/dev       # Run the daemon in the foreground (`bin/dev ui` the TUI, `bin/dev gui` the window)
-bin/gui-shot  # Screenshot the window against a stand-in daemon (tools/fakedaemon)
-bin/update    # Pull and reinstall
+bin/setup     # build and install from this checkout (the window too, with Qt 6)
+bin/dev       # the daemon in the foreground; bin/dev ui / gui for a player
+bin/gui-shot  # screenshot the window against a stand-in daemon
+bin/bench     # what the players cost
 ```
 
-One background service is the core: it plays the music and keeps the queue, the library, your options, the sign-in and where you were. Everything you see talks to it, and each can come and go while the music plays on:
-
-What they cost, as a share of one CPU core (`bin/bench`, against the stand-in daemon):
-
-| | paused | playing | visualizer |
-|---|---|---|---|
-| terminal player | 5 % | 10 % | 20 % |
-| window | 0 % | 2 % | 7 % |
+One background service is the core — music, queue, library, options, sign-in, where you were. The players only draw, and come and go while the music plays on:
 
 ```mermaid
 flowchart TB
@@ -106,3 +81,14 @@ flowchart TB
   daemon -- socket --> tui["<b>brumm --tui</b><br/>terminal player (Go)"]
   daemon -- socket --> gui["<b>brumm --gui</b><br/>window (Qt Quick)"]
 ```
+
+CPU, share of one core (`bin/bench`):
+
+| | paused | playing | visualizer |
+|---|---|---|---|
+| terminal | 1 % | 9 % | 22 % |
+| window | 0 % | 2 % | 7 % |
+
+The terminal redraws its live meter as text; the window hands its drawing to the GPU, which these figures leave out.
+
+Inspired by [vibez](https://github.com/simonepelosi/vibez).

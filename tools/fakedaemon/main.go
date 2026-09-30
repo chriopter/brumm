@@ -189,7 +189,7 @@ func main() {
 						close(stop)
 						stop = nil
 					}
-					if r.Bands > 0 || r.Wave > 0 {
+					if (r.Bands > 0 || r.Wave > 0) && playing { // paused, the real daemon sends no sound either
 						stop = make(chan struct{})
 						go sound(r.Bands, r.Wave, max(r.FPS, 25), stop, send)
 					}
