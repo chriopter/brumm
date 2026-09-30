@@ -212,10 +212,13 @@ Window {
             anchors { top: browser.top; bottom: browser.bottom }
             cursorShape: Qt.SplitHCursor
             preventStealing: true
+            // The width follows once a frame, however fast the mouse reports.
+            property real want: -1
             onPositionChanged: m => {
                 if (!pressed) return
                 const at = mapToItem(body, m.x, 0).x - browser.x
-                store.split = Math.min(0.7, Math.max(0.08, at / body.width))
+                if (want < 0) Qt.callLater(() => { store.split = want; want = -1 })
+                want = Math.min(0.7, Math.max(0.08, at / body.width))
             }
             onReleased: sys.setSetting("split", store.split)
         }

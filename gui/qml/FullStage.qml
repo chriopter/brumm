@@ -143,7 +143,7 @@ Item {
         }
         Controls {
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: ui.px(12) }
-            width: ui.px(420)
+            width: ui.px(560)
         }
         Row {
             anchors { right: parent.right; rightMargin: ui.gap; verticalCenter: thumb.verticalCenter }

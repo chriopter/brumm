@@ -15,8 +15,16 @@ Item {
     readonly property real tile: size / 3
     readonly property int gap: ui.px(5)
     // Enough tiles to run past every edge; odd counts keep the cover centered.
-    readonly property int cols: Math.ceil(width / tile / 2) * 2 + 1
-    readonly property int rows: Math.ceil(height / tile / 2) * 2 + 1
+    // How many tiles: counted from the size once it rests, so dragging the
+    // divider only slides the wall along instead of building it anew each
+    // step (it is centred on the live size meanwhile).
+    property real restW: width
+    property real restH: height
+    onWidthChanged: resting.restart()
+    onHeightChanged: resting.restart()
+    Timer { id: resting; interval: 180; onTriggered: { wall.restW = wall.width; wall.restH = wall.height } }
+    readonly property int cols: Math.ceil(restW / tile / 2) * 2 + 1
+    readonly property int rows: Math.ceil(restH / tile / 2) * 2 + 1
     readonly property int mc: (cols - 3) / 2 // the cover's first column and row
     readonly property int mr: (rows - 3) / 2
     readonly property real x0: (width - cols * tile) / 2

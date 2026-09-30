@@ -45,7 +45,7 @@ void main() {
         body += vec3(1.0) * fresnel * (0.22 + 0.2 * hot);
         a = 0.16 + 0.5 * fresnel + 0.3 * caustic + 0.08 * hot;
     }
-    body += vec3(1.0) * spec * (lit > 0.5 ? 0.55 : 0.4);
+    body += vec3(1.0) * spec * (lit > 0.5 ? 0.22 : 0.4); // a filled orb shows its color more than its shine
     a = max(a, spec * 0.6);
     // a hairline rim
     float rim = smoothstep(1.6, 0.4, abs(d + 0.8));
