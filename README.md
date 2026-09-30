@@ -10,8 +10,8 @@ curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.s
 
 <table>
 <tr>
-<td width="50%"><img src="docs/tui.webp" alt="brumm in the terminal"><br><img src="docs/gui.webp" alt="brumm as a window"></td>
-<td width="50%"><img src="docs/switch.webp" alt="switching with g"></td>
+<td width="50%"><img src="docs/tui.webp" alt="brumm in the terminal"></td>
+<td width="50%"><img src="docs/gui.webp" alt="brumm as a window"></td>
 </tr>
 </table>
 
