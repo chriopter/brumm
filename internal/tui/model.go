@@ -33,7 +33,7 @@ import (
 // what rate: the small meters need less than the fullscreen visualizer.
 const (
 	bands    = 48
-	meterFPS = 15
+	meterFPS = 10 // the playing row's equalizer, drawn at most this often (eqEvery)
 	vizFPS   = 30 // spectrum frames for the fullscreen visualizer; it draws faster, see drawFPS
 	fallRef  = 25 // the rate the meters' fall was tuned at
 )
@@ -266,6 +266,13 @@ type Model struct {
 	wheelTick  bool      // a wheelMsg is on its way
 	still      bool      // this update changed nothing on screen: View reuses drawn
 	drawn      tea.View
+	motion     bool      // this update only moved time on: a spectrum frame, a tick (frame.go)
+	fr         frame     // the last full screen, for redrawing only what moves
+	eqBars     string    // the playing row's equalizer bars as last measured
+	eqAt       time.Time // when
+	vizKey     vizStatus // the visualizer's status line as last drawn
+	vizLine    string
+	vizFoot    []footHit
 
 	full     bool // fullscreen visualizer
 	vizList  bool // the list of styles shows over it
@@ -354,9 +361,27 @@ func (m *Model) nextTick() (time.Duration, bool) {
 	case m.state.Playing && m.eqShown && len(m.spec) == 0:
 		return 125 * time.Millisecond, true // no spectrum: the row's equalizer wobbles by itself
 	case m.state.Playing:
-		return 500 * time.Millisecond, true // the spectrum's own frames move the rest
+		return m.nextChange(), true // the spectrum's own frames move the rest
 	}
 	return 0, false
+}
+
+// nextChange is how long until the playing screen changes by itself: the
+// bear's next step, or the clock's next second, whichever comes first.
+// Ticks land just after it, so the time is on time and nothing is drawn
+// in between that would look the same.
+func (m *Model) nextChange() time.Duration {
+	bear := 5 * frameEvery
+	d := bear - time.Since(m.start)%bear
+	pos := m.position()
+	_, played := math.Modf(pos)
+	_, left := math.Modf(max(0, m.state.Dur-pos)) // the time left turns over on its own when the length is not whole
+	for _, s := range []float64{1 - played, left} {
+		if s > 0 {
+			d = min(d, time.Duration(s*float64(time.Second)))
+		}
+	}
+	return max(20*time.Millisecond, d+5*time.Millisecond)
 }
 
 // wantSpec: the spectrum can be seen — the visualizer, or the playing
@@ -582,11 +607,22 @@ func (m *Model) prefetchCovers(v *view) tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.frame = int(time.Since(m.start) / frameEvery)
 	m.still = false
+	switch msg := msg.(type) {
+	case tickMsg:
+		m.motion = msg.seq == m.tickSeq
+	case eventMsg:
+		m.motion = msg.State == nil && msg.Options == nil && !msg.Library
+	default:
+		m.motion = false
+	}
 	if m.hovering(msg) {
 		m.still = true
 		return m, m.hover(msg)
 	}
 	model, cmd := m.update(msg)
+	if _, ok := msg.(eventMsg); ok && m.motion && m.full && m.ticking && !m.still {
+		m.still = true // the visualizer draws on its own clock: the spectrum waits for the next frame
+	}
 	if m.client != nil && m.drawn.Content != "" && m.wantSpec() != m.specOn {
 		cmd = tea.Batch(cmd, m.subscribe()) // the playing row came into view, or left it
 	}
@@ -596,7 +632,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// go) is brought forward when something now needs frames sooner.
 		if !m.ticking {
 			cmd = tea.Batch(cmd, m.schedule(frameEvery))
-		} else if every, ok := m.nextTick(); ok && every < time.Until(m.tickAt) {
+		} else if every, ok := m.nextTick(); ok && every+10*time.Millisecond < time.Until(m.tickAt) {
 			cmd = tea.Batch(cmd, m.schedule(every))
 		}
 	}
@@ -620,6 +656,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cellAspect = cellAspect()
 	case tickMsg:
 		if msg.seq != m.tickSeq {
+			m.still = true
 			return m, nil // replaced by a sooner one
 		}
 		m.ticking = false
@@ -627,7 +664,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showViz((m.vizStyle + 1) % len(vizNames))
 		}
 		if m.flash != "" && time.Since(m.flashAt) > 4*time.Second {
-			m.flash = ""
+			m.flash, m.motion = "", false
 		}
 		cmds := []tea.Cmd{m.renderThumb(), m.kittySend()}
 		if every, ok := m.nextTick(); ok {

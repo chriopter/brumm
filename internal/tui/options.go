@@ -16,6 +16,7 @@ import (
 	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/ipc"
 	"github.com/chriopter/brumm/internal/launch"
+	"github.com/chriopter/brumm/internal/update"
 )
 
 // Cover styles.
@@ -28,17 +29,24 @@ const (
 var coverStyles = []string{coverPixel, coverSmooth, coverOriginal}
 
 // The fullscreen visualizer's frame rates; the renderer allows up to 120.
-// 0 is auto: the screen's own refresh rate.
-var drawRates = []int{0, 30, 60, 120}
+// 0, the default, is 30: plenty for character cells, and every frame
+// costs the terminal a whole screen. -1 is auto: the screen's own refresh
+// rate.
+var drawRates = []int{0, 60, 120, autoFPS}
+
+const autoFPS = -1
 
 const maxDrawFPS = 120
 
 // drawFPS is the rate the fullscreen visualizer draws at.
 func (m *Model) drawFPS() int {
-	if r := m.opts.VizFPS; r == 30 || r == 60 || r == 120 {
+	switch r := m.opts.VizFPS; r {
+	case 60, 120:
 		return r
+	case autoFPS:
+		return m.refresh
 	}
-	return m.refresh
+	return 30
 }
 
 // screenRefresh is the focused monitor's refresh rate, as Hyprland reports
@@ -65,10 +73,10 @@ func screenRefresh() int {
 
 // fpsLabel names the draw rate for the visualizer's button.
 func (m *Model) fpsLabel() string {
-	if m.opts.VizFPS == 0 {
+	if m.opts.VizFPS == autoFPS {
 		return fmt.Sprintf("auto %d fps", m.refresh)
 	}
-	return fmt.Sprintf("%d fps", m.opts.VizFPS)
+	return fmt.Sprintf("%d fps", m.drawFPS())
 }
 
 // options wraps the saved switches with what the menu needs.
@@ -171,26 +179,29 @@ const (
 	optCover
 	optKeys
 	optBar
+	optMusicKeys
 	numOptions
 )
 
 // optLabels and optHints name each row and say what it does.
 var (
 	optLabels = [numOptions]string{
-		optColors:   "Cover Colors",
-		optAutoplay: "Autoplay",
-		optMotion:   "Reduce Motion",
-		optCover:    "Cover Style",
-		optKeys:     "Show Shortcuts",
-		optBar:      "Show in Top Bar",
+		optColors:    "Cover Colors",
+		optAutoplay:  "Autoplay",
+		optMotion:    "Reduce Motion",
+		optCover:     "Cover Style",
+		optKeys:      "Show Shortcuts",
+		optBar:       "Show in Top Bar",
+		optMusicKeys: "Music Keys",
 	}
 	optHints = [numOptions]string{
-		optColors:   "Use the cover's colors for the app.",
-		optCover:    "How album covers are drawn.",
-		optAutoplay: "Play on after the last song.",
-		optMotion:   "No scrolling text, fewer wobbles.",
-		optKeys:     "Show keys on the buttons.",
-		optBar:      "The song in Omarchy's top bar.",
+		optColors:    "Use the cover's colors for the app.",
+		optCover:     "How album covers are drawn.",
+		optAutoplay:  "Play on after the last song.",
+		optMotion:    "No scrolling text, fewer wobbles.",
+		optKeys:      "Show keys on the buttons.",
+		optBar:       "The song in Omarchy's top bar.",
+		optMusicKeys: "Super+Shift+M opens brumm, not Spotify.",
 	}
 )
 
@@ -212,7 +223,19 @@ func (m *Model) optLabel(i int) string {
 }
 
 // optShown: the top bar's row only where omarchy can switch it.
-func (m *Model) optShown(i int) bool { return i != optBar || m.hasOmarchy }
+// canMusicKeys: omarchy's Hyprland config is here to take the keys; a
+// variable, so tests decide.
+var canMusicKeys = update.CanMusicKeys
+
+func (m *Model) optShown(i int) bool {
+	switch i {
+	case optBar:
+		return m.hasOmarchy
+	case optMusicKeys:
+		return m.hasOmarchy && canMusicKeys()
+	}
+	return true
+}
 
 // stepOption moves the selection by dir, over rows that do not show.
 func (m *Model) stepOption(dir int) {
@@ -308,6 +331,8 @@ func (m *Model) optionOn(i int) bool {
 		return m.opts.AlwaysTips
 	case optBar:
 		return m.barOn
+	case optMusicKeys:
+		return m.opts.MusicKeys
 	}
 	return false
 }
@@ -330,6 +355,11 @@ func (m *Model) changeOption(i, dir int) tea.Cmd {
 		m.opts.AlwaysTips = !m.opts.AlwaysTips
 	case optBar:
 		cmd = m.setBar(!m.barOn)
+	case optMusicKeys:
+		m.opts.MusicKeys = !m.opts.MusicKeys // the daemon rebinds the keys
+		if m.client == nil {
+			_ = update.SetMusicKeys(m.opts.MusicKeys)
+		}
 	}
 	m.saveOptions()
 	return cmd
@@ -349,7 +379,7 @@ func (m *Model) optionsBox() []string {
 		optColors: choices([]string{"theme", "cover"}, map[bool]string{true: "cover", false: "theme"}[m.optionOn(optColors)]),
 		optCover:  choices(coverChoices(), m.opts.chosen()),
 	}
-	for _, i := range []int{optAutoplay, optMotion, optKeys, optBar} {
+	for _, i := range []int{optAutoplay, optMotion, optKeys, optBar, optMusicKeys} {
 		values[i] = check(m.optionOn(i))
 	}
 	keys := sKey.Render("↑↓") + sDim.Render(" move   ") + sKey.Render("space") + sDim.Render(" change   ") + sKey.Render("esc") + sDim.Render(" close")

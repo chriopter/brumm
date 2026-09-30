@@ -92,10 +92,10 @@ func (m *Model) nowPlaying(colW, coverH int) (top, bottom []stageLine) {
 		}
 		add(spread(sDim.Render("30 s clip"), back, colW))
 	} else {
-		bottom = append(bottom, stageLine{text: m.meter(colW), hit: func(x, y int) {
+		bottom = append(bottom, stageLine{text: m.meter(colW), live: liveMeter, hit: func(x, y int) {
 			m.geo.bar = rect{x, y, x + colW, y + 2} // the times row seeks too
 		}})
-		add(m.times(colW))
+		bottom = append(bottom, stageLine{text: m.times(colW), live: liveTimes})
 	}
 	if m.showTips() {
 		add(m.controlTips(colW))

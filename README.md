@@ -30,6 +30,7 @@ One player, two faces: `brumm --tui` in the terminal, `brumm --gui` as a window 
 - 🔋 Nearly idle while paused
 - 🐧 Theme colors, media keys, bar widget
 - ⇄ Terminal and window, <kbd>g</kbd> to switch, music plays on
+- 🎹 <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> opens brumm instead of Spotify, if you like — `brumm keys on|off`
 
 ![the visualizer, terminal and window](docs/visualizer.webp)
 
@@ -86,9 +87,9 @@ CPU, share of one core (`bin/bench`):
 
 | | paused | playing | visualizer |
 |---|---|---|---|
-| terminal | 1 % | 9 % | 22 % |
-| window | 0 % | 2 % | 7 % |
+| terminal | 1 % | 3 % | 8 % |
+| window | 0 % | 2 % | 6 % |
 
-The terminal redraws its live meter as text; the window hands its drawing to the GPU, which these figures leave out.
+The terminal rebuilds only the lines that changed; the window hands its drawing to the GPU, which these figures leave out.
 
 Inspired by [vibez](https://github.com/simonepelosi/vibez).

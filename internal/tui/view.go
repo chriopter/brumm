@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -74,8 +75,8 @@ func kindIcon(kind string) string {
 var spinner = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 const (
-	margin   = 2 // columns left and right of everything
-	bodyTop  = 1 // one blank line above the panels
+	margin   = 2  // columns left and right of everything
+	bodyTop  = 1  // one blank line above the panels
 	navMin   = 16 // the narrowest the list can be dragged: less shows nothing worth reading
 	navRoom  = 44 // the list may take this much from the stage's controls
 	durMin   = 40 // narrower, songs drop their lengths
@@ -114,9 +115,19 @@ func (m *Model) View() tea.View {
 	if m.still && m.drawn.Content != "" {
 		return m.drawn // nothing on screen changed: a wheel notch between frames, a hover
 	}
-	content := m.render()
+	if m.motion && m.patch() {
+		return m.drawn // only what moves was drawn again (frame.go)
+	}
+	m.fr.ok = false
+	var content string
 	if m.full && m.width >= 20 && m.height >= 6 {
+		// The browser is not on screen: nothing of it is drawn or wanted.
+		m.marquee, m.eqShown, m.cardShown = false, false, false
+		m.kittyWant = m.kittyWant[:0]
 		content = m.fullscreen()
+	} else {
+		content = m.render()
+		m.fr.ok = m.fr.colW > 0 && !m.overlaid()
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true
@@ -149,6 +160,8 @@ func (m *Model) render() string {
 	m.geo = geometry{}
 	m.marquee, m.eqShown, m.cardShown = false, false, false
 	m.kittyWant = m.kittyWant[:0]
+	f := &m.fr
+	f.live, f.meter, f.times, f.colW = f.live[:0], -1, -1, 0
 	if m.width < 40 || m.height < 14 {
 		return sDim.Render("ʕ•ᴥ•ʔ brumm needs a bigger window")
 	}
@@ -160,22 +173,27 @@ func (m *Model) render() string {
 	// and no wider. What the cover cannot use, held back by the height,
 	// goes to the list; the controls under it keep ctlMin.
 	gapW := 2 + 2*stagePad
-	var body string
+	pad := strings.Repeat(" ", margin)
+	lines := []string{""}
 	navW, colW, coverH := m.layout(inner, bodyH)
 	if colW == 0 {
 		mini := m.miniPlayer(inner)
-		body = lipgloss.JoinVertical(lipgloss.Left, append([]string{m.nav(inner, bodyH-len(mini), margin, bodyTop)}, mini...)...)
+		body := lipgloss.JoinVertical(lipgloss.Left, append([]string{m.nav(inner, bodyH-len(mini), margin, bodyTop)}, mini...)...)
+		for _, l := range strings.Split(body, "\n") {
+			lines = append(lines, pad+l)
+		}
 	} else {
 		stageX := margin + navW + gapW
 		m.geo.divider = rect{margin + navW - 1, bodyTop, margin + navW + gapW, bodyTop + bodyH}
-		stage := strings.Split(m.stage(colW, coverH, bodyH, stageX, bodyTop), "\n")
+		stage := m.stage(colW, coverH, bodyH, stageX, bodyTop)
 		// Both sides are exactly as wide as their column, so rows join
 		// without measuring the long colored cover lines again.
 		nav := strings.Split(m.nav(navW, bodyH, margin, bodyTop), "\n")
 		gap := strings.Repeat(" ", gapW)
-		rows := make([]string, max(len(nav), len(stage)))
+		n := max(len(nav), len(stage))
+		f.left, f.right = slices.Grow(f.left[:0], n)[:n], slices.Grow(f.right[:0], n)[:n]
 		navBlank, colBlank := strings.Repeat(" ", navW), strings.Repeat(" ", colW)
-		for i := range rows {
+		for i := range n {
 			l, r := navBlank, colBlank
 			if i < len(nav) {
 				l = nav[i]
@@ -183,16 +201,16 @@ func (m *Model) render() string {
 			if i < len(stage) {
 				r = stage[i]
 			}
-			rows[i] = l + gap + r
+			f.left[i], f.right[i] = l, r
+			lines = append(lines, pad+l+gap+r)
 		}
-		body = strings.Join(rows, "\n")
+		f.pad, f.gap, f.colW = pad, gap, colW
 	}
-	pad := strings.Repeat(" ", margin)
-	lines := strings.Split(body, "\n")
-	for i := range lines {
-		lines[i] = pad + lines[i]
-	}
-	return strings.Join([]string{"", strings.Join(lines, "\n"), "", m.footer()}, "\n")
+	f.bear, f.frameAt, f.clock = m.bear(), m.frame, m.clockAt(colW)
+	lines = append(lines, "", m.footer())
+	f.lines, f.w, f.h = lines, m.width, m.height
+	f.draws++
+	return strings.Join(lines, "\n")
 }
 
 // layout splits inner cells between the list and the stage's column:
@@ -373,10 +391,18 @@ func (m *Model) nav(w, h, x, y int) string {
 		if card != nil {
 			listW = inner - cw - 3
 		}
+		f := &m.fr
+		f.v, f.off, f.sel, f.listW, f.inner = v, v.off, v.sel, listW, inner
 		for i := v.off; i < v.off+rows; i++ {
 			line := ""
 			if i < len(v.rows) {
+				eq, mq := m.eqShown, m.marquee
+				m.eqShown, m.marquee = false, false
 				line = m.row(v, i, listW)
+				if m.eqShown || m.marquee { // it moves by itself: a patch draws it again
+					m.fr.live = append(m.fr.live, liveRow{1 + len(lines), i, m.eqShown, m.marquee}) // under the box's top border
+				}
+				m.eqShown, m.marquee = m.eqShown || eq, m.marquee || mq
 			} else if card == nil {
 				break
 			}
@@ -534,12 +560,23 @@ func (m *Model) row(v *view, i, w int) string {
 // four bars wobbling on their own while none streams. Paused, the bars
 // rest low and dim.
 func (m *Model) miniEQ() string {
+	if !m.state.Playing {
+		return eqPaused
+	}
+	// The bars move at most every eqEvery: frames in between keep them.
+	if now := time.Now(); m.eqBars == "" || now.Sub(m.eqAt) >= eqEvery {
+		m.eqBars, m.eqAt = m.eqLevels(now), now
+	}
+	return m.acc.plays.Render(m.eqBars)
+}
+
+var eqPaused = sDim.Render("▁▂▁▃")
+
+// eqLevels are the four bars now.
+func (m *Model) eqLevels(now time.Time) string {
 	ramp := []rune("▁▂▃▄▅▆▇█")
 	var sb strings.Builder
-	if !m.state.Playing {
-		return sDim.Render("▁▂▁▃")
-	}
-	t := time.Since(m.start).Seconds()
+	t := now.Sub(m.start).Seconds()
 	for i := range 4 {
 		var lv float64
 		if n := len(m.spec); n > 0 {
@@ -551,7 +588,7 @@ func (m *Model) miniEQ() string {
 		}
 		sb.WriteRune(ramp[max(0, min(len(ramp)-1, int(lv*float64(len(ramp)))))])
 	}
-	return m.acc.plays.Render(sb.String())
+	return sb.String()
 }
 
 // marquee scrolls text that does not fit: it rests, glides to the end,
@@ -576,10 +613,16 @@ type stageLine struct {
 	center bool
 	hit    func(x, y int)
 	width  int // known display width; skips measuring long colored lines
+	live   int // it moves by itself: liveMeter, liveTimes (frame.go)
 }
 
-// stage draws the column colW wide.
-func (m *Model) stage(colW, coverH, h, x, y int) string {
+const (
+	liveMeter = 1 + iota
+	liveTimes
+)
+
+// stage draws the column colW wide, a line per row.
+func (m *Model) stage(colW, coverH, h, x, y int) []string {
 	st := m.state
 	var top, bottom []stageLine
 	add := func(s string) { top = append(top, stageLine{text: s}) }
@@ -612,18 +655,16 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 		if row < 0 || row >= h {
 			return
 		}
-		text, w := l.text, l.width
-		if w == 0 || w > colW {
-			text = ansi.Truncate(l.text, colW, "…")
-			w = lipgloss.Width(text)
-		}
-		left := 0
-		if l.center {
-			left = max(0, (colW-w)/2)
-		}
-		out[row] = strings.Repeat(" ", left) + text + strings.Repeat(" ", max(0, colW-left-w))
+		var left int
+		out[row], left = placeAt(l, colW)
 		if l.hit != nil {
 			l.hit(x+left, y+row)
+		}
+		switch l.live {
+		case liveMeter:
+			m.fr.meter = row
+		case liveTimes:
+			m.fr.times = row
 		}
 	}
 	if bottom == nil {
@@ -654,7 +695,27 @@ func (m *Model) stage(colW, coverH, h, x, y int) string {
 			put(start+i, l)
 		}
 	}
-	return strings.Join(out, "\n")
+	return out
+}
+
+// placeLine lays a stage line out in its column, colW wide.
+func placeLine(l stageLine, colW int) string {
+	s, _ := placeAt(l, colW)
+	return s
+}
+
+// placeAt is placeLine, and where in the column the text starts.
+func placeAt(l stageLine, colW int) (string, int) {
+	text, w := l.text, l.width
+	if w == 0 || w > colW {
+		text = ansi.Truncate(l.text, colW, "…")
+		w = lipgloss.Width(text)
+	}
+	left := 0
+	if l.center {
+		left = max(0, (colW-w)/2)
+	}
+	return strings.Repeat(" ", left) + text + strings.Repeat(" ", max(0, colW-left-w)), left
 }
 
 // coverLines draws the stage's cover at size; dim darkens it, to sit
@@ -727,6 +788,9 @@ func (m *Model) miniPlayer(w int) []string {
 
 // ── drawing helpers ─────────────────────────────────────────────────────
 
+// boxSide is a panel's side border.
+var boxSide = sDim.Render("│")
+
 // box draws a rounded panel of exactly w×h cells: the breadcrumb set into
 // the top border (all but its last part dimmed) and a label in the bottom.
 // Lines start right after the left border; they carry their own gutter.
@@ -749,7 +813,7 @@ func box(title string, crumbed bool, label string, lines []string, w, h int) str
 		if line == "" {
 			line = strings.Repeat(" ", inner)
 		}
-		out = append(out, b.Render("│")+line+" "+b.Render("│")) // lines come fitted to inner
+		out = append(out, boxSide+line+" "+boxSide) // lines come fitted to inner
 	}
 	bottom := "╰" + strings.Repeat("─", w-2) + "╯"
 	if label != "" {
@@ -842,10 +906,29 @@ func (m *Model) fullscreen() string {
 		from, f, m.vizPrev = -1, 1, -1
 	}
 	lines := m.viz.renderMix(from, m.vizStyle, f, m.vizSpec, m.wave, m.width, h, m.state.Playing)
-	st := m.state
+	return strings.Join(append(lines, m.vizStatusLine(h)), "\n")
+}
+
+// vizStatus is what the visualizer's status line shows: it is built
+// again only when that changes, about once a second.
+type vizStatus struct {
+	title, artist, flash, fps string
+	pos, dur, style, w, h     int
+	auto                      bool
+}
+
+// vizStatusLine is the line under the visualizer at row h: what plays, and
+// the buttons, each one a click target too.
+func (m *Model) vizStatusLine(h int) string {
+	st, pos := m.state, m.position()
+	key := vizStatus{st.Title, st.Artist, m.flash, m.fpsLabel(), int(pos), int(st.Dur), m.vizStyle, m.width, h, !m.opts.NoVizCycle}
+	if key == m.vizKey && m.vizLine != "" {
+		m.geo = geometry{foot: m.vizFoot}
+		return m.vizLine
+	}
 	info := sDim.Render("nothing playing")
 	if st.Title != "" {
-		info = sBold.Render(st.Title) + sDim.Render("  "+st.Artist+"  ·  "+clock(m.position())+" / "+clock(st.Dur))
+		info = sBold.Render(st.Title) + sDim.Render("  "+st.Artist+"  ·  "+clock(pos)+" / "+clock(st.Dur))
 	}
 	// The buttons on the right: each one a click target too.
 	auto := sHere.Render("●")
@@ -878,7 +961,8 @@ func (m *Model) fullscreen() string {
 		}
 		x += w + 3
 	}
-	return strings.Join(append(lines, status), "\n")
+	m.vizKey, m.vizLine, m.vizFoot = key, status, m.geo.foot
+	return status
 }
 
 // vizListBox is the list of styles, over the visualizer's lower left.

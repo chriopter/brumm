@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +21,14 @@ import (
 // Run connects to the daemon — starting it if needed — and runs the TUI.
 // Quitting the TUI leaves the music playing.
 func Run() error {
+	// BRUMM_CPUPROFILE=file profiles the session until it quits, for go
+	// tool pprof: how bin/bench's runs are looked into.
+	if p := os.Getenv("BRUMM_CPUPROFILE"); p != "" {
+		if f, err := os.Create(p); err == nil {
+			_ = pprof.StartCPUProfile(f)
+			defer pprof.StopCPUProfile()
+		}
+	}
 	client, err := launch.Connect()
 	if err != nil {
 		return err

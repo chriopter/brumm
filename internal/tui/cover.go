@@ -15,10 +15,45 @@ import (
 // drawCover renders img at size in a cover style; original is drawn by
 // kittyLines, and smooth stands in for it until the image is there.
 func drawCover(style string, img image.Image, size art.Size) []string {
+	var lines []string
 	if style == coverPixel {
-		return art.RenderDithered(img, size)
+		lines = art.RenderDithered(img, size)
+	} else {
+		lines = art.RenderSmooth(img, size)
 	}
-	return art.RenderSmooth(img, size)
+	for i, l := range lines {
+		lines[i] = squeezeSGR(l)
+	}
+	return lines
+}
+
+// squeezeSGR drops each color sequence that repeats the one before it.
+// The covers set both colors on every cell; the screen is the same
+// without the repeats, and bubbletea reads every frame back, sequence by
+// sequence, so a cover of flat areas costs far less on each frame.
+func squeezeSGR(l string) string {
+	var sb strings.Builder
+	sb.Grow(len(l))
+	last := ""
+	for len(l) > 0 {
+		i := strings.Index(l, "\x1b[")
+		if i < 0 {
+			sb.WriteString(l)
+			break
+		}
+		sb.WriteString(l[:i])
+		j := strings.IndexByte(l[i:], 'm')
+		if j < 0 {
+			sb.WriteString(l[i:])
+			break
+		}
+		if seq := l[i : i+j+1]; seq != last {
+			sb.WriteString(seq)
+			last = seq
+		}
+		l = l[i+j+1:]
+	}
+	return sb.String()
 }
 
 // placeholder fills a cover's footprint while it loads.

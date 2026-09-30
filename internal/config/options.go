@@ -19,10 +19,11 @@ type Options struct {
 	AlwaysTips    bool   `json:"always_tips,omitempty"`   // keys on their buttons
 	NoBarScroll   bool   `json:"no_bar_scroll,omitempty"` // ReduceMotion, as the bar widget reads it (BarWidget.qml)
 	NoVizCycle    bool   `json:"no_viz_cycle,omitempty"`  // the visualizer keeps its style instead of moving on each minute
-	VizFPS        int    `json:"viz_fps,omitempty"`       // fullscreen frames per second: 30, 60 (default) or 120
+	VizFPS        int    `json:"viz_fps,omitempty"`       // fullscreen frames per second: 30 (default), 60, 120, or -1 for the screen's rate
 	Bar           string `json:"bar,omitempty"`           // the bar widget as last set or seen: on or off; empty: never known
 	BarOffered    bool   `json:"bar_offered,omitempty"`   // the first start asked about the bar widget
 	Start         string `json:"start,omitempty"`         // what plain brumm opens: tui (default) or gui
+	MusicKeys     bool   `json:"music_keys,omitempty"`    // SUPER+SHIFT+M (and +ALT) open brumm, not Omarchy's music apps
 }
 
 // legacy are switches reduce motion took over: any of them set starts it on.

@@ -40,6 +40,11 @@ func (d *Daemon) options(set map[string]any, reply *ipc.Message) error {
 				return err
 			}
 		}
+		if _, ok := set["music_keys"]; ok && o.MusicKeys != was.MusicKeys {
+			if err := update.SetMusicKeys(o.MusicKeys); err != nil {
+				return err
+			}
+		}
 		if err := o.Save(); err != nil {
 			return err
 		}
@@ -52,7 +57,7 @@ func (d *Daemon) options(set map[string]any, reply *ipc.Message) error {
 		defer d.broadcast(ipc.Message{Options: &o})
 	}
 	reply.Options = &o
-	reply.Omarchy = update.HasOmarchy()
+	reply.Omarchy = update.HasOmarchy() && update.CanMusicKeys()
 	return nil
 }
 

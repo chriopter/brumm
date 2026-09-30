@@ -7,6 +7,7 @@
 //	brumm daemon   run the background daemon (usually via systemd)
 //	brumm login    sign in to Apple Music in the browser, then open the player
 //	brumm update   install the newest release now and offer to restart into it
+//	brumm keys on|off  SUPER+SHIFT+M (and +ALT) open brumm, or Omarchy's music apps
 //	brumm setup D  install from an unpacked release D (used by install.sh)
 package main
 
@@ -18,6 +19,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/daemon"
 	"github.com/chriopter/brumm/internal/gui"
 	"github.com/chriopter/brumm/internal/ipc"
@@ -94,10 +96,22 @@ func main() {
 				fmt.Println("brumm", version, "is current")
 			}
 		}
+	case "keys": // the music keys: brumm keys on|off
+		on := len(os.Args) > 2 && os.Args[2] == "on"
+		if len(os.Args) < 3 || (os.Args[2] != "on" && os.Args[2] != "off") {
+			err = fmt.Errorf("usage: brumm keys on|off — SUPER+SHIFT+M (and +ALT) open brumm, or Omarchy's music apps again")
+			break
+		}
+		if err = update.SetMusicKeys(on); err == nil {
+			o := config.LoadOptions()
+			o.MusicKeys = on
+			err = o.Save()
+			fmt.Println(map[bool]string{true: "SUPER+SHIFT+M opens brumm, SUPER+SHIFT+ALT+M brumm in the terminal", false: "the music keys are Omarchy's again"}[on])
+		}
 	case "version", "--version":
 		fmt.Println("brumm", version)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: brumm [--tui | --gui | open [tui|gui] | daemon | login | update | setup DIR | version]")
+		fmt.Fprintln(os.Stderr, "usage: brumm [--tui | --gui | open [tui|gui] | keys on|off | daemon | login | update | setup DIR | version]")
 		os.Exit(2)
 	}
 	if err != nil {

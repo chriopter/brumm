@@ -151,10 +151,13 @@ func TestBarOffer(t *testing.T) {
 func TestOptionsMenu(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	fakeOmarchy(t, false, nil)
+	old := canMusicKeys
+	canMusicKeys = func() bool { return true }
+	t.Cleanup(func() { canMusicKeys = old })
 	m := playingModel(80, 24)
 	m.optOpen = true
 	m.View()
-	want := []string{"Cover Colors", "Autoplay", "Reduce Motion", "Cover Style", "Show Shortcuts", "Show in Top Bar"}
+	want := []string{"Cover Colors", "Autoplay", "Reduce Motion", "Cover Style", "Show Shortcuts", "Show in Top Bar", "Music Keys"}
 	for i := range numOptions {
 		m.optSel = i
 		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
@@ -272,8 +275,8 @@ func TestSpectrumOnlyWhenSeen(t *testing.T) {
 		t.Fatal("no spectrum for the bars in view")
 	}
 	m.feedSpectrum(make([]int, bands))
-	if d, _ := m.nextTick(); d != 500*time.Millisecond {
-		t.Fatalf("ticks every %v with the spectrum streaming", d)
+	if d, _ := m.nextTick(); d < 20*time.Millisecond || d > 505*time.Millisecond {
+		t.Fatalf("ticks every %v with the spectrum streaming, want the next bear step or second", d)
 	}
 	m.eqShown = false
 	if m.subscribe(); m.specOn || m.spec != nil {

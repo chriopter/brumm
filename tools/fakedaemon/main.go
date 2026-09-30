@@ -191,7 +191,11 @@ func main() {
 					}
 					if (r.Bands > 0 || r.Wave > 0) && playing { // paused, the real daemon sends no sound either
 						stop = make(chan struct{})
-						go sound(r.Bands, r.Wave, max(r.FPS, 25), stop, send)
+						fps := r.FPS
+						if fps <= 0 {
+							fps = 25 // the real daemon's default
+						}
+						go sound(r.Bands, r.Wave, fps, stop, send)
 					}
 				case ipc.CmdHome:
 					m.Shelves = []apple.Shelf{{Title: "Recently Played", Items: items()[:6]}, {Title: "Made for You", Items: playlists()[:3]},

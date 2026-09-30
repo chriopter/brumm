@@ -347,18 +347,21 @@ func TestUpdatePopup(t *testing.T) {
 	}
 }
 
-// The visualizer draws at the screen's rate unless told otherwise; F steps.
+// The visualizer draws at 30 fps unless told otherwise; F steps through
+// 60, 120 and the screen's own rate.
 func TestAutoFPS(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
 	m.refresh = 144
-	if m.drawFPS() != 144 || m.fpsLabel() != "auto 144 fps" {
-		t.Fatalf("auto draws at %d (%s)", m.drawFPS(), m.fpsLabel())
-	}
 	m.full = true
-	m.fullKey("F")
-	if m.drawFPS() != 30 {
-		t.Fatalf("F went to %d", m.drawFPS())
+	for _, want := range []string{"30 fps", "60 fps", "120 fps", "auto 144 fps", "30 fps"} {
+		if m.fpsLabel() != want {
+			t.Fatalf("the rate is %s, want %s", m.fpsLabel(), want)
+		}
+		m.fullKey("F")
+	}
+	if m.opts.VizFPS = 30; m.drawFPS() != 30 { // set to 30 before 30 was the default
+		t.Fatalf("30 draws at %d", m.drawFPS())
 	}
 }
 

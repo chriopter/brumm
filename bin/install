@@ -48,6 +48,13 @@ tar -xzf brumm-linux-amd64.tar.gz
 # the terminal itself.
 brumm="${XDG_BIN_HOME:-$HOME/.local/bin}/brumm"
 if [[ -r /dev/tty && -w /dev/tty ]]; then
+  # Omarchy's music keys: offered once; `brumm keys off` gives them back.
+  if [[ -f ${XDG_CONFIG_HOME:-$HOME/.config}/hypr/bindings.lua ]] &&
+    ! grep -q 'hypr.brumm' "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/bindings.lua"; then
+    printf 'Open brumm with SUPER+SHIFT+M instead of Spotify? [Y/n] ' >/dev/tty
+    read -r answer </dev/tty || answer=n
+    case ${answer,,} in "" | y | yes | j | ja) "$brumm" keys on || true ;; esac
+  fi
   cd ~ && rm -rf "$work" # exec skips the EXIT trap
   if grep -q '"user_token"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
     exec "$brumm" </dev/tty >/dev/tty 2>&1

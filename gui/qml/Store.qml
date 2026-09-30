@@ -77,7 +77,8 @@ Item {
                   { option: "reduce_motion", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
                   { option: "wall", label: "Album Wall", hint: "Covers around the cover, not a flow." })
         if (daemon.omarchy)
-            rows.push({ option: "bar", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." })
+            rows.push({ option: "bar", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
+                      { option: "music_keys", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
         rows.push({ sep: true },
                   { act: "U", icon: "󰚰", label: st.update ? "Update to " + st.update + "…" : "Check for Updates…" },
                   { act: "?", icon: "󰋖", label: "Keyboard Shortcuts" },
@@ -101,6 +102,7 @@ Item {
         case "autoplay": return !o.no_autoplay
         case "reduce_motion": return !!o.reduce_motion
         case "bar": return o.bar === "on"
+        case "music_keys": return !!o.music_keys
         }
         return false
     }
@@ -1229,6 +1231,9 @@ Item {
         case "reduce_motion": daemon.setOption("reduce_motion", !o.reduce_motion); break
         case "wall": wall = !wall; sys.setSetting("wall", wall ? "true" : "false"); break
         case "bar": setBar(o.bar !== "on"); break
+        case "music_keys":
+            daemon.setOption("music_keys", !o.music_keys, err => setFlash(err ? err : !o.music_keys ? "Super+Shift+M opens brumm" : "the music keys are Omarchy's again"))
+            break
         }
     }
 
