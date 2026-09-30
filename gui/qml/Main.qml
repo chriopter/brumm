@@ -200,7 +200,7 @@ Window {
         Browser {
             id: browser
             anchors { left: sidebar.right; leftMargin: ui.gap * 0.75; top: header.bottom; topMargin: ui.px(10); bottom: footer.top; bottomMargin: ui.px(4) }
-            width: Math.round(Math.max(ui.px(320), Math.min(parent.width - sidebar.width - ui.px(420), parent.width * store.split)))
+            width: Math.round(Math.max(ui.px(160), Math.min(parent.width - sidebar.width - ui.px(420), parent.width * store.split)))
         }
 
         // The line between the list and the stage: invisible, but pointed
@@ -215,7 +215,7 @@ Window {
             onPositionChanged: m => {
                 if (!pressed) return
                 const at = mapToItem(body, m.x, 0).x - browser.x
-                store.split = Math.min(0.7, Math.max(0.2, at / body.width))
+                store.split = Math.min(0.7, Math.max(0.08, at / body.width))
             }
             onReleased: sys.setSetting("split", store.split)
         }

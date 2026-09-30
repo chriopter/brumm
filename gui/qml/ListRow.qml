@@ -175,7 +175,7 @@ Item {
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !!r.track
+                visible: !!r.track && r.width >= ui.px(380) // a narrow list keeps the titles, not the times
                 text: r.track ? clock(r.track.duration) : ""
                 color: ui.dim
                 font { family: ui.sans; pixelSize: ui.px(12); features: { "tnum": 1 } }

@@ -241,7 +241,7 @@ Item {
         st[secRadio] = [newView("Radio", "radio:", { kind: "shelf", id: "radio", name: "Radio", catalog: true })]
         stacks = st
         const f = parseFloat(sys.setting("split", 0.4))
-        if (f >= 0.2 && f <= 0.7) split = f
+        if (f >= 0.08 && f <= 0.7) split = f
         refresh()
         if (daemon.connected) started()
     }
@@ -1355,7 +1355,7 @@ Item {
             return daemon.send({ cmd: "repeat", value: next })
         }
         case "[": case "]":
-            split = Math.min(0.7, Math.max(0.2, split + (k === "[" ? -0.05 : 0.05)))
+            split = Math.min(0.7, Math.max(0.08, split + (k === "[" ? -0.05 : 0.05)))
             sys.setSetting("split", split)
             return
         case "c": return jumpToPlaying()

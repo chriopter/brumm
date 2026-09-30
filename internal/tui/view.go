@@ -76,7 +76,9 @@ var spinner = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "
 const (
 	margin   = 2 // columns left and right of everything
 	bodyTop  = 1 // one blank line above the panels
-	navMin   = 44
+	navMin   = 16 // the narrowest the list can be dragged: less shows nothing worth reading
+	navRoom  = 44 // the list may take this much from the stage's controls
+	durMin   = 40 // narrower, songs drop their lengths
 	colMin   = 30 // narrower, the stage gives way to the mini player
 	ctlMin   = 40 // the controls' width, however small the cover
 	stagePad = 2
@@ -198,12 +200,12 @@ func (m *Model) render() string {
 // only the mini player fits.
 func (m *Model) layout(inner, bodyH int) (navW, colW, coverH int) {
 	gapW := 2 + 2*stagePad
-	if inner-gapW-navMin < colMin {
+	if inner-gapW-navRoom < colMin {
 		return inner, 0, 0
 	}
 	// Where the divider asks to be, leaving the stage room for the controls.
 	navW = int(math.Round(float64(inner) * m.split))
-	navW = max(navMin, min(navW, inner-gapW-ctlMin))
+	navW = max(navMin, min(navW, max(navRoom, inner-gapW-ctlMin)))
 	room := inner - navW - gapW
 	coverH = max(0, min(bodyH-1-stageBelow, int(float64(room)/m.cellAspect)))
 	coverW := min(room, int(math.Round(float64(coverH)*m.cellAspect)))
@@ -497,7 +499,10 @@ func (m *Model) row(v *view, i, w int) string {
 				text += "  " + sDim.Render(t.Artist)
 			}
 		}
-		detail = heart + "  " + sDim.Render(fmt.Sprintf("%5s", clock(t.Duration)))
+		detail = heart
+		if w >= durMin { // a narrow list keeps the titles, not the times
+			detail += "  " + sDim.Render(fmt.Sprintf("%5s", clock(t.Duration)))
+		}
 	} else {
 		it := r.item
 		icon := kindIcon(it.Kind)

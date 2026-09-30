@@ -73,7 +73,7 @@ func TestPushSelectsOnceLoaded(t *testing.T) {
 // A crumb wider than its box gives up its first parts, not its last.
 func TestCrumbCollapses(t *testing.T) {
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
-	m.width, m.height = 80, 30
+	m.width, m.height, m.split = 80, 30, 0.5 // not a width another test left behind
 	for _, n := range []string{"Deftones", "Koi No Yokan", "Chino Moreno", "Crosses", "Goodnight, Sweetheart"} {
 		it := apple.Item{Kind: apple.KindAlbum, ID: n, Name: n}
 		m.push(&view{title: n, key: it.Key(), item: &it}, "")
