@@ -8,6 +8,15 @@ brumm is one player with two faces. `brumm --tui` is the terminal player, `brumm
 
 ![brumm](docs/screenshot.png)
 
+<div align="center">
+
+```sh
+curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
+brumm login
+```
+
+</div>
+
 ## Features
 
 - 🎵 Library, catalog, search as you type
@@ -42,12 +51,7 @@ brumm is one player with two faces. `brumm --tui` is the terminal player, `brumm
 
 Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
 
-## Install
-
-```sh
-curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
-brumm login
-```
+## Installing, in detail
 
 `brumm login` opens the player once you are signed in. Later, run `brumm` or click the music widget in the bar. You need an Apple Music subscription.
 

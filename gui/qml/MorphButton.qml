@@ -7,6 +7,7 @@ Item {
     property string icon
     property string label
     property string key
+    property bool lit: false // on: its icon in the color of what plays
     signal clicked()
 
     readonly property bool open: hover.hovered
@@ -30,7 +31,7 @@ Item {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: m.icon
-            color: m.open ? ui.here : ui.dim
+            color: m.open || m.lit ? (m.lit && m.icon === "󰋑" ? ui.heart : ui.here) : ui.dim
             font { family: ui.mono; pixelSize: ui.px(14) }
         }
         Text {

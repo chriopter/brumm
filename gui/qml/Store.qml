@@ -1045,6 +1045,44 @@ Item {
         })
     }
 
+    // ── the song playing ────────────────────────────────────────────────
+    // What the stage's buttons do: the same as the keys, but always for
+    // the song playing, whatever the list has selected.
+    function playingRow() { return st.id && !st.preview ? { track: { id: st.id, title: st.title, artist: st.artist, album: st.album } } : null }
+    function ratePlaying(value) {
+        if (!st.id || st.preview) return
+        if (rating[st.id] === value) value = 0
+        if (value === 0) delete rating[st.id]
+        else rating[st.id] = value
+        ratingRev++
+        setFlash(value === 1 ? "♥ " + st.title : value === -1 ? "disliked " + st.title : st.title + ": no rating")
+        daemon.send({ cmd: "rate", refs: [{ kind: "song", id: st.id }], value: value })
+    }
+    function pickPlaying() {
+        const r = playingRow()
+        if (!r) return
+        pick = { what: r, name: st.title, lists: [], loading: true, sel: 0, naming: false, input: "" }
+        help = false
+        daemon.request({ cmd: "list", list: "playlists" }, (err, reply) => {
+            if (!pick) return
+            pick = Object.assign({}, pick, { loading: false, lists: (reply && reply.items || []).filter(i => i.editable) })
+        })
+    }
+    function libraryPlaying() {
+        if (!st.id || st.preview) return
+        if (st.id.startsWith("i.")) return setFlash(st.title + " is already in your library")
+        daemon.request({ cmd: "add", list: "songs", ids: [st.id] }, err => setFlash(err ? err : "added " + st.title + " to your library"))
+    }
+    function radioPlaying() { if (st.id) startStation({ cmd: "station", start: st.id }) }
+    function linkPlaying() {
+        if (!st.id) return
+        daemon.request({ cmd: "link", start: st.id }, (err, reply) => {
+            if (err) return setFlash(err)
+            sys.copy(reply.link)
+            setFlash("link copied")
+        })
+    }
+
     function rateable() {
         const r = cur().rows[cur().sel]
         if (r && r.track) return { ref: { kind: "song", id: r.track.id }, name: r.track.title }

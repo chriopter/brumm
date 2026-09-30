@@ -153,7 +153,23 @@ Item {
                 }
             }
 
-            Item { width: 1; height: ui.px(16) }
+            // What to do with this song: small glass buttons that open to
+            // show their keys when pointed at.
+            Row {
+                visible: !stage.preview
+                anchors.left: parent.left
+                anchors.leftMargin: -ui.px(10)
+                spacing: 0
+                readonly property int mark: { store.ratingRev; return store.rating[stage.st.id] || 0 }
+                MorphButton { icon: parent.mark > 0 ? "󰋑" : "󰋕"; label: parent.mark > 0 ? "Loved" : "Love"; key: "*"; lit: parent.mark > 0; onClicked: store.ratePlaying(1) }
+                MorphButton { icon: "󰔑"; label: parent.mark < 0 ? "Disliked" : "Dislike"; key: "d"; lit: parent.mark < 0; onClicked: store.ratePlaying(-1) }
+                MorphButton { icon: "󰐒"; label: "Playlist"; key: "P"; onClicked: store.pickPlaying() }
+                MorphButton { icon: "󰋚"; label: "Library"; key: "i"; visible: !(stage.st.id || "").startsWith("i."); onClicked: store.libraryPlaying() }
+                MorphButton { icon: "󰐹"; label: "Radio"; key: "R"; onClicked: store.radioPlaying() }
+                MorphButton { icon: "󰌷"; label: "Link"; key: "y"; onClicked: store.linkPlaying() }
+            }
+
+            Item { width: 1; height: ui.px(10) }
             Progress { width: parent.width }
             Item { width: 1; height: ui.px(12) }
             Controls { width: parent.width }
