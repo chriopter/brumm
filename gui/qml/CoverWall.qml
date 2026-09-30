@@ -22,7 +22,9 @@ Item {
     property real restH: height
     onWidthChanged: resting.restart()
     onHeightChanged: resting.restart()
-    Timer { id: resting; interval: 180; onTriggered: { wall.restW = wall.width; wall.restH = wall.height } }
+    onSizeChanged: resting.restart()
+    property real restTile: tile // the size the covers are loaded at: again only once it rests
+    Timer { id: resting; interval: 180; onTriggered: { wall.restW = wall.width; wall.restH = wall.height; wall.restTile = wall.tile } }
     readonly property int cols: Math.ceil(restW / tile / 2) * 2 + 1
     readonly property int rows: Math.ceil(restH / tile / 2) * 2 + 1
     readonly property int mc: (cols - 3) / 2 // the cover's first column and row
@@ -152,7 +154,7 @@ Item {
                     anchors.fill: parent
                     visible: !ui.effects // with effects, drawn rounded below
                     source: t.showing ? "image://cover/" + encodeURIComponent(t.showing.art) : ""
-                    sourceSize: Qt.size(Math.round(wall.tile * 1.3), Math.round(wall.tile * 1.3))
+                    sourceSize: Qt.size(Math.round(wall.restTile * 1.3), Math.round(wall.restTile * 1.3))
                     asynchronous: true
                     fillMode: Image.PreserveAspectCrop
                 }

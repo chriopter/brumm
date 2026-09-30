@@ -94,15 +94,16 @@ Item {
                     font { family: ui.sans; pixelSize: ui.px(26); weight: Font.DemiBold }
                     elide: Text.ElideRight
                 }
-                // Love and dislike, glass as the transport, lit when set.
+                // Add (to a playlist, the library) and love, glass as the
+                // transport; love lit when set.
                 Row {
                     id: rate
                     anchors { right: parent.right; verticalCenter: titleText.verticalCenter }
                     spacing: ui.px(10)
                     visible: !stage.preview
                     readonly property int mark: { store.ratingRev; return store.rating[stage.st.id] || 0 }
+                    Orb { id: add; size: ui.px(34); icon: "󰐕"; on: store.addOpen; onClicked: store.addOpen = !store.addOpen }
                     Orb { size: ui.px(34); icon: rate.mark > 0 ? "󰋑" : "󰋕"; on: rate.mark > 0; onClicked: store.ratePlaying(1) }
-                    Orb { size: ui.px(34); icon: "󰔑"; on: rate.mark < 0; onClicked: store.ratePlaying(-1) }
                 }
                 // A right click on the title copies the song's link.
                 TapHandler { acceptedButtons: Qt.RightButton; onTapped: store.linkPlaying() }
@@ -144,6 +145,54 @@ Item {
             Progress { width: parent.width }
             Item { width: 1; height: ui.px(12) }
             Controls { width: parent.width }
+        }
+    }
+    // What + offers: a card of glass under the button.
+    Rectangle {
+        id: addCard
+        parent: win.contentItem
+        visible: store.addOpen && stage.visible && stage.has
+        z: 60
+        readonly property point at: { store.addOpen; win.width; win.height; return add.mapToItem(win.contentItem, 0, 0) }
+        width: ui.px(210)
+        height: addRows.implicitHeight + ui.px(12)
+        x: Math.min(at.x + add.width / 2 - width / 2, win.width - width - ui.px(8))
+        y: at.y + add.height + ui.px(10)
+        radius: ui.px(12)
+        color: ui.tint(ui.deep, 0.08)
+        border { width: 1; color: Qt.alpha(ui.bright, 0.14) }
+        TapHandler {}
+        Column {
+            id: addRows
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: ui.px(6) }
+            Repeater {
+                model: [["󰲸", "Add to Playlist…", "P", () => store.pickPlaying()],
+                        ["󰋚", "Add to Library", "i", () => store.libraryPlaying()]]
+                Item {
+                    required property var modelData
+                    width: addRows.width
+                    height: ui.px(34)
+                    RowLight { anchors.fill: parent; visible: rowHover.hovered }
+                    Text {
+                        id: glyph
+                        anchors { left: parent.left; leftMargin: ui.px(10); verticalCenter: parent.verticalCenter }
+                        text: modelData[0]; color: rowHover.hovered ? ui.here : ui.dim
+                        font { family: ui.mono; pixelSize: ui.px(15) }
+                    }
+                    Text {
+                        anchors { left: glyph.right; leftMargin: ui.px(10); verticalCenter: parent.verticalCenter }
+                        text: modelData[1]; color: rowHover.hovered ? ui.bright : ui.fg
+                        font { family: ui.sans; pixelSize: ui.px(13) }
+                    }
+                    Text {
+                        anchors { right: parent.right; rightMargin: ui.px(10); verticalCenter: parent.verticalCenter }
+                        text: modelData[2]; color: ui.dim
+                        font { family: ui.sans; pixelSize: ui.px(12); weight: Font.DemiBold }
+                    }
+                    HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: { store.addOpen = false; modelData[3]() } }
+                }
+            }
         }
     }
 }
