@@ -33,6 +33,24 @@ Box {
         color: ui.dim
         font { family: ui.sans; pixelSize: ui.px(12) }
     }
+    Column { // what the newer release says is new
+        visible: !!u.newer && !u.installing && !u.installed && !!u.notes && u.notes.length > 0
+        width: Math.min(parent.width, ui.px(460))
+        anchors.horizontalCenter: parent.horizontalCenter
+        topPadding: ui.px(10)
+        spacing: ui.px(6)
+        Repeater {
+            model: (u.notes || []).slice(0, 10)
+            Text {
+                required property string modelData
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: modelData
+                color: ui.fg
+                font { family: ui.sans; pixelSize: ui.px(12) }
+            }
+        }
+    }
     Item { width: 1; height: ui.px(8) }
     KeyHints {
         visible: !u.checking && !u.installing

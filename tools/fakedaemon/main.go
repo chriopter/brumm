@@ -225,6 +225,9 @@ func main() {
 					for i := 1; i < 12; i++ {
 						m.Tracks = append(m.Tracks, tracks(i)[i%13])
 					}
+				case ipc.CmdUpdate: // a newer release, with what it says is new
+					m.Version, m.Link, m.Pos = "v0.8.0", "v0.9.0", 1
+					m.Notes = []string{"🪟 brumm as a window — brumm --gui, lit like the PSP's XMB, in your theme's and the cover's colors", "⇄ g switches between terminal and window, right where you were; the music never stops", "🌈 Twelve visualizers as shaders — f in the window"}
 				case ipc.CmdRatings:
 					m.Ratings = map[string]int{"i.0.7": 1}
 				case ipc.CmdPlace: // where a player left off, as the daemon keeps it

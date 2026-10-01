@@ -188,13 +188,14 @@ func (d *Daemon) checkNowFor(reply *ipc.Message) error {
 	if !update.Managed(d.version) {
 		return fmt.Errorf("this brumm (%s) was built from source; update it with bin/update", d.version)
 	}
-	tag, err := update.Latest()
+	tag, notes, err := update.LatestNotes()
 	if err != nil {
 		return err
 	}
 	reply.Link = tag
 	if update.Newer(tag, current) {
 		reply.Pos = 1
+		reply.Notes = notes
 		d.offerUpdate(tag)
 	}
 	return nil

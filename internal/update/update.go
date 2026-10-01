@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -86,25 +87,56 @@ func testBase() string { return os.Getenv("BRUMM_UPDATE_BASE") }
 
 // Latest returns the newest release's tag.
 func Latest() (string, error) {
+	tag, _, err := LatestNotes()
+	return tag, err
+}
+
+// LatestNotes returns the newest release's tag and what it says is new:
+// the points of its notes, as plain lines.
+func LatestNotes() (string, []string, error) {
 	if b := testBase(); b != "" {
 		tag, err := fetch(b + "/latest")
-		return strings.TrimSpace(string(tag)), err
+		return strings.TrimSpace(string(tag)), nil, err
 	}
 	resp, err := client.Get("https://api.github.com/repos/" + repo + "/releases/latest")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github: %s", resp.Status)
+		return "", nil, fmt.Errorf("github: %s", resp.Status)
 	}
 	var rel struct {
-		Tag string `json:"tag_name"`
+		Tag  string `json:"tag_name"`
+		Body string `json:"body"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return "", err
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
+		return "", nil, err
 	}
-	return rel.Tag, nil
+	return rel.Tag, Points(rel.Body), nil
+}
+
+var (
+	noteTags  = regexp.MustCompile(`</?[a-zA-Z][^>]*>`)
+	noteLinks = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+)
+
+// Points are the list items of a release's notes without their markup:
+// what a player can show under "is available".
+func Points(body string) []string {
+	var out []string
+	for _, l := range strings.Split(body, "\n") {
+		l, ok := strings.CutPrefix(strings.TrimSpace(l), "- ")
+		if !ok {
+			continue
+		}
+		l = noteLinks.ReplaceAllString(noteTags.ReplaceAllString(l, ""), "$1")
+		l = strings.NewReplacer("**", "", "`", "", "*", "").Replace(l)
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // Newer reports whether tag a is a later version than b

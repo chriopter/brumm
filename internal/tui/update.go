@@ -18,8 +18,15 @@ type updatePopup struct {
 	current    string
 	latest     string
 	newer      bool
+	notes      []string // what the newer release says is new
 	err        string
 }
+
+// The update box shows this much of the release's notes.
+const (
+	maxNotes  = 10
+	noteWidth = 64
+)
 
 type updateMsg struct {
 	reply ipc.Message
@@ -47,6 +54,7 @@ func (m *Model) updateChecked(msg updateMsg) {
 	}
 	u := m.upd
 	u.checking, u.current, u.latest, u.newer = false, msg.reply.Version, msg.reply.Link, msg.reply.Pos == 1
+	u.notes = msg.reply.Notes
 	if msg.err != nil {
 		u.err = msg.err.Error()
 	}
@@ -139,8 +147,23 @@ func (m *Model) updateBox() []string {
 	case u.err != "":
 		lines = []string{sErr.Render(u.err), "", sKey.Render("esc") + sDim.Render(" close")}
 	case u.newer:
-		lines = []string{sBold.Render(u.latest) + " is available", sDim.Render("you have " + u.current), "",
-			sKey.Render("enter") + sDim.Render(" install  ") + sKey.Render("esc") + sDim.Render(" later")}
+		lines = []string{sBold.Render(u.latest) + " is available", sDim.Render("you have " + u.current), ""}
+		for _, n := range u.notes[:min(len(u.notes), maxNotes)] {
+			for i, l := range wrap(n, min(noteWidth, max(34, m.width-12)), 3) {
+				if i > 0 {
+					l = "   " + l // under the words, past the emoji
+				}
+				lines = append(lines, l)
+			}
+		}
+		if len(u.notes) > maxNotes {
+			lines = append(lines, sDim.Render("… and more"))
+		}
+		if len(u.notes) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines,
+			sKey.Render("enter")+sDim.Render(" install  ")+sKey.Render("esc")+sDim.Render(" later"))
 	default:
 		lines = []string{sPlays.Render("✓") + " " + sBold.Render(u.current) + " is the newest version", "",
 			sKey.Render("esc") + sDim.Render(" close")}

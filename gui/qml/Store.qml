@@ -1212,7 +1212,7 @@ Item {
         pick = null; help = false
         daemon.request({ cmd: "update", value: 2 }, (err, reply) => {
             if (!upd) return
-            upd = { current: reply ? reply.version : "", latest: reply ? reply.link : "", newer: !!(reply && reply.pos === 1), err: err || "" }
+            upd = { current: reply ? reply.version : "", latest: reply ? reply.link : "", newer: !!(reply && reply.pos === 1), notes: (reply && reply.notes) || [], err: err || "" }
         })
     }
 
