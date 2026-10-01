@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/chriopter/brumm/internal/update"
 )
 
 // Feedback is an issue on GitHub, written in the player: the browser opens
@@ -43,7 +45,7 @@ func sendFeedback(text, version, face string, agent bool) (how string, err error
 	if strings.TrimSpace(text) == "" {
 		return "", errors.New("feedback: nothing written")
 	}
-	if agent && hasAgent() {
+	if agent && update.HasAgent() {
 		cmd := exec.Command("omarchy-agent", "--prompt", agentPrompt(text, version, face))
 		if err := cmd.Start(); err == nil {
 			go func() { _ = cmd.Wait() }()
@@ -51,15 +53,6 @@ func sendFeedback(text, version, face string, agent bool) (how string, err error
 		}
 	}
 	return "browser", openURL(feedbackURL(feedbackTitle(version, time.Now()), feedbackBody(text, version, face)))
-}
-
-// hasAgent: Omarchy has a default coding agent to hand the report to.
-func hasAgent() bool {
-	if _, err := exec.LookPath("omarchy-agent"); err != nil {
-		return false
-	}
-	out, err := exec.Command("omarchy-default-agent").Output()
-	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
 // agentPrompt asks the agent to look into what the user reports and file it.

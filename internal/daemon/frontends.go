@@ -58,6 +58,7 @@ func (d *Daemon) options(set map[string]any, reply *ipc.Message) error {
 	}
 	reply.Options = &o
 	reply.Omarchy = update.HasOmarchy() && update.CanMusicKeys()
+	reply.Agent = update.HasAgent()
 	return nil
 }
 

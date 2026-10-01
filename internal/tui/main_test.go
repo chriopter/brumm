@@ -13,6 +13,7 @@ import (
 func TestMain(m *testing.M) {
 	hasOmarchy = func() bool { return false }
 	canMusicKeys = func() bool { return false }
+	hasAgent = func() bool { return false }
 	update.Omarchy = func(...string) ([]byte, error) { return nil, errors.New("no omarchy in tests") }
 	dir, err := os.MkdirTemp("", "brumm-test-")
 	if err != nil {

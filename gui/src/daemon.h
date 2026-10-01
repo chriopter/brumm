@@ -18,6 +18,7 @@ class Daemon : public QObject {
     // The options all of brumm's players share, as the daemon keeps them.
     Q_PROPERTY(QVariantMap options READ options NOTIFY optionsChanged)
     Q_PROPERTY(bool omarchy READ omarchy NOTIFY optionsChanged) // the bar widget can be switched
+    Q_PROPERTY(bool agent MEMBER m_agent NOTIFY optionsChanged) // Omarchy has a coding agent for feedback
 
 public:
     explicit Daemon(QObject *parent = nullptr);
@@ -71,5 +72,6 @@ private:
     QJSEngine *m_engine = nullptr;
     QVariantMap m_options;
     bool m_omarchy = false;
+    bool m_agent = false;
     bool m_listening = false;
 };

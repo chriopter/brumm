@@ -1275,19 +1275,25 @@ Item {
     // ! opens a box to write what is wrong; enter opens the browser on a
     // GitHub issue filled in with it, tab hands it to Omarchy's agent.
     property var fb: null // {input, sending}
+    // sendFeedback hands what was written to Omarchy's agent, or opens the
+    // browser on the issue.
+    function sendFeedback(toAgent) {
+        if (!fb || fb.sending) return
+        const text = fb.input.trim()
+        if (!text) return
+        fb = { input: fb.input, sending: true }
+        daemon.request({ cmd: "feedback", query: text, source: "gui", value: toAgent ? 1 : 0 }, (err, reply) => {
+            fb = null
+            setFlash(err ? err : reply.link === "agent" ? "your agent is looking into it" : "one click left: send it in your browser")
+        })
+    }
+
     function feedbackKey(k, ev) {
         if (fb.sending) return
         if (k === "esc") { fb = null; return }
-        if (k === "enter" || k === "tab") { // enter: the browser; tab: Omarchy's agent looks into it
-            const text = fb.input.trim()
-            if (!text) return
-            fb = { input: fb.input, sending: true }
-            daemon.request({ cmd: "feedback", query: text, source: "gui", value: k === "tab" ? 1 : 0 }, (err, reply) => {
-                fb = null
-                setFlash(err ? err : reply.link === "agent" ? "your agent is looking into it" : "one click left: send it in your browser")
-            })
-            return
-        }
+        // enter: the agent where there is one, else the browser; tab: the other.
+        if (k === "enter") return sendFeedback(daemon.agent)
+        if (k === "tab") return sendFeedback(false)
         const t = editText(fb.input, k === "space" ? "" : k, k === "space" ? { text: " ", modifiers: 0 } : ev)
         if (t !== null) fb = { input: t, sending: false }
     }

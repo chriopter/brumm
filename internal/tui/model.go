@@ -1497,7 +1497,7 @@ func (m *Model) key(k string) tea.Cmd {
 	case "y":
 		return m.copyLink()
 	case "!":
-		m.fb, m.help = &feedback{}, false
+		m.fb, m.help = &feedback{agent: hasAgent()}, false
 	case "U":
 		return m.checkUpdate()
 	case "g":

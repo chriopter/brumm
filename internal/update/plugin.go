@@ -68,3 +68,13 @@ func lastLine(out []byte) string {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	return strings.TrimSpace(lines[len(lines)-1])
 }
+
+// HasAgent says whether Omarchy has a default coding agent chosen: feedback
+// can be handed to it.
+func HasAgent() bool {
+	if _, err := exec.LookPath("omarchy-agent"); err != nil {
+		return false
+	}
+	out, err := exec.Command("omarchy-default-agent").Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}

@@ -7,14 +7,20 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chriopter/brumm/internal/ipc"
+	"github.com/chriopter/brumm/internal/update"
 )
 
-// feedback is !: a box to write what is wrong. enter opens the browser on
-// a GitHub issue filled in with it; tab hands it to Omarchy's agent, which
-// looks into the logs first.
+// feedback is !: a box to write what is wrong. enter hands it to Omarchy's
+// agent, which looks into the logs and files the issue; without one, or
+// with tab, the browser opens on the issue filled in.
+
+// hasAgent: Omarchy has a coding agent chosen; a variable, so tests decide.
+var hasAgent = update.HasAgent
+
 type feedback struct {
 	input   string
 	sending bool
+	agent   bool // Omarchy has an agent: asked once, when the box opens
 }
 
 type feedbackMsg struct {
@@ -36,8 +42,9 @@ func (m *Model) feedbackKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		f.sending = true
+		// enter: the agent where there is one, else the browser; tab: the browser.
 		req := ipc.Request{Cmd: ipc.CmdFeedback, Query: text, Source: "tui"}
-		if k == "tab" {
+		if k == "enter" && f.agent {
 			req.Value = 1
 		}
 		client := m.client
@@ -72,7 +79,7 @@ func (m *Model) feedbackDone(msg feedbackMsg) {
 func (m *Model) feedbackBox() []string {
 	f := m.fb
 	w := max(34, min(64, m.width-2*margin-10))
-	lines := []string{sBold.Render("What is wrong, or what would you like?"), ""}
+	var lines []string
 	// The words, wrapped to the box, the cursor after the last.
 	text := f.input
 	if !f.sending {
@@ -85,8 +92,11 @@ func (m *Model) feedbackBox() []string {
 	if f.sending {
 		lines = append(lines, sDim.Render("opening…"))
 	} else {
-		lines = append(lines, sDim.Render("it becomes a public issue on GitHub"),
-			sKey.Render("enter")+sDim.Render(" open on GitHub  ")+sKey.Render("tab")+sDim.Render(" my agent looks into it  ")+sKey.Render("esc")+sDim.Render(" cancel"))
+		keys := sKey.Render("enter") + sDim.Render(" open on GitHub  ")
+		if f.agent {
+			keys = sKey.Render("enter") + sDim.Render(" send to my agent  ") + sKey.Render("tab") + sDim.Render(" open on GitHub  ")
+		}
+		lines = append(lines, keys+sKey.Render("esc")+sDim.Render(" cancel"))
 	}
 	for _, l := range lines {
 		w = max(w, lipgloss.Width(l))
@@ -95,5 +105,5 @@ func (m *Model) feedbackBox() []string {
 		lines[i] = " " + fit(lines[i], w)
 	}
 	lines = append(append([]string{""}, lines...), "")
-	return strings.Split(box("feedback", false, "", lines, w+4, len(lines)+2), "\n")
+	return strings.Split(box("send feedback or report an issue", false, "", lines, w+4, len(lines)+2), "\n")
 }

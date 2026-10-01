@@ -125,6 +125,7 @@ type Message struct {
 	Version  string          `json:"version,omitempty"` // the daemon's own, with an update check
 	Options  *config.Options `json:"options,omitempty"` // the saved options, answering or announcing a change
 	Omarchy  bool            `json:"omarchy,omitempty"` // with the options: omarchy is here, the bar widget can be switched
+	Agent    bool            `json:"agent,omitempty"`   // with the options: Omarchy has a coding agent to hand feedback to
 	Place    json.RawMessage `json:"place,omitempty"`   // where a player last was (CmdPlace)
 }
 

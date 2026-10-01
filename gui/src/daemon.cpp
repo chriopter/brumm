@@ -145,7 +145,9 @@ void Daemon::readLines()
         if (msg.contains("options")) {
             const QVariantMap o = msg.value("options").toObject().toVariantMap();
             const bool omarchy = msg.contains("omarchy") ? msg.value("omarchy").toBool() : m_omarchy;
-            if (o != m_options || omarchy != m_omarchy) {
+            const bool agent = msg.contains("agent") ? msg.value("agent").toBool() : m_agent;
+            if (o != m_options || omarchy != m_omarchy || agent != m_agent) {
+                m_agent = agent;
                 m_options = o;
                 m_omarchy = omarchy;
                 emit optionsChanged();
