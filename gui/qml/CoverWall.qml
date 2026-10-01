@@ -32,6 +32,7 @@ Item {
     readonly property real x0: (width - cols * tile) / 2
     readonly property real y0: (height - rows * tile) / 2
     clip: true
+    readonly property color ground: ui.tint(ui.deep, 0.14) // what the dimmed covers sink into
     // Only where there is room above and below the cover does the wall go
     // up; a short window shows the cover alone.
     readonly property bool roomy: height >= size + tile * 0.8
@@ -134,10 +135,8 @@ Item {
                 z: hot ? 3 : 1
                 // Further out, fainter: the wall sinks into the light.
                 readonly property real rest: Math.max(0.18, 0.62 - modelData.d * 0.07)
-                opacity: hot ? 1 : rest
                 scale: hot ? 1.16 : 1
                 Behavior on scale { enabled: !ui.calm; NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
-                Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 260; easing.type: Easing.InOutQuad } }
 
                 RowLight { anchors.fill: parent; center: 0.5; strength: t.hot ? 1 : 0; Behavior on strength { enabled: !ui.calm; NumberAnimation { duration: 260 } } }
                 Rectangle { // an empty tile: glass, until a cover comes
@@ -145,6 +144,12 @@ Item {
                     visible: !t.showing
                     radius: ui.coverRadius
                     color: Qt.alpha(ui.bright, 0.04)
+                }
+                Rectangle { // its ground: the backdrop's light passes behind the covers, not through
+                    anchors.fill: parent
+                    visible: !!t.showing
+                    radius: ui.coverRadius
+                    color: wall.ground
                 }
                 Item {
                     id: face
@@ -166,6 +171,14 @@ Item {
                     property real radius: ui.coverRadius
                     fragmentShader: "qrc:/shaders/tile.frag.qsb"
                 }
+                }
+                Rectangle { // further out, darker: the cover sinks into its ground
+                    anchors.fill: parent
+                    visible: !!t.showing
+                    radius: ui.coverRadius
+                    color: wall.ground
+                    opacity: t.hot ? 0 : 1 - t.rest
+                    Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 260; easing.type: Easing.InOutQuad } }
                 }
                 Rectangle { // the gloss it catches, coming forward
                     anchors.fill: parent

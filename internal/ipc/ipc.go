@@ -43,17 +43,18 @@ const (
 	CmdToggle    = "toggle"
 	CmdNext      = "next"
 	CmdPrev      = "prev"
-	CmdSeek      = "seek"    // Value: absolute seconds
-	CmdVolume    = "volume"  // Value: 0–1
-	CmdShuffle   = "shuffle" // Value: 0 or 1
-	CmdRepeat    = "repeat"  // Value: 0 off, 1 one, 2 all
-	CmdReload    = "reload"  // re-read credentials after a login
-	CmdOptions   = "options" // Options set (a partial set of config.Options fields) → Options; pushed to subscribers when they change
-	CmdLogin     = "login"   // open the Apple Music sign-in in the browser; the player reloads once signed in
-	CmdShow      = "show"    // Query "tui", "gui" or "" (as the options say): open that player, or bring it to the front
-	CmdResolve   = "resolve" // Query: a music.apple.com link → Items: what it names, IDs: the song it points at
-	CmdPlace     = "place"   // Place set: where a player is (section, open views, selection); none → Place: where the last one was
-	CmdQuit      = "quit"    // stop the daemon
+	CmdSeek      = "seek"     // Value: absolute seconds
+	CmdVolume    = "volume"   // Value: 0–1
+	CmdShuffle   = "shuffle"  // Value: 0 or 1
+	CmdRepeat    = "repeat"   // Value: 0 off, 1 one, 2 all
+	CmdReload    = "reload"   // re-read credentials after a login
+	CmdOptions   = "options"  // Options set (a partial set of config.Options fields) → Options; pushed to subscribers when they change
+	CmdLogin     = "login"    // open the Apple Music sign-in in the browser; the player reloads once signed in
+	CmdShow      = "show"     // Query "tui", "gui" or "" (as the options say): open that player, or bring it to the front
+	CmdResolve   = "resolve"  // Query: a music.apple.com link → Items: what it names, IDs: the song it points at
+	CmdFeedback  = "feedback" // Query: the face asking (tui, gui): open a new GitHub issue in the browser, filled in with what runs here
+	CmdPlace     = "place"    // Place set: where a player is (section, open views, selection); none → Place: where the last one was
+	CmdQuit      = "quit"     // stop the daemon
 )
 
 // Library lists.

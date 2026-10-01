@@ -1490,6 +1490,9 @@ func (m *Model) key(k string) tea.Cmd {
 		return m.openPicker()
 	case "y":
 		return m.copyLink()
+	case "!":
+		m.setFlash("opening a new issue on GitHub in your browser…")
+		return m.send(ipc.Request{Cmd: ipc.CmdFeedback, Query: "tui"})
 	case "U":
 		return m.checkUpdate()
 	case "g":

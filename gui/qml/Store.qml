@@ -82,6 +82,7 @@ Item {
         rows.push({ sep: true },
                   { act: "U", icon: "󰚰", label: st.update ? "Update to " + st.update + "…" : "Check for Updates…" },
                   { act: "?", icon: "󰋖", label: "Keyboard Shortcuts" },
+                  { act: "!", icon: "󰍡", label: "Send Feedback…" },
                   { sep: true },
                   { act: "Q", icon: "󰅖", label: "Close Window" },
                   { act: "q", icon: "󰐥", label: "Quit brumm" })
@@ -1377,6 +1378,9 @@ Item {
         case "P": return openPicker()
         case "y": return copyLink()
         case "U": return checkUpdate()
+        case "!":
+            setFlash("opening a new issue on GitHub in your browser…")
+            return daemon.send({ cmd: "feedback", query: "gui" })
         case "g": return toTerminal()
         case "ctrl+v": { // a pasted music.apple.com link opens; words search
             const t = clipboard()

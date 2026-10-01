@@ -17,7 +17,7 @@ Box {
         ["Library", [["*  d", "love · dislike"], ["i", "add to your library"], ["P", "add to a playlist, or a new one"], ["y", "copy the song's link"]]],
         ["brumm", [["?", "this list"], ["o", "options"], ["f", "visualizer (tab, v styles, a auto)"], ["[  ]", "list narrower · wider"],
                    ["g", "to the terminal player"], ["Q", "close, music plays on"], ["q", "quit, music stops"], ["L", "sign in again"],
-                   ["U", "look for an update, install it"]]],
+                   ["U", "look for an update, install it"], ["!", "send feedback: a new issue on GitHub"]]],
     ]
 
     Grid {
