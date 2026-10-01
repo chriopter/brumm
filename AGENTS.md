@@ -2,32 +2,38 @@
 
 ## Release notes
 
-The notes of a release are read twice: on GitHub, and inside brumm, where the
-update box (<kbd>U</kbd>) shows their list items under "vX is available",
-in a small box. So they are short:
+The notes of a release are read twice: on GitHub, and inside brumm, where
+the update box (<kbd>U</kbd>) shows their list items under "vX is
+available". So they are short and plain:
 
 ```markdown
-# ʕ•ᴥ•ʔ brumm 0.8: a window, too
+# ʕ•ᴥ•ʔ brumm 0.8: now with a GUI
 
-- 🪟 **A window, too**: `brumm --gui`, in your theme's and the cover's colors
-- ⇄ **<kbd>g</kbd> switches** terminal and window; the music never stops
+- **New:** brumm comes with a GUI. Press <kbd>g</kbd> to switch.
+- **New:** Cover wall. Click a cover to play it.
+- **New:** 12 visualizers in GUI mode.
+- **Faster:** The terminal player uses a third of the CPU.
+- **Fixed:** Songs from the cover wall keep the queue.
 
 **Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
 ```
 
-- The title: the version and two to five words that say what it is about.
-  The release's title on GitHub is the same: `v0.8: a window, too`.
-- **Seven points at most**, three for a patch release. What does not fit is
-  not news: leave it out.
-- **One point, one line**: an emoji, the thing in bold, a colon, one short
-  clause, about 70 characters, no second sentence, no brackets, no list
-  of everything it can do.
-- **No em dashes** (—), in the title or the points: a colon after the bold
-  part, a comma or semicolon elsewhere.
-- What the user gets, in their words; not how it was built.
-- Fixes share one point, or none.
-- No headings between the points, no paragraph of introduction. One image
-  or video above the points is fine for a big release.
+- Every point starts with a label: **New:**, **Changed:**, **Faster:** or
+  **Fixed:**. New comes first, Fixed last.
+- Then say it the way you would tell a friend: what it is, and the key or
+  command to get it. "brumm comes with a GUI. Press g to switch." Not "A
+  window, too: brumm --gui, in your theme's and the cover's colors".
+- Plain words, the usual names: GUI, terminal, cover wall, visualizer. No
+  poetry, no emoji, no adjectives that sell.
+- One line per point, about 60 characters, two short sentences at most.
+- Seven points at most, three for a patch release. Put things together
+  (the GUI and the key that switches to it are one point); leave out what
+  is small.
+- No em dashes (—), anywhere.
+- No headings between the points, no introduction. One image or video
+  above the points is fine for a big release.
+- The title is the version and a few plain words: `v0.8: now with a GUI`
+  on GitHub, `# ʕ•ᴥ•ʔ brumm 0.8: now with a GUI` in the notes.
 - The **Update:** line ends it; anything brumm needs anew (a package) goes
   there.
 - One release per minor version stays on the releases page: a new minor's
