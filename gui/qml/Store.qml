@@ -494,8 +494,16 @@ Item {
 
     // playSong plays one song, as it was played before (the wall's tiles).
     function playSong(t) {
-        showPlaying(t, st.source)
-        daemon.request({ cmd: "play", ids: [t.id], start: t.id, source: st.source }, err => { if (err) setFlash(err) })
+        // What was to come still comes after it: a song alone would end
+        // the music with the next skip.
+        const was = st.id, source = st.source
+        showPlaying(t, source)
+        daemon.request({ cmd: "queue", value: queueAfter }, (err, reply) => {
+            const tracks = (!err && reply.tracks) || []
+            const i = tracks.findIndex(n => n.id === was)
+            const rest = tracks.slice(i + 1).map(n => n.id).filter(id => id && id !== t.id)
+            daemon.request({ cmd: "play", ids: [t.id].concat(rest), start: t.id, source: source }, err => { if (err) setFlash(err) })
+        })
     }
 
     // playItem plays an album or playlist from its first song (the wall's
