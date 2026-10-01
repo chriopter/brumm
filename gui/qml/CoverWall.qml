@@ -61,26 +61,31 @@ Item {
         if (albums && !albums[0].loaded) store.load(albums[0])
     }
 
-    // Which cover each tile shows. A tile keeps its cover while that is
-    // still to be shown; only the tiles whose cover went take new ones,
-    // each fading over by itself: nothing moves around.
+    // Which cover each tile shows.
     property var assigned: []
-    onPoolChanged: settle.restart()
-    onCellsChanged: settle.restart()
+    // Counts the times the wall was dealt anew: each sends a wave through
+    // every tile, from the top right down to the bottom left, as through
+    // water; the tiles rise, turn over and settle with what they now show.
+    property int wave: 0
+    // One deal, one wave, per song: the news of a new song comes in parts
+    // over a second or two (the song, what comes next, what played), and
+    // only the first settled state is dealt. Later news waits for the next
+    // song, unless tiles are still empty.
+    property string dealtFor: "-"
+    onPoolChanged: {
+        const filled = assigned.filter(a => !!a).length
+        if (url !== dealtFor || (filled < cells.length && pool.length > filled)) settle.restart()
+    }
+    onCellsChanged: { dealtFor = "-"; settle.restart() }
     Timer {
         id: settle
-        interval: 300 // a new song's news comes in parts: take them together
+        interval: 700
         onTriggered: {
-            const byArt = new Map(wall.pool.map(p => [p.art, p]))
-            const next = new Array(wall.cells.length).fill(null)
-            const used = new Set()
-            wall.assigned.forEach((a, i) => {
-                if (i < next.length && a && byArt.has(a.art)) { next[i] = byArt.get(a.art); used.add(a.art) }
-            })
-            const fresh = wall.pool.filter(p => !used.has(p.art))
-            for (let i = 0; i < next.length && fresh.length; i++)
-                if (!next[i]) next[i] = fresh.shift()
+            const next = wall.cells.map((c, i) => wall.pool[i] || null)
+            const same = next.length === wall.assigned.length && next.every((n, i) => (n ? n.art : "") === (wall.assigned[i] ? wall.assigned[i].art : ""))
+            wall.dealtFor = wall.url
             wall.assigned = next
+            if (!same) wall.wave++
         }
     }
 
@@ -118,25 +123,47 @@ Item {
                 readonly property var it: wall.assigned[index] || null
                 // The cover on show, taken over from it with a fade.
                 property var showing: null
-                onItChanged: {
-                    if (!showing || !it || ui.calm || showing.art === it.art) { showing = it; return }
-                    swap.restart()
+                // Without a wave: the same cover with new news, or the first one.
+                onItChanged: if (!showing || ui.calm || (it && showing.art === it.art)) showing = it
+                Connections {
+                    target: wall
+                    function onWaveChanged() {
+                        if (ui.calm || !(t.showing || t.it)) { t.showing = t.it; return }
+                        swap.restart()
+                    }
                 }
+                // The tile turns over, the next cover waiting on its back, when
+                // the wave reaches it.
+                property real turn: 0
+                property real lift: 0 // it rises off the wall while it turns
                 SequentialAnimation {
                     id: swap
-                    NumberAnimation { target: face; property: "opacity"; to: 0; duration: 220; easing.type: Easing.InQuad }
-                    ScriptAction { script: t.showing = t.it }
-                    NumberAnimation { target: face; property: "opacity"; to: 1; duration: 420; easing.type: Easing.OutCubic }
+                    PauseAnimation { duration: 150 + (wall.cols - 1 - t.modelData.c + t.modelData.r) * 55 }
+                    ParallelAnimation {
+                        NumberAnimation { target: t; property: "turn"; to: 90; duration: 220; easing.type: Easing.InQuad }
+                        NumberAnimation { target: t; property: "lift"; to: 0.18; duration: 220; easing.type: Easing.OutQuad }
+                    }
+                    ScriptAction { script: { t.showing = t.it; t.turn = -90 } }
+                    ParallelAnimation {
+                        NumberAnimation { target: t; property: "turn"; to: 0; duration: 300; easing.type: Easing.OutCubic }
+                        NumberAnimation { target: t; property: "lift"; to: 0; duration: 300; easing.type: Easing.InQuad }
+                    }
+                }
+                transform: Rotation {
+                    origin.x: t.width / 2
+                    origin.y: t.height / 2
+                    axis { x: 0; y: 1; z: 0 }
+                    angle: t.turn
                 }
                 readonly property bool hot: hover.hovered
                 x: wall.x0 + modelData.c * wall.tile + wall.gap / 2
                 y: wall.y0 + modelData.r * wall.tile + wall.gap / 2
                 width: wall.tile - wall.gap
                 height: width
-                z: hot ? 3 : 1
+                z: hot || lift > 0 ? 3 : 1
                 // Further out, fainter: the wall sinks into the light.
                 readonly property real rest: Math.max(0.18, 0.62 - modelData.d * 0.07)
-                scale: hot ? 1.16 : 1
+                scale: (hot ? 1.16 : 1) * (1 + lift)
                 Behavior on scale { enabled: !ui.calm; NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
 
                 RowLight { anchors.fill: parent; center: 0.5; strength: t.hot ? 1 : 0; Behavior on strength { enabled: !ui.calm; NumberAnimation { duration: 260 } } }
@@ -152,6 +179,12 @@ Item {
                     radius: ui.coverRadius
                     color: wall.ground
                 }
+                Image { // what it shows next, loaded before it turns: the turn never waits for a picture
+                    visible: false
+                    source: t.it ? "image://cover/" + encodeURIComponent(t.it.art) : ""
+                    sourceSize: art.sourceSize
+                    asynchronous: true
+                }
                 Item {
                     id: face
                     anchors.fill: parent
@@ -166,7 +199,7 @@ Item {
                 }
                 ShaderEffect { // the art with the cover's rounded corners
                     anchors.fill: parent
-                    visible: ui.effects && art.status === Image.Ready
+                    visible: ui.effects && (art.status === Image.Ready || art.status === Image.Loading)
                     property var source: art
                     property vector2d size: Qt.vector2d(width, height)
                     property real radius: ui.coverRadius
@@ -198,12 +231,69 @@ Item {
                     enabled: !!t.showing
                     onTapped: {
                         const w = t.showing.what
+                        wall.fly(t) // it becomes the cover playing
                         if (w.next !== undefined) store.jumpTo(w.next)
                         else if (w.played) store.playSong(w.played)
-                        else if (w.album) store.openItem(w.album, "")
+                        else if (w.album) store.playItem(w.album)
                     }
                 }
             }
+        }
+    }
+
+    // A cover picked from the wall flies up to where the playing one is,
+    // growing, and lands as it.
+    function fly(tile) {
+        if (ui.calm) return
+        land.stop()
+        flyArt = tile.showing.art
+        flyer.opacity = 1
+        flyer.x = tile.x; flyer.y = tile.y; flyer.width = tile.width; flyer.height = tile.height
+        flight.restart()
+        giveUp.restart()
+    }
+    // It stays on the cover's place until the cover itself shows it: the
+    // player takes a moment to start an album, and the old cover must not
+    // show through in between.
+    property string flyArt: ""
+    onUrlChanged: if (flyArt !== "" && url === flyArt && !flight.running) land.restart()
+    Timer { id: giveUp; interval: 6000; onTriggered: if (wall.flyArt !== "") land.restart() }
+    Item {
+        id: flyer
+        z: 4
+        visible: wall.flyArt !== ""
+        // The picture the tile already has, so it starts at once; with the
+        // cover's rounded corners all the way.
+        Image {
+            id: flyImg
+            anchors.fill: parent
+            visible: !ui.effects
+            source: wall.flyArt ? "image://cover/" + encodeURIComponent(wall.flyArt) : ""
+            sourceSize: Qt.size(Math.round(wall.restTile * 1.3), Math.round(wall.restTile * 1.3))
+            fillMode: Image.PreserveAspectCrop
+            smooth: true
+        }
+        ShaderEffect {
+            anchors.fill: parent
+            visible: ui.effects
+            property var source: flyImg
+            property vector2d size: Qt.vector2d(width, height)
+            property real radius: ui.coverRadius
+            fragmentShader: "qrc:/shaders/tile.frag.qsb"
+        }
+        ParallelAnimation {
+            id: flight
+            NumberAnimation { target: flyer; property: "x"; to: card.x; duration: 420; easing.type: Easing.OutCubic }
+            NumberAnimation { target: flyer; property: "y"; to: card.y; duration: 420; easing.type: Easing.OutCubic }
+            NumberAnimation { target: flyer; property: "width"; to: card.width; duration: 420; easing.type: Easing.OutCubic }
+            NumberAnimation { target: flyer; property: "height"; to: card.height; duration: 420; easing.type: Easing.OutCubic }
+            onFinished: if (wall.url === wall.flyArt) land.restart()
+        }
+        SequentialAnimation {
+            id: land
+            PauseAnimation { duration: 400 } // the cover fades its new art in under it
+            NumberAnimation { target: flyer; property: "opacity"; to: 0; duration: 200 }
+            ScriptAction { script: wall.flyArt = "" }
         }
     }
 

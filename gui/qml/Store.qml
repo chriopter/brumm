@@ -498,6 +498,16 @@ Item {
         daemon.request({ cmd: "play", ids: [t.id], start: t.id, source: st.source }, err => { if (err) setFlash(err) })
     }
 
+    // playItem plays an album or playlist from its first song (the wall's
+    // album tiles).
+    function playItem(it) {
+        songsOf({ item: it }, ids => {
+            if (!ids.length) return setFlash("nothing playable here")
+            pendingPlay = { playing: true, at: Date.now() }
+            daemon.request({ cmd: "play", ids: ids.slice(0, queueAfter), start: ids[0], source: itemKey(it) }, err => { if (err) setFlash(err) })
+        })
+    }
+
     // jumpTo plays the i-th song after the one playing.
     function jumpTo(i) {
         pendingPlay = { playing: true, at: Date.now() }
