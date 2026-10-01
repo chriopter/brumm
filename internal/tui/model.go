@@ -183,6 +183,7 @@ type Model struct {
 	refresh  int      // the screen's refresh rate: the visualizer's auto rate
 
 	upd *updatePopup // the update check's answer, while it shows
+	fb  *feedback    // the feedback box, while it shows
 
 	seekTo  float64 // where pending seek keys point
 	seekAt  time.Time
@@ -800,7 +801,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "space" || msg.String() == " " {
 			return m, m.spaceUp()
 		}
+	case feedbackMsg:
+		m.feedbackDone(msg)
 	case tea.KeyPressMsg:
+		if m.fb != nil {
+			return m, m.feedbackKey(msg)
+		}
 		if m.upd != nil {
 			return m, m.updateKey(msg.String())
 		}
@@ -1491,8 +1497,7 @@ func (m *Model) key(k string) tea.Cmd {
 	case "y":
 		return m.copyLink()
 	case "!":
-		m.setFlash("opening a new issue on GitHub in your browser…")
-		return m.send(ipc.Request{Cmd: ipc.CmdFeedback, Query: "tui"})
+		m.fb, m.help = &feedback{}, false
 	case "U":
 		return m.checkUpdate()
 	case "g":

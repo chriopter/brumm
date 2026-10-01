@@ -675,7 +675,9 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 	case ipc.CmdResolve:
 		return d.resolve(r.Query, reply)
 	case ipc.CmdFeedback:
-		return openURL(feedbackURL(d.version, r.Query))
+		how, err := sendFeedback(r.Query, d.version, r.Source, r.Value == 1)
+		reply.Link = how
+		return err
 	case ipc.CmdPlace:
 		d.place(r.Place, reply)
 		return nil

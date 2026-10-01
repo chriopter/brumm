@@ -72,7 +72,7 @@ func (m *Model) calm() bool {
 
 // overlaid: a box lies over the screen.
 func (m *Model) overlaid() bool {
-	return m.upd != nil || m.barAsking() || m.pick != nil || m.optOpen
+	return m.fb != nil || m.upd != nil || m.barAsking() || m.pick != nil || m.optOpen
 }
 
 // patch redraws the moving lines of the last frame after an update that

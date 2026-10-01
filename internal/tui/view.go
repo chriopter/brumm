@@ -139,6 +139,8 @@ func (m *Model) View() tea.View {
 	case m.full && m.vizList:
 		v.Content = m.overlay(content, m.vizListBox())
 	case m.full:
+	case m.fb != nil:
+		v.Content = m.overlay(content, m.feedbackBox())
 	case m.upd != nil:
 		v.Content = m.overlay(content, m.updateBox())
 	case m.barAsking():

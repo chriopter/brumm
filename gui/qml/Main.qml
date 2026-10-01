@@ -151,7 +151,7 @@ Window {
             e.accepted = true
             const k = win.keyName(e)
             if (!k) return
-            const typing = store.searching || store.filtering || (store.pick && store.pick.naming)
+            const typing = store.searching || store.filtering || (store.pick && store.pick.naming) || !!store.fb
             if (k === "space" && !typing && !store.upd && !store.pick && !store.menuOpen && !store.barAsk) {
                 if (!e.isAutoRepeat) store.spacePressed()
                 return
@@ -167,7 +167,7 @@ Window {
     }
 
     // ── the layout ──────────────────────────────────────────────────────
-    readonly property bool popup: store.help || !!store.pick || !!store.upd || store.barAsk
+    readonly property bool popup: store.help || !!store.pick || !!store.upd || store.barAsk || !!store.fb
 
     Item {
         id: body
@@ -242,9 +242,10 @@ Window {
     }
 
     // ── what shows over it ──────────────────────────────────────────────
-    Scrim { visible: store.help || !!store.pick || !!store.upd || store.barAsk }
+    Scrim { visible: store.help || !!store.pick || !!store.upd || store.barAsk || !!store.fb }
     HelpBox { visible: store.help }
     BarAskBox { visible: store.barAsk }
     PickerBox { visible: !!store.pick }
     UpdateBox { visible: !!store.upd }
+    FeedbackBox { visible: !!store.fb }
 }

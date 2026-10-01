@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -362,5 +363,24 @@ func TestColorsRow(t *testing.T) {
 	m.optionsKey("right")
 	if out = ansi.Strip(m.View().Content); m.opts.NoCoverColors || !strings.Contains(out, "Cover Colors") || !strings.Contains(out, "● cover") {
 		t.Fatal("→ does not choose the cover's colors")
+	}
+}
+
+// ! opens the feedback box; what is typed shows in it, esc closes it.
+func TestFeedbackBox(t *testing.T) {
+	m := playingModel(100, 30)
+	m.key("!")
+	if m.fb == nil {
+		t.Fatal("no box")
+	}
+	for _, r := range "no sound" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if out := ansi.Strip(m.View().Content); m.fb.input != "no sound" || !strings.Contains(out, "no sound") || !strings.Contains(out, "open on GitHub") {
+		t.Fatalf("input %q", m.fb.input)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.fb != nil {
+		t.Fatal("esc left it open")
 	}
 }

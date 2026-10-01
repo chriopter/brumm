@@ -52,7 +52,7 @@ const (
 	CmdLogin     = "login"    // open the Apple Music sign-in in the browser; the player reloads once signed in
 	CmdShow      = "show"     // Query "tui", "gui" or "" (as the options say): open that player, or bring it to the front
 	CmdResolve   = "resolve"  // Query: a music.apple.com link → Items: what it names, IDs: the song it points at
-	CmdFeedback  = "feedback" // Query: the face asking (tui, gui): open a new GitHub issue in the browser, filled in with what runs here
+	CmdFeedback  = "feedback" // Query: what the user wrote, Source: the face (tui, gui), Value 1: hand it to Omarchy's agent → Link: "agent" or "browser", how it went
 	CmdPlace     = "place"    // Place set: where a player is (section, open views, selection); none → Place: where the last one was
 	CmdQuit      = "quit"     // stop the daemon
 )

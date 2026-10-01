@@ -47,7 +47,7 @@ func (m *Model) hover(msg tea.Msg) tea.Cmd {
 // recorded. List rows keep the default: all of the list is clickable.
 func (m *Model) shapeAt(x, y int) string {
 	g := m.geo
-	if m.upd != nil || m.pick != nil || m.optOpen || (m.full && m.vizList) {
+	if m.fb != nil || m.upd != nil || m.pick != nil || m.optOpen || (m.full && m.vizList) {
 		if g.options.has(x, y) {
 			return shapePointer
 		}

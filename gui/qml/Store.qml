@@ -1271,7 +1271,29 @@ Item {
     // ── keys ────────────────────────────────────────────────────────────
 
     // dispatch takes a key the way the terminal player names it.
+    // ── feedback ────────────────────────────────────────────────────────
+    // ! opens a box to write what is wrong; enter opens the browser on a
+    // GitHub issue filled in with it, tab hands it to Omarchy's agent.
+    property var fb: null // {input, sending}
+    function feedbackKey(k, ev) {
+        if (fb.sending) return
+        if (k === "esc") { fb = null; return }
+        if (k === "enter" || k === "tab") { // enter: the browser; tab: Omarchy's agent looks into it
+            const text = fb.input.trim()
+            if (!text) return
+            fb = { input: fb.input, sending: true }
+            daemon.request({ cmd: "feedback", query: text, source: "gui", value: k === "tab" ? 1 : 0 }, (err, reply) => {
+                fb = null
+                setFlash(err ? err : reply.link === "agent" ? "your agent is looking into it" : "one click left: send it in your browser")
+            })
+            return
+        }
+        const t = editText(fb.input, k === "space" ? "" : k, k === "space" ? { text: " ", modifiers: 0 } : ev)
+        if (t !== null) fb = { input: t, sending: false }
+    }
+
     function dispatch(k, ev) {
+        if (fb) return feedbackKey(k, ev)
         if (addOpen) { addOpen = false; if (k === "esc") return }
         if (menuOpen) return menuKey(k)
         if (upd) return updateKey(k)
@@ -1378,9 +1400,7 @@ Item {
         case "P": return openPicker()
         case "y": return copyLink()
         case "U": return checkUpdate()
-        case "!":
-            setFlash("opening a new issue on GitHub in your browser…")
-            return daemon.send({ cmd: "feedback", query: "gui" })
+        case "!": fb = { input: "", sending: false }; help = false; return
         case "g": return toTerminal()
         case "ctrl+v": { // a pasted music.apple.com link opens; words search
             const t = clipboard()

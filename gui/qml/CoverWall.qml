@@ -35,7 +35,8 @@ Item {
     readonly property color ground: ui.tint(ui.deep, 0.14) // what the dimmed covers sink into
     // Only where there is room above and below the cover does the wall go
     // up; a short window shows the cover alone.
-    readonly property bool roomy: height >= size + tile * 0.8
+    // (or beside it, in a wide one)
+    readonly property bool roomy: height >= size + tile * 0.8 || width >= size + tile * 3
 
     // Every cover to put up, each once, the likeliest first: what comes
     // next, what played, then the albums and songs the lists know.
@@ -104,7 +105,7 @@ Item {
             // Up and down: 500 px of wall beyond the cover, the outer 400
             // fading; across: to the stage's edges.
             property vector2d fadeEnd: Qt.vector2d(covers.width / 2, Math.min(covers.height / 2, wall.size / 2 + ui.px(500)))
-            property vector2d fadeSpan: Qt.vector2d(wall.tile * 1.2, ui.px(400))
+            property vector2d fadeSpan: Qt.vector2d(wall.tile * 1.2, Math.max(ui.px(30), Math.min(ui.px(400), covers.height / 2 - wall.size / 2)))
             fragmentShader: "qrc:/shaders/vignette.frag.qsb"
         }
 

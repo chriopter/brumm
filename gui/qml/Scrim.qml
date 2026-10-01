@@ -10,6 +10,7 @@ Rectangle {
             if (store.barAsk) return store.barAnswer(false)
             store.help = false
             store.pick = null
+            if (store.fb && !store.fb.sending) store.fb = null
             if (store.upd) store.updateKey("esc")
         }
     }
