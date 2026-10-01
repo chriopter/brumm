@@ -169,9 +169,10 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 readonly property int mark: { store.ratingRev; const id = r.track ? r.track.id : r.item ? r.item.id : ""; return store.rating[id] || 0 }
                 visible: mark !== 0
-                text: mark > 0 ? "♥" : "󰔑"
-                color: mark > 0 ? ui.heart : ui.dim
-                font { family: ui.mono; pixelSize: ui.px(13) }
+                text: mark > 0 ? "󰋑" : "󰔑"
+                // A mark in the glass, not a red light: every loved row has one.
+                color: Qt.alpha(ui.bright, mark > 0 ? 0.42 : 0.3)
+                font { family: ui.mono; pixelSize: ui.px(12) }
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter

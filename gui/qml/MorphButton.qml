@@ -32,7 +32,7 @@ Item {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: m.icon
-            color: m.open || m.lit ? (m.lit && m.icon === "󰋑" ? ui.heart : ui.here) : ui.dim
+            color: m.open || m.lit ? ui.here : ui.dim
             font { family: ui.mono; pixelSize: ui.px(14) }
         }
         Text {
