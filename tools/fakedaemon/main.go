@@ -230,9 +230,9 @@ func main() {
 					m.Version, m.Link, m.Pos = "v0.8.0", "v0.9.0", 1
 					m.Notes = []string{"🪟 brumm as a window — brumm --gui, lit like the PSP's XMB, in your theme's and the cover's colors", "⇄ g switches between terminal and window, right where you were; the music never stops", "🌈 Twelve visualizers as shaders — f in the window"}
 					// BRUMM_FAKE_UPDATE names the version to pretend to be: the
-					// newest release and its notes are then asked of GitHub.
+					// newest release and the notes since it are then asked of GitHub.
 					if was := os.Getenv("BRUMM_FAKE_UPDATE"); was != "" {
-						if tag, notes, err := update.LatestNotes(); err == nil {
+						if tag, notes, err := update.NotesSince(was); err == nil {
 							m.Version, m.Link, m.Notes = was, tag, notes
 						}
 					}
