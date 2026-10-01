@@ -5,10 +5,15 @@ import QtQuick
 Item {
     id: ctl
     height: play.height
+    // Narrow, the side buttons give way: first shuffle, repeat, dislike and
+    // radio, then the volume too; back, play and next always stay.
+    readonly property bool roomy: width >= ui.px(440)
+    readonly property bool tight: width < ui.px(300)
 
     Row {
         anchors { left: parent.left; verticalCenter: parent.verticalCenter }
         spacing: ui.px(10)
+        visible: ctl.roomy
         Orb { size: ui.px(34); icon: "󰒝"; on: !!store.st.shuffle; onClicked: store.key("s") }
         Orb { size: ui.px(34); icon: store.st.repeat === 1 ? "󰑘" : "󰑖"; on: (store.st.repeat || 0) > 0; onClicked: store.key("r") }
     }
@@ -25,14 +30,15 @@ Item {
     Row {
         anchors { right: parent.right; verticalCenter: parent.verticalCenter }
         spacing: ui.px(10)
-        visible: !store.st.preview
+        visible: !store.st.preview && !ctl.tight
         Orb {
+            visible: ctl.roomy
             size: ui.px(34); icon: "󰔑"
             readonly property int mark: { store.ratingRev; return store.rating[store.st.id] || 0 }
             on: mark < 0
             onClicked: store.ratePlaying(-1)
         }
-        Orb { size: ui.px(34); icon: "󰐹"; onClicked: store.radioPlaying() }
+        Orb { visible: ctl.roomy; size: ui.px(34); icon: "󰐹"; onClicked: store.radioPlaying() }
         // The volume: click mutes, the wheel turns it and says how loud.
         Orb {
             size: ui.px(34)

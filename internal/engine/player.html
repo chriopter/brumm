@@ -98,13 +98,18 @@ async function resolve(m, ids) {
     for (let i = 0; i < list.length; i += 100) {
       jobs.push(m.api.music(path, { ids: list.slice(i, i + 100).join(',') }).then((resp) => {
         for (const it of ((resp && resp.data && resp.data.data) || [])) known.set(it.id, it);
-      }));
+      }).catch(() => {})); // a batch Apple refuses: the others still play
     }
   };
   const missing = ids.filter((id) => !known.has(id));
   fetch(missing.filter((id) => id.startsWith('i.')), '/v1/me/library/songs');
-  fetch(missing.filter((id) => !id.startsWith('i.')), `/v1/catalog/${m.storefrontId || 'us'}/songs`);
+  // Some library songs are listed as "a.<catalog id>": the catalog knows
+  // them by the number alone.
+  const cat = missing.filter((id) => !id.startsWith('i.'));
+  const bare = new Map(cat.map((id) => [id.startsWith('a.') ? id.slice(2) : id, id]));
+  fetch([...bare.keys()], `/v1/catalog/${m.storefrontId || 'us'}/songs`);
   await Promise.all(jobs);
+  for (const [b, id] of bare) if (b !== id && known.has(b)) known.set(id, known.get(b));
   // Oldest first out: a Map keeps insertion order.
   for (const id of known.keys()) {
     if (known.size <= 3000) break;

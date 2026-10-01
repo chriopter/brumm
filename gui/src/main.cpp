@@ -43,7 +43,9 @@ int main(int argc, char *argv[])
     QLockFile lock(runtime + "/brumm-gui.lock");
     lock.setStaleLockTime(0);
     if (!lock.tryLock(100)) {
-        QProcess::execute("hyprctl", {"dispatch", "focuswindow", "class:^brumm$"});
+        // Hyprland's Lua config, else its older syntax.
+        if (QProcess::execute("hyprctl", {"dispatch", "hl.dsp.focus({ window = \"class:^brumm$\" })"}) != 0)
+            QProcess::execute("hyprctl", {"dispatch", "focuswindow", "class:^brumm$"});
         return 0;
     }
 
