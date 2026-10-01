@@ -25,13 +25,12 @@ Item {
     }
 
     // Filter this list, beside its name: the same as /.
-    MorphButton {
+    Orb {
         id: filter
         anchors { left: crumbs.right; leftMargin: ui.px(14); verticalCenter: crumbs.verticalCenter }
         visible: { store.rev; return store.filterable() && !store.filtering && !(store.view && store.view.all) }
+        size: ui.px(30)
         icon: "󰈲"
-        label: "Filter"
-        key: "/"
         onClicked: store.startFilter()
     }
 
