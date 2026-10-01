@@ -125,7 +125,7 @@ Item {
         }
         Column {
             anchors { left: thumb.right; leftMargin: ui.px(14); verticalCenter: thumb.verticalCenter }
-            width: Math.max(0, Math.min(ui.px(360), strip.width / 2 - ui.px(210) - thumb.x - thumb.width - ui.px(34))) // clear of the controls
+            width: Math.max(0, Math.min(ui.px(360), (strip.width - transport.width) / 2 - thumb.x - thumb.width - ui.px(34))) // clear of the controls
             Text {
                 width: parent.width
                 text: fs.preview ? fs.st.preview.title : (fs.st.title || "")
@@ -142,8 +142,9 @@ Item {
             }
         }
         Controls {
+            id: transport
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: ui.px(12) }
-            width: ui.px(560)
+            width: Math.min(ui.px(560), strip.width - 2 * ui.px(200)) // clear of the buttons beside it
         }
         Row {
             anchors { right: parent.right; rightMargin: ui.gap; verticalCenter: thumb.verticalCenter }
@@ -155,7 +156,8 @@ Item {
                 MorphButton {
                     required property var modelData
                     icon: modelData[0]
-                    label: fs.width > ui.px(1250) ? modelData[1] : "" // narrow: the icons alone
+                    label: modelData[1]
+                    quiet: true
                     key: modelData[2]
                     onClicked: store.dispatch(modelData[3], { text: modelData[3].length === 1 ? modelData[3] : "", modifiers: 0 })
                 }

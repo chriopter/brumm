@@ -7,6 +7,7 @@ Item {
     property string icon
     property string label
     property string key
+    property bool quiet: false // an icon alone until pointed at
     property bool lit: false // on: its icon in the color of what plays
     signal clicked()
 
@@ -37,6 +38,7 @@ Item {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: m.label
+            visible: m.label !== "" && (!m.quiet || m.open) // quiet: the word only when pointed at
             color: m.open ? ui.bright : ui.dim
             font { family: ui.sans; pixelSize: ui.px(12) }
         }
