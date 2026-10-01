@@ -68,4 +68,26 @@ Item {
             }
         }
     }
+
+    // Feedback, a step under the sections: always there to click (!).
+    Item {
+        anchors { horizontalCenter: parent.horizontalCenter; top: icons.bottom; topMargin: ui.px(22) }
+        width: ui.px(40)
+        height: ui.px(38)
+        RectangularShadow {
+            visible: fbHover.hovered || !!store.fb
+            anchors { fill: parent; margins: ui.px(4) }
+            radius: ui.px(10)
+            blur: ui.px(16)
+            color: store.fb ? Qt.alpha(ui.here, 0.5) : Qt.alpha(ui.bright, 0.08)
+        }
+        Text {
+            anchors.centerIn: parent
+            text: "󰍡"
+            color: fbHover.hovered || store.fb ? ui.fg : ui.dim
+            font { family: ui.mono; pixelSize: ui.px(18) }
+        }
+        HoverHandler { id: fbHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: store.dispatch("!", { text: "!", modifiers: 0 }) }
+    }
 }

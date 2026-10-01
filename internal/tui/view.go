@@ -250,7 +250,7 @@ func (m *Model) footer() string {
 		preview = entry{"O", "preview", "O"}
 	}
 	keys := []entry{{"enter", "play", "enter"}, {"/", "find", "/"}, preview, {"o", "options", "o"},
-		{"f", "visualizer", "f"}, {"g", "gui", "g"}, {"?", "keys", "?"}}
+		{"f", "visualizer", "f"}, {"g", "gui", "g"}, {"?", "keys", "?"}, {"!", "feedback", "!"}}
 	if m.showTips() { // the rest is on the buttons: the footer has what is not
 		keys = []entry{{"esc", "back", "esc"}, {"f", "visualizer", "f"}, {"c", "now playing", "c"},
 			{"Q", "close, music plays on", "Q"}, {"q", "quit", "q"}, {"?", "all keys", "?"}}
