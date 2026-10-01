@@ -24,7 +24,7 @@ type updatePopup struct {
 
 // The update box shows this much of the release's notes.
 const (
-	maxNotes  = 10
+	maxNotes  = 12
 	noteWidth = 64
 )
 
@@ -149,6 +149,10 @@ func (m *Model) updateBox() []string {
 	case u.newer:
 		lines = []string{sBold.Render(u.latest) + " is available", sDim.Render("you have " + u.current), ""}
 		for _, n := range u.notes[:min(len(u.notes), maxNotes)] {
+			if h, ok := strings.CutPrefix(n, "# "); ok {
+				lines = append(lines, sBold.Render(h))
+				continue
+			}
 			for i, l := range wrap(n, min(noteWidth, max(34, m.width-12)), 3) {
 				if i > 0 {
 					l = "   " + l // under the words, past the emoji

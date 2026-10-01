@@ -40,14 +40,17 @@ Box {
         topPadding: ui.px(10)
         spacing: ui.px(6)
         Repeater {
-            model: (u.notes || []).slice(0, 10)
+            model: (u.notes || []).slice(0, 12)
             Text {
                 required property string modelData
+                required property int index
                 width: parent.width
                 wrapMode: Text.WordWrap
-                text: modelData
-                color: ui.fg
-                font { family: ui.sans; pixelSize: ui.px(12) }
+                readonly property bool head: modelData.startsWith("# ") // a section: New, Fixed
+                topPadding: head && index > 0 ? ui.px(6) : 0
+                text: head ? modelData.slice(2) : modelData
+                color: head ? ui.bright : ui.fg
+                font { family: ui.sans; pixelSize: ui.px(12); weight: head ? Font.DemiBold : Font.Normal }
             }
         }
     }

@@ -96,10 +96,10 @@ func TestInstallWindow(t *testing.T) {
 }
 
 func TestPoints(t *testing.T) {
-	body := "# brumm 1\n\n![x](y.webp)\n\n**The window**\n- 🪟 **A window** — `brumm --gui`, <kbd>g</kbd> switches\n- see [0.7](https://example.com)\n\n**Update:** press U."
+	body := "# brumm 1\n\n![x](y.webp)\n\n## New\n- 🪟 **A window** — `brumm --gui`, <kbd>g</kbd> switches\n- see [0.7](https://example.com)\n\n**Update:** press U."
 	got := Points(body)
-	want := []string{"🪟 A window — brumm --gui, g switches", "see 0.7"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	want := []string{"# New", "🪟 A window — brumm --gui, g switches", "see 0.7"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("Points = %q, want %q", got, want)
 	}
 }

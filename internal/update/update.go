@@ -122,11 +122,17 @@ var (
 )
 
 // Points are the list items of a release's notes without their markup:
-// what a player can show under "is available".
+// what a player can show under "is available". The headings of their
+// sections come along, marked "# ".
 func Points(body string) []string {
 	var out []string
 	for _, l := range strings.Split(body, "\n") {
-		l, ok := strings.CutPrefix(strings.TrimSpace(l), "- ")
+		l = strings.TrimSpace(l)
+		if h, ok := strings.CutPrefix(l, "## "); ok { // a section: New, Fixed
+			out = append(out, "# "+strings.TrimSpace(h))
+			continue
+		}
+		l, ok := strings.CutPrefix(l, "- ")
 		if !ok {
 			continue
 		}

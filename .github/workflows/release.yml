@@ -159,10 +159,14 @@ jobs:
               echo
               echo "$changes"
             else
-              echo "No changes since $prev — a fresh build so the embedded Apple Music token stays valid."
+              echo "No changes since $prev: a fresh build so the embedded Apple Music token stays valid."
             fi
             echo
             echo "**Update:** press <kbd>U</kbd> when brumm offers it, or run \`brumm update\`."
           } > notes.md
+          # A tag with a hyphen (v0.9.0-rc1) is a pre-release: to test, never
+          # "latest", so neither the installer nor brumm's updater offers it.
+          pre=()
+          [[ $TAG == *-* ]] && pre=(--prerelease)
           gh release create "$TAG" brumm-linux-amd64.tar.gz install.sh SHA256SUMS SHA256SUMS.sig \
-            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
+            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md "${pre[@]}"
