@@ -27,6 +27,7 @@ func (d *Daemon) checkUpdates() {
 	}
 	t := time.NewTimer(5 * time.Second)
 	var last time.Time
+	restored := false
 	for {
 		select {
 		case <-d.quit:
@@ -41,6 +42,17 @@ func (d *Daemon) checkUpdates() {
 		}
 		t.Reset(24 * time.Hour)
 		last = time.Now()
+		if !restored {
+			// Updated by a brumm from before the window: fetch it now.
+			if ok, err := update.RestoreWindow(d.version); err != nil {
+				log.Printf("restore window: %v", err)
+			} else {
+				restored = true
+				if ok {
+					log.Printf("restored the window (brumm-gui) of %s", d.version)
+				}
+			}
+		}
 		tag, err := update.Latest()
 		if err != nil {
 			log.Printf("update check: %v", err)
@@ -188,7 +200,7 @@ func (d *Daemon) checkNowFor(reply *ipc.Message) error {
 	if !update.Managed(d.version) {
 		return fmt.Errorf("this brumm (%s) was built from source; update it with bin/update", d.version)
 	}
-	tag, notes, err := update.LatestNotes()
+	tag, notes, err := update.NotesSince(current)
 	if err != nil {
 		return err
 	}

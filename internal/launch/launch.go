@@ -42,7 +42,7 @@ func GUIPath() (string, error) {
 	if p, err := exec.LookPath(GUIName); err == nil {
 		return p, nil
 	}
-	return "", errors.New("brumm's window (brumm-gui) is not installed: a release brings it; from source, bin/setup builds it (needs qt6-declarative)")
+	return "", errors.New("brumm's window (brumm-gui) is not installed: brumm update brings it; from source, bin/setup builds it (needs qt6-declarative)")
 }
 
 // Open starts the player as ui in a process of its own, apart from this

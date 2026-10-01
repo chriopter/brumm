@@ -29,6 +29,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -116,6 +118,91 @@ func LatestNotes() (string, []string, error) {
 	return rel.Tag, Points(rel.Body), nil
 }
 
+// NotesSince returns the newest release's tag and what is new since
+// current: the points of every release in between, not only the newest,
+// for someone who skipped some. They are merged by section (New, Changed,
+// Faster, Fixed), the newest release's points first in each.
+func NotesSince(current string) (string, []string, error) {
+	if testBase() != "" {
+		return LatestNotes()
+	}
+	resp, err := client.Get("https://api.github.com/repos/" + repo + "/releases?per_page=50")
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("github: %s", resp.Status)
+	}
+	var rels []struct {
+		Tag        string `json:"tag_name"`
+		Body       string `json:"body"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rels); err != nil {
+		return "", nil, err
+	}
+	latest := ""
+	for _, r := range rels {
+		if !r.Draft && !r.Prerelease && (latest == "" || Newer(r.Tag, latest)) {
+			latest = r.Tag
+		}
+	}
+	if latest == "" {
+		return "", nil, errors.New("github: no release")
+	}
+	var bodies []release
+	for _, r := range rels {
+		if !r.Draft && !r.Prerelease && Newer(r.Tag, current) {
+			bodies = append(bodies, release{r.Tag, r.Body})
+		}
+	}
+	return latest, merge(bodies), nil
+}
+
+type release struct{ tag, body string }
+
+// sections orders the merged notes; any other heading follows these.
+var sections = []string{"New", "Changed", "Faster", "Fixed"}
+
+// merge puts the points of several releases together under their
+// sections, the newest release's points first in each.
+func merge(rels []release) []string {
+	sort.Slice(rels, func(i, j int) bool { return Newer(rels[i].tag, rels[j].tag) })
+	order := slices.Clone(sections)
+	points := map[string][]string{}
+	for _, r := range rels {
+		head := ""
+		for _, p := range Points(r.body) {
+			if h, ok := strings.CutPrefix(p, "# "); ok {
+				head = h
+				if !slices.Contains(order, h) {
+					order = append(order, h)
+				}
+				continue
+			}
+			points[head] = append(points[head], p)
+		}
+	}
+	var out []string
+	for _, h := range order {
+		if len(points[h]) > 0 {
+			out = append(out, "# "+h)
+			out = append(out, points[h]...)
+		}
+	}
+	// Older notes have no sections: their points close the list, under
+	// a heading of their own once there are sections above.
+	if rest := points[""]; len(rest) > 0 {
+		if len(out) > 0 {
+			out = append(out, "# Earlier")
+		}
+		out = append(out, rest...)
+	}
+	return out
+}
+
 var (
 	noteTags  = regexp.MustCompile(`</?[a-zA-Z][^>]*>`)
 	noteLinks = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
@@ -192,6 +279,34 @@ func Update(current string) (string, bool, error) {
 	}
 	defer os.RemoveAll(dir)
 	return tag, true, Install(filepath.Join(dir, "brumm"))
+}
+
+// RestoreWindow puts the window of release tag back when it is missing.
+// A brumm from before the window (up to v0.6) updates with its own
+// installer, which knows only the program, so the release it installs
+// comes without brumm-gui. It reports whether it put the window in place.
+func RestoreWindow(tag string) (bool, error) {
+	if _, err := os.Stat(guiPath()); err == nil {
+		return false, nil
+	}
+	dir, err := download(tag)
+	if err != nil {
+		return false, err
+	}
+	defer os.RemoveAll(dir)
+	src := filepath.Join(dir, "brumm", "brumm-gui")
+	if _, err := os.Stat(src); err != nil {
+		return false, nil // this release has no window
+	}
+	unlock, err := lock()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	if err := replace(src, guiPath(), 0o755); err != nil {
+		return false, fmt.Errorf("install window: %w", err)
+	}
+	return true, nil
 }
 
 // download fetches a release tarball, checks it against the release's

@@ -94,6 +94,10 @@ func main() {
 				restartOffer()
 			} else {
 				fmt.Println("brumm", version, "is current")
+				var restored bool
+				if restored, err = update.RestoreWindow(version); restored {
+					fmt.Println("restored the window (brumm --gui)")
+				}
 			}
 		}
 	case "keys": // the music keys: brumm keys on|off

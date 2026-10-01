@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,5 +102,35 @@ func TestPoints(t *testing.T) {
 	want := []string{"# New", "🪟 A window — brumm --gui, g switches", "see 0.7"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("Points = %q, want %q", got, want)
+	}
+}
+
+// Skipped releases: their points come together under the sections, the
+// newest release's first.
+func TestMerge(t *testing.T) {
+	got := merge([]release{
+		{"v0.8.0", "# brumm 0.8\n\n## New\n- a\n\n## Fixed\n- b\n"},
+		{"v0.9.1", "## Fixed\n- c\n\n## Odd\n- d\n"},
+		{"v0.9.0", "## Faster\n- e\n\n## New\n- f\n"},
+		{"v0.6.2", "- g\n"},
+	})
+	want := []string{"# New", "f", "a", "# Faster", "e", "# Fixed", "c", "b", "# Odd", "d", "# Earlier", "g"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("merge = %q, want %q", got, want)
+	}
+}
+
+// A missing window comes back from the release; one in place is left.
+func TestRestoreWindowInPlace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(guiPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(guiPath(), []byte("gui"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRUMM_UPDATE_BASE", "http://127.0.0.1:1") // nothing may be fetched
+	if ok, err := RestoreWindow("v0.9.1"); ok || err != nil {
+		t.Fatalf("RestoreWindow with the window in place = %v, %v", ok, err)
 	}
 }
