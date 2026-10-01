@@ -69,7 +69,8 @@ Item {
         }
     }
 
-    // Feedback, a step under the sections: always there to click (!).
+    // Help, a step under the sections: always there to send feedback or
+    // report an issue (!).
     Item {
         anchors { horizontalCenter: parent.horizontalCenter; top: icons.bottom; topMargin: ui.px(22) }
         width: ui.px(40)
@@ -83,7 +84,7 @@ Item {
         }
         Text {
             anchors.centerIn: parent
-            text: "󰍡"
+            text: "󰋗" // a question mark in a circle: help
             color: fbHover.hovered || store.fb ? ui.fg : ui.dim
             font { family: ui.mono; pixelSize: ui.px(18) }
         }
