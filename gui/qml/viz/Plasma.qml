@@ -1,10 +1,12 @@
-// Plasma: a demoscene plasma, four interfering sine fields indexing a
+// Plasma: a demoscene plasma, sine fields interfering and indexing a
 // copper ring of theme colors — dark, blue, cyan, white, gold, red,
-// magenta and back — drawn as lit molten glass. Loudness drives the flow,
-// the bass deepens the rings from the middle, the mids turn the colors,
-// and every kick sends a ripple outward. One pass (shaders/viz_plasma.frag);
-// the ring of colors is a small gradient texture, drawn again only when the
-// theme changes.
+// magenta and back — drawn as lit molten glass. Loudness drives the flow
+// and brings out an oil film's rainbow, the bass deepens the rings (whose
+// middles wander beyond the screen's edge, so none shows a source), the
+// mids turn the colors, every kick sends a wide swell through from one
+// side and pulls red and blue apart, and every eighth kick the colors
+// jump on a little. One pass (shaders/viz_plasma.frag); the ring of colors
+// is a small gradient texture, drawn again only when the theme changes.
 import QtQuick
 
 VizEffect {
@@ -13,9 +15,13 @@ VizEffect {
     property real flow: 0
     property real speed: 0.3
     property real hue: 0
+    property real turn: 0 // the colors' jumps, eased
     property real bass: 0
+    property real level: 0
+    property real beat: 0
     property int kicks: -1
-    property var starts: [-1, -1, -1, -1] // the ripples' start times
+    property var starts: [-1, -1, -1, -1] // the swells' start times
+    property vector4d sources: Qt.vector4d(62, 0, -66, 0)
     property vector4d ripples: Qt.vector4d(-1, -1, -1, -1)
 
     FrameAnimation {
@@ -26,11 +32,17 @@ VizEffect {
             fx.flow = (fx.flow + dt * fx.speed) % 6283.1853
             fx.hue = (fx.hue + dt * (0.25 + 0.9 * a.mid) / 10) % 1
             fx.bass += (a.bass - fx.bass) * Math.min(1, dt * 5)
+            fx.level += (a.level - fx.level) * Math.min(1, dt * 3)
+            fx.beat = a.beat
+            fx.turn += (Math.floor(Math.max(0, a.kicks) / 8) * 0.13 - fx.turn) * Math.min(1, dt * 1.5)
+            // the ring trains' middles, circling outside the screen
+            const u = fx.flow * 0.11, w = 2 - fx.flow * 0.07
+            fx.sources = Qt.vector4d(62 * Math.cos(u), 40 * Math.sin(u), 66 * Math.cos(w), 44 * Math.sin(w))
             if (a.kicks !== fx.kicks) {
                 if (fx.kicks >= 0) fx.starts = [a.t].concat(fx.starts.slice(0, 3))
                 fx.kicks = a.kicks
             }
-            const s = fx.starts, age = i => s[i] < 0 || a.t - s[i] > 1.6 ? -1 : a.t - s[i]
+            const s = fx.starts, age = i => s[i] < 0 || a.t - s[i] > 2 ? -1 : a.t - s[i]
             fx.ripples = Qt.vector4d(age(0), age(1), age(2), age(3))
         }
     }
@@ -78,10 +90,12 @@ VizEffect {
         anchors.fill: parent
         property real time: fx.flow
         property real aspect: width / Math.max(1, height)
-        property real hue: fx.hue
+        property real hue: (fx.hue + fx.turn) % 1
         property real bass: fx.bass
-        property real beat: fx.audio.beat
+        property real beat: fx.beat
+        property real level: fx.level
         property vector4d ripples: fx.ripples
+        property vector4d sources: fx.sources
         property var ring: palette
         fragmentShader: "qrc:/shaders/viz_plasma.frag.qsb"
     }

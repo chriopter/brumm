@@ -37,6 +37,13 @@ Item {
         property int style: -1
         anchors.fill: parent
         active: fs.shown && ui.effects && style >= 0 && (front || opacity > 0)
+        // On a large or dense screen the styles are drawn with about three
+        // million pixels and scaled up: they are soft light, and four times
+        // the pixels would cost four times the GPU.
+        readonly property real shrink: Math.min(1, Math.sqrt(3.0e6 / Math.max(1, width * height * Screen.devicePixelRatio * Screen.devicePixelRatio)))
+        layer.enabled: ui.effects && shrink < 1
+        layer.smooth: true
+        layer.textureSize: Qt.size(Math.round(width * Screen.devicePixelRatio * shrink), Math.round(height * Screen.devicePixelRatio * shrink))
         opacity: front ? 1 : 0
         z: front ? 1 : 0
         Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 1500; easing.type: Easing.InOutQuad } }
