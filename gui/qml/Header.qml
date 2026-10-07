@@ -16,11 +16,22 @@ Item {
         style: ui.lift
         styleColor: ui.liftColor
         font { family: ui.sans; pixelSize: ui.px(22); weight: Font.DemiBold }
+        linkColor: Qt.alpha(ui.bright, 0.5)
+        onLinkActivated: link => store.jumpToCrumb(Number(link))
         text: {
+            store.rev
             const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;")
-            const parts = store.crumbs.split("  /  ").map(esc)
+            const parts = store.stack().map((v, i) => i < store.stack().length - 1
+                ? '<a href="' + i + '" style="text-decoration: none">' + esc(v.title) + '</a>'
+                : esc(v.title))
             const last = parts.pop()
             return (parts.length ? "<font color='" + Qt.alpha(ui.bright, 0.5) + "'>" + parts.join("  ›  ") + "  ›  </font>" : "") + last
+        }
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.NoButton
+            hoverEnabled: true
+            cursorShape: crumbs.linkAt(mouseX, mouseY) ? Qt.PointingHandCursor : Qt.ArrowCursor
         }
     }
 
