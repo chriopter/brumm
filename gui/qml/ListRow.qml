@@ -44,7 +44,12 @@ Item {
     HoverHandler { id: hover; enabled: !!(r.track || r.item) }
     TapHandler {
         enabled: !!(r.track || r.item)
-        onTapped: store.activateAt(r.index) // one click plays or opens
+        onTapped: { win.focusPlayer(); store.activateAt(r.index) } // one click plays or opens
+    }
+    TapHandler {
+        enabled: !!(r.track || r.item)
+        acceptedButtons: Qt.RightButton
+        onTapped: eventPoint => { win.focusPlayer(); win.rowContext(r.index, r, eventPoint.position) }
     }
 
     // A shelf's heading.

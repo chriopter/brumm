@@ -6,18 +6,81 @@ import QtQuick
 Item {
     id: s
     visible: false
+    property bool playerView: false
+    function showPlayer() { jumpToPlaying(); playerView = true }
+    property var video: null
+    property string resumeVideoSong: ""
+    function closeVideo() {
+        video = null
+        if (resumeVideoSong && st.id === resumeVideoSong && !st.playing) daemon.send({ cmd: "toggle" })
+        resumeVideoSong = ""
+    }
+    property var inspect: null
+    property var prototypeForm: null
+    function inspectAt(i) {
+        const row = rows[i]
+        const it = row ? row.track || row.item : null
+        if (!it) return
+        inspect = Object.assign({}, it, { details: it.details && it.details.length ? it.details : [
+            { label: "Name", value: it.title || it.name },
+            { label: "Type", value: it.kind || "Song" },
+            { label: "Artist", value: it.artist || "" }
+        ].filter(d => d.value) })
+    }
+    function showVideo(it) {
+        if (!it.previewUrl && it.route && !prototypeMode) {
+            daemon.request({ cmd: "explore", query: it.route }, (err, reply) => {
+                if (err) return setFlash(err)
+                const fetched = reply.explorer && reply.explorer.items && reply.explorer.items[0]
+                if (fetched) showVideo(Object.assign({}, fetched, { route: "" }))
+                else setFlash("No video preview available")
+            })
+            return
+        }
+        if (!it.previewUrl) return setFlash("No video preview available")
+        resumeVideoSong = st.playing ? st.id || "" : ""
+        if (st.playing) daemon.send({ cmd: "toggle" })
+        video = it
+    }
+    function prototypeFavorite() {
+        const it = inspect
+        daemon.request(prototypeMode ? { cmd: "preview-favorite", start: it.id, value: it.favorite ? 0 : 1 } : { cmd: "favorite", refs: [{kind: it.kind || "song", id: it.id}] }, (err) => {
+            if (err) return setFlash(err)
+            if (prototypeMode) inspect = Object.assign({}, it, { favorite: !it.favorite })
+            else setFlash("Favorite request accepted by Apple Music")
+            load(cur())
+        })
+    }
+    function submitPrototype(text) {
+        const form = prototypeForm
+        if (!text.trim()) return
+        if (form.route.startsWith("action:lookup:")) {
+            prototypeForm = null
+            const item = { name: "Lookup: " + text, kind: "shelf", id: text, route: "app:lookup:" + form.route.slice(14) + (prototypeMode ? "" : ":" + text.trim()), catalog: true }
+            push(newView(item.name, itemKey(item), item), "")
+        } else {
+            const parentRoute = cur().item ? cur().item.route : "app:folders"
+            const parent = parentRoute === "app:folders" ? "p.playlistsroot" : parentRoute.split("/playlist-folders/")[1] || ""
+            daemon.request(prototypeMode ? { cmd: "preview-create", list: form.route.includes("folder") ? "folder" : "playlist", query: text, source: parentRoute } : { cmd: "create", list: form.route.includes("folder") ? "folder" : "playlist", query: text, start: parent.split("/")[0].split("?")[0] }, (err) => {
+                if (err) return setFlash(err)
+                prototypeForm = null
+                load(cur())
+            })
+        }
+    }
 
-    readonly property var sectionNames: ["Home", "Playlists", "Albums", "Artists", "Songs", "Search", "Queue", "Radio"]
-    readonly property var sectionIcons: ["󰋜", "󰲸", "󰀥", "󰠃", "󰎈", "󰍉", "󰐑", "󰐹"]
+    readonly property var sectionNames: ["Home", "Explore", "Playlists", "Albums", "Artists", "Songs", "Radio", "Search", "Queue"]
+    readonly property var sectionIcons: ["󰋜", "󰭎", "󰲸", "󰀥", "󰠃", "󰎈", "󰐹", "󰍉", "󰐑"]
     readonly property var sectionLists: ["playlists", "albums", "artists", "songs"]
     readonly property int secHome: 0
-    readonly property int secPlaylists: 1
-    readonly property int secAlbums: 2
-    readonly property int secArtists: 3
-    readonly property int secSongs: 4
-    readonly property int secSearch: 5
-    readonly property int secQueue: 6
-    readonly property int secRadio: 7
+    readonly property int secExplore: 1
+    readonly property int secPlaylists: 2
+    readonly property int secAlbums: 3
+    readonly property int secArtists: 4
+    readonly property int secSongs: 5
+    readonly property int secSearch: 7
+    readonly property int secQueue: 8
+    readonly property int secRadio: 6
     readonly property int queueAfter: 500
 
     // ── what shows ──────────────────────────────────────────────────────
@@ -61,7 +124,7 @@ Item {
     // options as switches, and the ways out. Its rows, top to bottom:
     //   {act: key, icon, label} runs what key does · {option: name, label,
     //   hint} is a switch · {heading: text} · {sep: true}
-    property bool addOpen: false   // the + on the stage: to a playlist or the library
+    property bool addOpen: false   // the song actions menu on the stage
     property bool menuOpen: false
     property int menuSel: -1 // the row the keys are on; -1 none (opened by a click)
     readonly property var menuRows: {
@@ -236,6 +299,7 @@ Item {
         const st = []
         for (let i = 0; i < sectionNames.length; i++) st.push([])
         st[secHome] = [newView("Home", "home:")]
+        st[secExplore] = [newView("Explore", "explore:", { kind: "shelf", id: "discover", name: "Explore", route: "app:discover", catalog: true })]
         for (let i = secPlaylists; i <= secSongs; i++)
             st[i] = [newView(sectionNames[i], "list:" + sectionLists[i - secPlaylists])]
         st[secSearch] = [newView("Search", "search:")]
@@ -292,7 +356,8 @@ Item {
     function load(v) {
         if (v.loading || st.status === "logged-out") return
         let req
-        if (v.item) req = { cmd: "open", item: v.item }
+        if (v.item && v.item.route && !prototypeMode) req = { cmd: "explore", query: v.item.route }
+        else if (v.item) req = { cmd: "open", item: v.item }
         else if (v.key.startsWith("list:")) req = { cmd: "list", list: v.key.slice(5) }
         else if (v.key.startsWith("search:") && v.key !== "search:") req = { cmd: "search", query: v.key.slice(7) }
         else if (v.key === "queue:") req = { cmd: "queue", value: 500 }
@@ -308,6 +373,7 @@ Item {
                 return
             }
             fill(v, reply)
+            if (v.item && v.item.route === "app:discover") loadExploreVisuals(v, reply)
             if (v.want) { selectSong(v, v.want); v.want = "" }
             fetchRatings(v)
             warm(v)
@@ -316,22 +382,66 @@ Item {
         })
     }
 
+    function loadExploreVisuals(v, initial) {
+        const page = initial.explorer || initial
+        const links = (page.items || []).concat((page.shelves || []).reduce((all, sh) => all.concat(sh.items || []), []))
+        const genre = links.find(it => it.route && it.route.endsWith("/genres"))
+        const base = genre ? genre.route.slice(0, -7) : ""
+        const groups = [[], [], []]
+        const generation = (v.exploreGeneration || 0) + 1
+        v.exploreGeneration = generation
+        function render() {
+            if (v.exploreGeneration !== generation) return
+            const selected = v.rows[v.sel]
+            const selectedKey = selected ? (selected.track ? "track:" + selected.track.id : selected.item ? itemKey(selected.item) : "") : ""
+            fill(v, { explorer: { title: "Explore", shelves: groups.reduce((all, group) => all.concat(group), []).concat([{ title: "Browse", items: links }]) } })
+            if (selectedKey) {
+                const index = v.rows.findIndex(r => (r.track ? "track:" + r.track.id : r.item ? itemKey(r.item) : "") === selectedKey)
+                if (index >= 0) v.sel = index
+            }
+            if (v === cur()) refresh()
+        }
+        daemon.request({ cmd: "home" }, (err, reply) => {
+            if (err) return
+            groups[0] = (reply.shelves || []).filter(sh => sh.title !== "Your music" && sh.title !== "Browse" && (sh.items || []).some(it => it.artwork)).slice(0, 2).map(sh => Object.assign({}, sh, { items: sh.items.filter(it => it.artwork).slice(0, 6), tracks: [], route: /recent/i.test(sh.title) ? "/v1/me/recent/played" : /rotation/i.test(sh.title) ? "/v1/me/history/heavy-rotation" : "/v1/me/recommendations" }))
+            render()
+        })
+        if (!base) return
+        for (const spec of [[1, "albums,playlists"], [2, "music-videos"]]) {
+            daemon.request({ cmd: "explore", query: base + "/charts?types=" + spec[1] + "&limit=6" }, (err, reply) => {
+                if (err || !reply.explorer) return
+                const p = reply.explorer
+                groups[spec[0]] = (p.shelves || []).map(sh => Object.assign({}, sh, { items: (sh.items || []).slice(0, 6), tracks: (sh.tracks || []).slice(0, 6), route: base + "/charts?types=" + spec[1] }))
+                if ((p.items || []).length) groups[spec[0]].push({ title: spec[0] === 2 ? "Music videos" : "Charts", items: p.items.slice(0, 6), route: base + "/charts?types=" + spec[1] })
+                render()
+            })
+        }
+    }
+
     // fill turns a reply into rows: shelves become a heading and their
     // contents; an album or playlist opens with its facts and note.
     function fill(v, reply) {
+        if (reply.explorer) {
+            const page = reply.explorer
+            reply = Object.assign({}, reply, page)
+            if (page.title) v.title = page.title
+        }
         const rows = []
+        if (reply.info) rows.push({ note: reply.info })
+        if (reply.details && reply.details.length) rows.push({ item: { name: "Details", id: "details:" + v.key, kind: "shelf", route: "action:details", details: reply.details } })
         const it = v.item
         if (it && (it.kind === "album" || it.kind === "playlist")) {
             if (it.info) rows.push({ note: it.info })
             if (it.note) rows.push({ note: it.note })
         }
         for (const sh of (reply.shelves || [])) {
-            rows.push({ head: sh.title })
+            rows.push({ head: sh.title, headRoute: sh.route || "" })
             for (const t of (sh.tracks || [])) rows.push({ track: t })
             for (const i of (sh.items || [])) rows.push({ item: i })
         }
         for (const i of (reply.items || [])) rows.push({ item: i })
         for (const t of (reply.tracks || [])) rows.push({ track: t })
+        if (reply.next) rows.push({ item: { name: "More", kind: "shelf", id: reply.next, route: reply.next, catalog: true } })
         const first = !v.loaded
         v.rows = rows
         v.loaded = true
@@ -603,6 +713,7 @@ Item {
     // maybeResume lands on what plays the first time the window opens
     // mid-song.
     function maybeResume() {
+        if (prototypeMode) { resumed = true; return }
         if (resumed || placing || !st.source) return
         const root = stacks[st.source.includes(":album:") ? secAlbums : secPlaylists][0]
         if (!root.loaded) { load(root); return }
@@ -621,7 +732,7 @@ Item {
 
     function here() {
         const v = cur(), r = v.rows[v.sel]
-        return { section: section, query: query,
+        return { section: section, sectionName: sectionNames[section], playerView: playerView, query: query,
                  views: stack().slice(1).filter(x => x.item).map(x => ({ key: x.key, title: x.title, item: x.item })),
                  sel: { id: r ? (r.track ? r.track.id : r.item ? r.item.id : "") : "", index: v.sel } }
     }
@@ -640,7 +751,9 @@ Item {
     }
 
     function goPlace(p) {
-        const sec = Math.max(0, Math.min(p.section | 0, sectionNames.length - 1))
+        const named = sectionNames.indexOf(p.sectionName || "")
+        const sec = named >= 0 ? named : Math.max(0, Math.min(p.section | 0, sectionNames.length - 1))
+        playerView = !!p.playerView
         query = p.query || ""
         const q = query.trim()
         if (q.length >= 2) stacks[secSearch] = [newView("Search", "search:" + q)]
@@ -666,6 +779,7 @@ Item {
     // ── navigation ──────────────────────────────────────────────────────
 
     function switchTo(i) {
+        playerView = false
         const sameSection = i === section
         section = i
         help = false
@@ -723,6 +837,9 @@ Item {
         if (!selectable(r)) return
         if (r.item) {
             const it = r.item
+            if (it.route === "action:details") return inspectAt(v.sel)
+            if (it.route && it.route.startsWith("action:")) { prototypeForm = it; return }
+            if (it.kind === "music-videos") return showVideo(it)
             if (it.kind === "station") return startStation({ cmd: "station", item: it })
             if (it.kind === "term") { query = it.name; return runSearch(true) }
             return push(newView(it.name, itemKey(it), it), "")
@@ -756,7 +873,7 @@ Item {
             const i = v.rows.findIndex(r => r.track && r.track.id === id)
             if (i >= 0) v.sel = i
         }
-        for (let i = secHome; i <= secSearch; i++) {
+        for (let i = secHome; i < sectionNames.length; i++) {
             const at = stacks[i].findIndex(v => v.key === src)
             if (at >= 0) {
                 section = i
@@ -923,7 +1040,7 @@ Item {
             searching = false
             return key(k)
         case "ctrl+c": case "ctrl+q": return Qt.quit()
-        case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8":
+        case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8": case "9":
             if (query === "") { // nothing typed yet: a digit is a section, as outside the box
                 searching = false
                 return key(k)
@@ -1328,6 +1445,9 @@ Item {
     }
 
     function dispatch(k, ev) {
+        if (inspect || prototypeForm) { if (k === "esc") { inspect = null; prototypeForm = null }; return }
+        if (video) { if (k === "esc" || k === "q") closeVideo(); return }
+        if ((prototypeMode && k === "i") || k === "ctrl+i") return inspectAt(sel)
         if (fb) return feedbackKey(k, ev)
         if (addOpen) { addOpen = false; if (k === "esc") return }
         if (menuOpen) return menuKey(k)
@@ -1343,7 +1463,7 @@ Item {
         if (k === "?" && !full) { help = !help; return } // the visualizer carries its own keys
         if (full && vizKey(k)) return
         if (sideFocus) {
-            const n = sectionNames.length
+            const n = secQueue
             switch (k) {
             case "up": case "k": case "shift+tab": return switchTo((section + n - 1) % n)
             case "down": case "j": case "tab": return switchTo((section + 1) % n)
@@ -1379,10 +1499,10 @@ Item {
             Qt.quit() // close the window; the music plays on
             return
         case "L": return signIn()
-        case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8":
+        case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8": case "9":
             return switchTo(parseInt(k) - 1)
-        case "tab": return switchTo((section + 1) % sectionNames.length)
-        case "shift+tab": return switchTo((section + sectionNames.length - 1) % sectionNames.length)
+        case "tab": return switchTo((section === secQueue ? secHome : (section + 1) % secQueue))
+        case "shift+tab": return switchTo((section + secQueue - 1) % secQueue)
         case "left": sideFocus = true; return // over to the sections
         case "right": return activate()
         case "/":

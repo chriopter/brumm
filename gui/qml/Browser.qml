@@ -5,16 +5,25 @@ import QtQuick.Effects
 
 Item {
     id: b
+    signal filterFinished()
+    property bool discovery: false
+
+    Header {
+        id: trail
+        visible: { store.rev; return store.stack().length > 1 }
+        height: visible ? ui.px(36) : 0
+        anchors { left: parent.left; right: parent.right; top: parent.top; rightMargin: ui.px(8) }
+    }
 
     // The search box on the Search tab, the filter over any list.
     Rectangle {
         id: box
-        readonly property bool search: store.section === store.secSearch && store.stack().length === 1
+        readonly property bool search: false
         readonly property bool filter: { store.rev; return !!store.view && store.view.all !== null && store.view.all !== undefined }
-        readonly property bool typing: store.searching || store.filtering
-        visible: search || filter
-        anchors { left: parent.left; right: parent.right; top: parent.top; rightMargin: ui.px(8) }
-        height: visible ? ui.px(38) : 0
+        readonly property bool typing: store.filtering
+        visible: true
+        anchors { left: parent.left; right: parent.right; top: trail.bottom; rightMargin: ui.px(8) }
+        height: ui.px(30)
         radius: height / 2
         color: Qt.alpha(ui.deep, 0.55)
         border { width: 1; color: typing ? Qt.alpha(ui.here, 0.8) : ui.edge }
@@ -26,44 +35,62 @@ Item {
             color: box.typing ? ui.here : ui.dim
             font { family: ui.mono; pixelSize: ui.px(15) }
         }
-        Text {
-            id: typed
-            anchors { left: lens.right; leftMargin: ui.px(10); right: parent.right; rightMargin: ui.px(14); verticalCenter: parent.verticalCenter }
-            readonly property string value: { store.rev; return box.search ? store.query : (store.view ? store.view.filter || "" : "") }
-            text: value || (box.search ? "Songs, albums, artists — or a music.apple.com link" : "Filter this list · tab searches Apple Music")
-            color: value ? ui.bright : ui.dim
+        TextInput {
+            id: filterInput
+            anchors { left: lens.right; leftMargin: ui.px(10); right: clear.left; rightMargin: ui.px(8); verticalCenter: parent.verticalCenter }
+            text: { store.rev; return store.view ? store.view.filter || "" : "" }
+            color: ui.bright
+            selectionColor: Qt.alpha(ui.here, 0.45)
+            selectedTextColor: ui.bright
             font { family: ui.sans; pixelSize: ui.px(14) }
-            elide: Text.ElideLeft
-            Rectangle { // the cursor, blinking at two frames a second
-                visible: box.typing
-                x: typed.value ? Math.min(typed.contentWidth, typed.width) + 1 : 0
-                anchors.verticalCenter: parent.verticalCenter
-                width: 2
-                height: ui.px(18)
-                radius: 1
-                color: ui.here
-                Timer {
-                    interval: 530
-                    repeat: true
-                    running: parent.visible && !ui.calm && ui.awake
-                    onTriggered: parent.opacity = parent.opacity > 0 ? 0 : 1
-                    onRunningChanged: parent.opacity = 1
-                }
+            selectByMouse: true
+            clip: true
+            onActiveFocusChanged: {
+                if (activeFocus) { store.searching = false; store.startFilter() }
+                else store.filtering = false
+            }
+            onTextEdited: {
+                const v = store.cur()
+                if (v.all === null) v.all = v.rows
+                v.filter = text
+                store.applyFilter(v)
+                store.refresh()
+                store.selMoved()
+            }
+            onAccepted: { store.filterKey("enter", null); b.filterFinished() }
+            Keys.onEscapePressed: { store.clearFilter(store.cur()); b.filterFinished() }
+            Keys.onUpPressed: { store.filterKey("up", null); b.filterFinished() }
+            Keys.onDownPressed: { store.filterKey("down", null); b.filterFinished() }
+            Keys.onTabPressed: { store.filterKey("tab", null); b.filterFinished() }
+            Text {
+                visible: !filterInput.text && !filterInput.activeFocus
+                text: "Filter list"
+                color: ui.dim
+                font: filterInput.font
             }
         }
-        TapHandler {
-            onTapped: {
-                if (box.search) store.searching = true
-                else store.filtering = true
-                store.rev++
-            }
+        Item {
+            id: clear
+            anchors { right: parent.right; rightMargin: ui.px(2); verticalCenter: parent.verticalCenter }
+            width: ui.px(22)
+            height: box.height
+            visible: !!filterInput.text
+            Text { anchors.centerIn: parent; text: "×"; color: clearHover.hovered ? ui.bright : ui.dim; font { family: ui.sans; pixelSize: ui.px(19) } }
+            HoverHandler { id: clearHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: { store.clearFilter(store.cur()); filterInput.forceActiveFocus() } }
         }
+        TapHandler { onTapped: filterInput.forceActiveFocus() }
     }
 
+    Connections {
+        target: store
+        function onFilteringChanged() { if (store.filtering && !filterInput.activeFocus) filterInput.forceActiveFocus() }
+    }
     // The list.
     ListView {
         id: list
-        anchors { left: parent.left; right: parent.right; top: box.bottom; bottom: count.top; topMargin: box.visible ? ui.px(12) : 0; bottomMargin: ui.px(4) }
+        visible: !b.discovery
+        anchors { left: parent.left; right: parent.right; top: box.bottom; bottom: count.top; topMargin: ui.px(12); bottomMargin: ui.px(4) }
         clip: true
         // It fades out where it runs on past its edges, drawn again only
         // when the list changes.
@@ -101,8 +128,14 @@ Item {
         }
     }
 
+    DiscoverGrid {
+        anchors.fill: list
+        visible: b.discovery
+    }
+
     Item {
         id: above
+        visible: !b.discovery
         x: list.x
         y: list.y
         width: list.width
@@ -116,7 +149,7 @@ Item {
         id: glint
         anchors { left: list.right; leftMargin: ui.px(10); top: list.top; bottom: list.bottom }
         width: 1
-        visible: list.contentHeight > list.height && opacity > 0
+        visible: !b.discovery && list.contentHeight > list.height && opacity > 0
         opacity: list.moving ? 1 : 0
         Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 300 } }
         Rectangle {

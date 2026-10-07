@@ -21,9 +21,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chriopter/brumm/internal/apple"
@@ -149,6 +152,20 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("fake brumm daemon on %s", sock)
+	var clients atomic.Int64
+	if os.Getenv("BRUMM_PROTOTYPE") != "" {
+		go func() {
+			idle := time.Now()
+			for range time.Tick(time.Second) {
+				if clients.Load() > 0 {
+					idle = time.Now()
+				}
+				if time.Since(idle) > 15*time.Second {
+					os.Exit(0)
+				}
+			}
+		}()
+	}
 	// FAKE_PAUSED=1: the song is paused, for measuring an idle player.
 	playing := os.Getenv("FAKE_PAUSED") == ""
 	st := ipc.State{Status: ipc.StatusReady, State: engine.State{Ready: true, Playing: playing, Title: "Instant Crush", Artist: "Daft Punk",
@@ -163,6 +180,8 @@ func main() {
 			log.Fatal(err)
 		}
 		go func() {
+			clients.Add(1)
+			defer clients.Add(-1)
 			defer c.Close()
 			var wmu sync.Mutex // replies and the sound share the connection
 			enc, sc := json.NewEncoder(c), bufio.NewScanner(c)
@@ -184,8 +203,19 @@ func main() {
 				}
 				m := ipc.Message{ID: r.ID}
 				switch r.Cmd {
+				case ipc.CmdShow:
+					if os.Getenv("BRUMM_PROTOTYPE") != "" {
+						self, _ := os.Executable()
+						cmd := exec.Command(filepath.Join(filepath.Dir(self), "brumm"), "open", r.Query)
+						if out, err := cmd.CombinedOutput(); err != nil {
+							m.Error = fmt.Sprintf("%v: %s", err, out)
+						}
+					}
 				case ipc.CmdSubscribe:
-					m.State = &st
+					mu.Lock()
+					snapshot := st
+					mu.Unlock()
+					m.State = &snapshot
 					if stop != nil {
 						close(stop)
 						stop = nil
@@ -198,15 +228,60 @@ func main() {
 						}
 						go sound(r.Bands, r.Wave, fps, stop, send)
 					}
+				case ipc.CmdExplore:
+					previewExplore(r, &m)
+				case "preview-favorite", "preview-create":
+					previewMutation(r, &m)
+				case ipc.CmdPlay:
+					n, k := 0, 0
+					_, _ = fmt.Sscanf(r.Start, "i.%d.%d", &n, &k)
+					ts := tracks(n)
+					if k >= len(ts) {
+						k = 0
+					}
+					t := ts[k]
+					mu.Lock()
+					st.Title, st.Artist, st.Album, st.Artwork, st.ID = t.Title, t.Artist, t.Album, t.Artwork, t.ID
+					st.Playing, st.Pos, st.Dur, st.Source = true, 0, t.Duration, r.Source
+					snapshot := st
+					mu.Unlock()
+					m.State = &snapshot
+				case ipc.CmdToggle:
+					mu.Lock()
+					st.Playing = !st.Playing
+					snapshot := st
+					mu.Unlock()
+					m.State = &snapshot
+				case ipc.CmdSeek:
+					mu.Lock()
+					st.Pos = r.Value
+					snapshot := st
+					mu.Unlock()
+					m.State = &snapshot
+				case ipc.CmdStation:
+					mu.Lock()
+					st.Title, st.Playing = r.Item.Name, true
+					snapshot := st
+					mu.Unlock()
+					m.State = &snapshot
 				case ipc.CmdHome:
 					m.Shelves = []apple.Shelf{{Title: "Recently Played", Items: items()[:6]}, {Title: "Made for You", Items: playlists()[:3]},
 						{Title: "Top Songs", Tracks: tracks(3)[:6]}}
+					if os.Getenv("BRUMM_PROTOTYPE") != "" {
+						m.Shelves = append([]apple.Shelf{{Title: "Your music", Items: previewRoot()}}, m.Shelves...)
+						m.Shelves = append(m.Shelves, apple.Shelf{Title: "More for you", Items: []apple.Item{exploreLink("Made for you", "recommendation", "app:recommendation:made-for-you")}})
+					}
 				case ipc.CmdList:
 					switch r.List {
 					case ipc.ListAlbums:
 						m.Items = items()
 					case ipc.ListPlaylists:
-						m.Items = playlists()
+						if os.Getenv("BRUMM_PROTOTYPE") != "" {
+							r.Query = "app:folders"
+							previewExplore(r, &m)
+						} else {
+							m.Items = playlists()
+						}
 					case ipc.ListArtists:
 						for i, a := range albums {
 							m.Items = append(m.Items, apple.Item{Kind: apple.KindArtist, ID: fmt.Sprintf("r%d", i), Name: a[1]})
@@ -217,10 +292,33 @@ func main() {
 						}
 					}
 				case ipc.CmdOpen:
+					if os.Getenv("BRUMM_PROTOTYPE") != "" && r.Item.Route != "" {
+						r.Query = r.Item.Route
+						previewExplore(r, &m)
+						break
+					}
+					if os.Getenv("BRUMM_PROTOTYPE") != "" && r.Item.Kind == apple.KindArtist {
+						preview.Lock()
+						m.Shelves = []apple.Shelf{{Title: "Top songs", Tracks: previewTracks(0)[:5]}, {Title: "Featured albums", Items: items()[:3]}, {Title: "Featured music videos", Items: previewVideos(0)}, {Title: "Albums", Items: items()}, {Title: "Similar artists", Items: []apple.Item{{ID: "r3", Kind: apple.KindArtist, Name: "Radiohead"}}}}
+						preview.Unlock()
+						break
+					}
+					if os.Getenv("BRUMM_PROTOTYPE") != "" && r.Item.Kind == apple.KindShelf && r.Item.ID == "radio" {
+						m.Shelves = []apple.Shelf{{Title: "Browse", Items: []apple.Item{exploreLink("Radio by genre", "station-genres", "app:radio-genres")}}, {Title: "Live radio", Items: []apple.Item{{Kind: apple.KindStation, ID: "radio1", Name: "Apple Music 1", Catalog: true}}}}
+						break
+					}
 					n, _ := strconv.Atoi(strings.TrimLeft(r.Item.ID, "apr"))
 					m.Tracks = tracks(n)
+					if os.Getenv("BRUMM_PROTOTYPE") != "" {
+						preview.Lock()
+						m.Tracks = previewTracks(n)
+						preview.Unlock()
+					}
 				case ipc.CmdSearch:
 					m.Shelves = []apple.Shelf{{Title: "Top Results", Items: items()[:3]}, {Title: "Songs", Tracks: tracks(1)[:5]}}
+					if os.Getenv("BRUMM_PROTOTYPE") != "" {
+						m.Shelves = append(m.Shelves, apple.Shelf{Title: "Music videos", Items: previewVideos(0)}, apple.Shelf{Title: "Curators", Items: []apple.Item{exploreLink("Apple Music Electronic", "curators", "app:curator:Apple Music Electronic")}}, apple.Shelf{Title: "Activities", Items: []apple.Item{exploreLink("Focus", "activities", "app:activity:Focus")}}, apple.Shelf{Title: "Record labels", Items: []apple.Item{exploreLink("Ninja Tune", "record-labels", "app:label:Ninja Tune")}}, apple.Shelf{Title: "More", Items: []apple.Item{exploreLink("More search results…", "shelf", "app:more:search")}})
+					}
 				case ipc.CmdQueue: // the song playing, then songs from all over
 					m.Tracks = tracks(0)[4:5]
 					for i := 1; i < 12; i++ {

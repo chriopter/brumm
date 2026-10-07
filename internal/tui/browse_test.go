@@ -59,8 +59,8 @@ func TestTabsFit(t *testing.T) {
 				t.Fatalf("width %d: line %d is %d wide", w, i, lw)
 			}
 		}
-		if g := m.geo.tabs[secQueue]; g.x1 == 0 || g.x1 > w {
-			t.Fatalf("width %d: the queue tab is at %+v", w, g)
+		if g := m.geo.tabs[secSearch]; g.x1 == 0 || g.x1 > w {
+			t.Fatalf("width %d: the search tab is at %+v", w, g)
 		}
 	}
 }
@@ -118,13 +118,13 @@ func TestArrowsLeaveSearch(t *testing.T) {
 	}
 	m.key("/")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if m.section != secQueue {
+	if m.section != secHome {
 		t.Fatalf("→ from search went to section %d", m.section)
 	}
 	m.switchTo(secSearch)
 	m.key("/")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	if m.section != secSongs {
+	if m.section != secRadio {
 		t.Fatalf("← from search went to section %d", m.section)
 	}
 }
@@ -546,24 +546,24 @@ func TestSearchNotATrap(t *testing.T) {
 		}
 	}
 	m := newModel(nil, ipc.State{Status: ipc.StatusReady})
-	press(m, "61")
+	press(m, "81")
 	if m.section != secHome || m.query != "" || m.searching {
-		t.Fatalf("6 then 1: section %d, query %q", m.section, m.query)
+		t.Fatalf("8 then 1: section %d, query %q", m.section, m.query)
 	}
-	press(m, "6d")
+	press(m, "8d")
 	if m.section != secSearch || !m.searching || m.query != "d" {
-		t.Fatalf("6 then d: searching %v for %q", m.searching, m.query)
+		t.Fatalf("8 then d: searching %v for %q", m.searching, m.query)
 	}
-	press(m, "2")
-	if m.query != "d2" {
+	press(m, "3")
+	if m.query != "d3" {
 		t.Fatalf("a digit after words types: %q", m.query)
 	}
 	m.query = ""
-	press(m, "3")
+	press(m, "4")
 	if m.section != secAlbums || m.searching {
 		t.Fatal("a digit into an empty box is not its section")
 	}
-	press(m, "6")
+	press(m, "8")
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.searching {
 		t.Fatal("enter with no results does not go into the box")

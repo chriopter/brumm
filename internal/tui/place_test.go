@@ -14,6 +14,7 @@ import (
 func TestPlaceRoundTrip(t *testing.T) {
 	a := newModel(nil, ipc.State{Status: ipc.StatusReady})
 	a.section = secAlbums
+	a.playerView = true
 	fill(a.cur(), ipc.Message{Items: []apple.Item{{Kind: apple.KindAlbum, ID: "l.1", Name: "Discovery"}}})
 	album := &apple.Item{Kind: apple.KindAlbum, ID: "l.1", Name: "Discovery"}
 	v := &view{title: "Discovery", key: album.Key(), item: album}
@@ -44,6 +45,9 @@ func TestPlaceRoundTrip(t *testing.T) {
 		t.Fatalf("search %q at %q", m.query, m.stacks[secSearch][0].key)
 	}
 	m.Update(loadedMsg{v: m.cur(), reply: songs})
+	if !m.playerView {
+		t.Fatal("Now Playing mode lost during handoff")
+	}
 	if m.cur().sel != 1 {
 		t.Fatalf("selected row %d, want 1", m.cur().sel)
 	}

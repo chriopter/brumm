@@ -137,6 +137,15 @@ func Start(developerToken, userToken, version string) (*Engine, error) {
 		"about:blank",
 	)
 	cmd := exec.Command(chrome.Path(), args...)
+	if runtime := os.Getenv("BRUMM_DESKTOP_RUNTIME"); runtime != "" {
+		cmd.Env = os.Environ()
+		if os.Getenv("PULSE_SERVER") == "" {
+			cmd.Env = append(cmd.Env, "PULSE_SERVER=unix:"+filepath.Join(runtime, "pulse/native"))
+		}
+		if os.Getenv("PIPEWIRE_RUNTIME_DIR") == "" {
+			cmd.Env = append(cmd.Env, "PIPEWIRE_RUNTIME_DIR="+runtime)
+		}
+	}
 	cmd.ExtraFiles = []*os.File{toChrome, fromChrome}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	err = cmd.Start()

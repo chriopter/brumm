@@ -210,14 +210,14 @@ func (m *Model) controls(w int) stageLine {
 	// A key cap: half blocks round the reverse cell off into a square
 	// button two cells wider than the icon.
 	play := m.acc.plays.Render("▐") + m.acc.pill.Render(" "+playIcon+" ") + m.acc.plays.Render("▌")
-	volume := m.volumeLabel()
+	volume := lit(m.section == secQueue, icQueue) + "  " + m.volumeLabel()
 	start, gap, tw, vw, all := controlLayout(w, lipgloss.Width(volume))
 	sp := strings.Repeat(" ", gap)
 	transport := icPrev + sp + play + sp + icNext
 
 	var line string
 	if all {
-		line = modes + strings.Repeat(" ", start-4) + transport +
+		line = modes + strings.Repeat(" ", start-lipgloss.Width(modes)) + transport +
 			strings.Repeat(" ", w-start-tw-vw) + volume
 	} else {
 		// Too narrow for three groups: transport alone, centered.
@@ -229,7 +229,8 @@ func (m *Model) controls(w int) stageLine {
 		if vw >= 0 {
 			m.geo.shuffle = rect{x, y, x + 2, y + 1}
 			m.geo.repeat = rect{x + 2, y, x + 5, y + 1}
-			m.geo.volume = rect{x + w - vw - 1, y, x + w, y + 1}
+			m.geo.queue = rect{x + w - vw - 1, y, x + w - vw + 2, y + 1}
+			m.geo.volume = rect{x + w - vw + 2, y, x + w, y + 1}
 		}
 		m.geo.prev = cell(start, 1)
 		m.geo.play = rect{x + start + 1 + gap, y, x + start + 1 + gap + 5, y + 1}
@@ -258,10 +259,10 @@ func controlLayout(w, vw int) (start, gap, tw, _ int, all bool) {
 // controlTips is the line above the controls while keytips show: each
 // key under what it presses.
 func (m *Model) controlTips(w int) string {
-	start, gap, tw, vw, all := controlLayout(w, lipgloss.Width(m.volumeLabel()))
+	start, gap, tw, vw, all := controlLayout(w, 3+lipgloss.Width(m.volumeLabel()))
 	bs := []badge{{start, "p"}, {start + 1 + gap, "space"}, {start + tw - 1, "n"}}
 	if all {
-		bs = append(bs, badge{0, "s"}, badge{3, "r"}, badge{w - vw, "- + m"})
+		bs = append(bs, badge{0, "s"}, badge{3, "r"}, badge{w - vw, "8"}, badge{w - vw + 3, "- + m"})
 	}
 	return m.badges(w, bs)
 }

@@ -61,13 +61,13 @@ func TestHome(t *testing.T) {
 	for _, s := range shelves {
 		titles = append(titles, s.Title)
 	}
-	if got := strings.Join(titles, "|"); got != "Recently played|Recently played songs|Made for You|Browse" {
+	if got := strings.Join(titles, "|"); got != "Your music|Recently played|Recently played songs|Made for You|Browse" {
 		t.Fatalf("shelves: %s", got)
 	}
-	if its := shelves[0].Items; len(its) != 2 || its[0].Kind != KindAlbum || its[0].Catalog || its[1].Kind != KindStation {
-		t.Fatalf("recently played: %+v (music videos must be left out)", its)
+	if its := shelves[1].Items; len(its) != 4 || its[0].Kind != KindAlbum || its[0].Catalog || its[1].Kind != KindStation || its[2].Kind != KindVideo {
+		t.Fatalf("recently played: %+v (music videos must be preserved)", its)
 	}
-	if n := shelves[2].Items[0].Note; n != "Your favourites & more" {
+	if n := shelves[3].Items[0].Note; n != "Your favourites & more" {
 		t.Fatalf("note: %q", n)
 	}
 }

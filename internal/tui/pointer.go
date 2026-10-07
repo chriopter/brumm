@@ -53,6 +53,11 @@ func (m *Model) shapeAt(x, y int) string {
 		}
 		return shapeDefault
 	}
+	for _, card := range g.cards {
+		if card.r.has(x, y) {
+			return shapePointer
+		}
+	}
 	for _, f := range g.foot {
 		if f.r.has(x, y) {
 			return shapePointer
@@ -60,6 +65,9 @@ func (m *Model) shapeAt(x, y int) string {
 	}
 	if m.full {
 		return shapeDefault
+	}
+	if g.nowPlaying.has(x, y) {
+		return shapePointer
 	}
 	if g.divider.has(x, y) {
 		return shapeResize
@@ -69,7 +77,7 @@ func (m *Model) shapeAt(x, y int) string {
 			return shapePointer
 		}
 	}
-	for _, r := range []rect{g.search, g.crumb, g.play, g.prev, g.next, g.shuffle, g.repeat, g.volume, g.bar, g.upsongs} {
+	for _, r := range []rect{g.search, g.crumb, g.play, g.prev, g.next, g.shuffle, g.repeat, g.queue, g.volume, g.bar, g.upsongs} {
 		if r.has(x, y) {
 			return shapePointer
 		}

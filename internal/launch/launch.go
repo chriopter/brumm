@@ -55,6 +55,9 @@ func Open(ui string) error {
 	if err != nil {
 		return err
 	}
+	if os.Getenv("BRUMM_PROTOTYPE") != "" || os.Getenv("BRUMM_PREVIEW") != "" {
+		return openPrototype(ui, self)
+	}
 	if ui == GUI {
 		if _, err := GUIPath(); err != nil {
 			return err // say so here, before this player goes
