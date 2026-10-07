@@ -245,11 +245,11 @@ Object.assign(B, {
     const m = B.m;
     if (!m) return;
     if (B.pv) { B.stopPreview(); return; }
-    if (m.isPlaying) m.pause(); else play(m).catch((e) => { B.err = 'play: ' + errText(e); });
+    if (m.isPlaying) m.pause(); else { B.err = ''; play(m).catch((e) => { B.err = 'play: ' + errText(e); touch(); }); }
   },
   play() {
     dropPreview();
-    if (B.m && !B.m.isPlaying) play(B.m).catch((e) => { B.err = 'play: ' + errText(e); });
+    if (B.m && !B.m.isPlaying) { B.err = ''; play(B.m).catch((e) => { B.err = 'play: ' + errText(e); touch(); }); }
   },
   pause() { dropPreview(); if (B.m) B.m.pause(); },
   next() { dropPreview(); if (B.m) B.m.skipToNextItem().catch(() => {}); },

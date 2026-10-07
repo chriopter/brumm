@@ -91,9 +91,10 @@ type Daemon struct {
 	checkNow chan struct{} // ask checkUpdates to look now
 	nudge    chan struct{} // the spectrum loop has something new to consider
 
-	retryAt time.Time     // when to start the player again after a failure
-	retry   time.Duration // the wait after the next failure
-	booted  bool          // the library was loaded once; restarts skip it
+	retryAt   time.Time     // when to start the player again after a failure
+	retry     time.Duration // the wait after the next failure
+	booted    bool          // the library was loaded once; restarts skip it
+	playCheck uint64        // invalidates checks when another transport command arrives
 }
 
 // Run serves until SIGTERM, SIGINT or a quit request.
@@ -308,9 +309,11 @@ func (d *Daemon) watch(eng *engine.Engine) {
 // restart drops a dead player so this runs once; boot starts a new one.
 func (d *Daemon) restart(eng *engine.Engine) {
 	d.mu.Lock()
-	if d.eng == eng {
-		d.eng = nil
+	if d.eng != eng {
+		d.mu.Unlock()
+		return
 	}
+	d.eng = nil
 	d.mu.Unlock()
 	go eng.Close() // a hung page may take a while to close
 	d.setStatus(ipc.StatusStarting, "restarting player")
@@ -428,10 +431,10 @@ func (d *Daemon) apply(es engine.State) {
 	switch {
 	case es.NeedsAuth:
 		status, msg = ipc.StatusLoggedOut, "Apple Music session expired"
-	case es.Ready:
-		status, msg = ipc.StatusReady, ""
 	case es.Err != "":
 		status, msg = ipc.StatusError, es.Err
+	case es.Ready:
+		status, msg = ipc.StatusReady, ""
 	}
 	d.mu.Lock()
 	if r := d.resume; r != nil && r.Autoplay && es.Ready {
@@ -543,6 +546,10 @@ func (d *Daemon) serve(nc net.Conn) {
 }
 
 func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
+	switch r.Cmd {
+	case ipc.CmdPlay, ipc.CmdStation, ipc.CmdNext, ipc.CmdPrev, ipc.CmdJump, ipc.CmdPreview:
+		d.cancelPlayCheck()
+	}
 	switch r.Cmd {
 	case ipc.CmdSubscribe:
 		d.mu.Lock()
@@ -702,10 +709,7 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		d.mu.Unlock()
 		return eng.PlayIDs(r.IDs, r.Start, r.Source, 0)
 	case ipc.CmdToggle:
-		if d.resumeIfIdle(eng) {
-			return nil
-		}
-		return eng.Toggle()
+		return d.togglePlayback(eng)
 	case ipc.CmdNext:
 		return eng.Next()
 	case ipc.CmdPrev:
@@ -1072,6 +1076,7 @@ func (d *Daemon) resumeIfIdle(eng *engine.Engine) bool {
 // mpris.Controller
 
 func (d *Daemon) Play() {
+	seq := d.cancelPlayCheck()
 	eng := d.engine()
 	if eng == nil {
 		d.wake(true)
@@ -1079,10 +1084,16 @@ func (d *Daemon) Play() {
 	}
 	d.markActive()
 	if !d.resumeIfIdle(eng) {
-		_ = eng.Play()
+		if err := eng.Play(); err != nil {
+			return
+		}
 	}
+	go d.verifyPlayback(eng, seq)
 }
-func (d *Daemon) Pause() { d.do((*engine.Engine).Pause) }
+func (d *Daemon) Pause() {
+	d.cancelPlayCheck()
+	d.do((*engine.Engine).Pause)
+}
 func (d *Daemon) Toggle() {
 	eng := d.engine()
 	if eng == nil {
@@ -1090,12 +1101,10 @@ func (d *Daemon) Toggle() {
 		return
 	}
 	d.markActive()
-	if !d.resumeIfIdle(eng) {
-		_ = eng.Toggle()
-	}
+	_ = d.togglePlayback(eng)
 }
-func (d *Daemon) Next() { d.wakeDo((*engine.Engine).Next) }
-func (d *Daemon) Prev() { d.wakeDo((*engine.Engine).Prev) }
+func (d *Daemon) Next() { d.cancelPlayCheck(); d.wakeDo((*engine.Engine).Next) }
+func (d *Daemon) Prev() { d.cancelPlayCheck(); d.wakeDo((*engine.Engine).Prev) }
 func (d *Daemon) Seek(sec float64) {
 	d.do(func(e *engine.Engine) error { return e.Seek(sec) })
 }
