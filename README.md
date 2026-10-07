@@ -2,7 +2,7 @@
 
 <img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
 
-**Apple Music for [Omarchy](https://omarchy.org).**
+**Apple Music for [Omarchy](https://omarchy.org) with GUI & TUI**
 
 - 🎵 Library, catalog, search as you type
 - 🏠 Home: recent, heavy rotation, picks, charts
@@ -24,11 +24,13 @@ curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.s
 ```
 
 ![brumm in the terminal](docs/tui.webp)
+GUI
 
 ![brumm as a window](docs/gui.webp)
-
+TUI
 
 ![the visualizer, terminal and window](docs/visualizer.webp)
+Visuals
 
 ## Keys
 
