@@ -666,8 +666,11 @@ Item {
     // ── navigation ──────────────────────────────────────────────────────
 
     function switchTo(i) {
+        const sameSection = i === section
         section = i
         help = false
+        if (sameSection)
+            stacks[i] = stacks[i].slice(0, 1)
         if (i === secQueue) {
             stacks[secQueue] = stacks[secQueue].slice(0, 1)
             cur().loaded = false
