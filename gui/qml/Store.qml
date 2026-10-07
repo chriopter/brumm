@@ -698,9 +698,17 @@ Item {
     }
 
     function back() {
+        jumpToCrumb(stack().length - 2)
+    }
+
+    function jumpToCrumb(index) {
         const st = stack()
-        if (st.length > 1) {
-            stacks[section] = st.slice(0, -1)
+        if (Number.isInteger(index) && index >= 0 && index < st.length - 1) {
+            stacks[section] = st.slice(0, index + 1)
+            searching = false
+            filtering = false
+            sideFocus = false
+            if (!cur().loaded) load(cur())
             refresh()
             selMoved()
         }
