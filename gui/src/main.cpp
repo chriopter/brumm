@@ -4,7 +4,6 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontInfo>
 #include <QGuiApplication>
@@ -20,6 +19,7 @@
 #include <QMouseEvent>
 #include <QTimer>
 #include <atomic>
+#include <sys/stat.h>
 
 #include "covers.h"
 #include "daemon.h"
@@ -72,18 +72,24 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     daemon.setEngine(&engine);
 
-    // An update replaces this program and restarts the daemon: once it is
-    // back, the window starts again as the new one.
-    // (The path is taken now: once replaced, /proc says "(deleted)".)
+    // Notice replacement independently of the daemon, which may keep
+    // playing until a quiet moment. Build timestamps can predate startup.
     const QString self = QCoreApplication::applicationFilePath();
-    const QDateTime started = QDateTime::currentDateTime();
-    QObject::connect(&daemon, &Daemon::connectedChanged, &app, [&, self] {
-        if (!daemon.connected() || QFileInfo(self).lastModified() <= started)
+    struct stat running{};
+    const bool haveRunning = ::stat("/proc/self/exe", &running) == 0;
+    QTimer updateTimer;
+    QObject::connect(&updateTimer, &QTimer::timeout, &app, [&, self, running, haveRunning] {
+        struct stat installed{};
+        if (!haveRunning || ::stat(QFile::encodeName(self).constData(), &installed) != 0
+            || (running.st_dev == installed.st_dev && running.st_ino == installed.st_ino))
             return;
         lock.unlock();
-        QProcess::startDetached(self, {});
-        QCoreApplication::quit();
+        if (QProcess::startDetached(self, {}))
+            QCoreApplication::quit();
+        else
+            lock.tryLock();
     });
+    updateTimer.start(1000);
     engine.addImageProvider("cover", covers.provider());
     auto *ctx = engine.rootContext();
     ctx->setContextProperty("theme", &theme);

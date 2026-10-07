@@ -325,7 +325,7 @@ func (m *Model) Init() tea.Cmd {
 	m.placing = true
 	return tea.Batch(m.askPlace(), m.listen(), m.schedule(frameEvery), func() tea.Msg { return refreshMsg(screenRefresh()) }, m.load(m.cur()), m.maybeFetchCover(), m.subscribe(), m.autoLogin(),
 		m.send(ipc.Request{Cmd: ipc.CmdUpdate}), // look for an update on every start
-		m.readBar(), tea.RequestBackgroundColor, m.fetchNext(false))
+		m.readBar(), tea.RequestBackgroundColor, m.fetchNext(false), checkBinary())
 }
 
 const frameEvery = 100 * time.Millisecond
@@ -702,6 +702,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.state.Status, m.state.Message = ipc.StatusStarting, "reconnecting"
 		return m, reconnect()
+	case binaryCheckMsg:
+		if binaryUpdated() {
+			m.reexec = true
+			return m, tea.Quit
+		}
+		return m, checkBinary()
 	case connectedMsg:
 		if msg.err != nil {
 			return m, reconnect()
