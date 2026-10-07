@@ -9,6 +9,7 @@ import (
 
 	"github.com/chriopter/brumm/internal/config"
 	"github.com/chriopter/brumm/internal/ipc"
+	"github.com/chriopter/brumm/internal/launch"
 	"github.com/chriopter/brumm/internal/update"
 )
 
@@ -110,29 +111,11 @@ func (d *Daemon) offerUpdate(tag string) {
 	d.broadcast(ipc.Message{State: &st})
 }
 
-// fileID identifies the file behind a path, so a replaced program is
-// noticed even when the new one has the same size and time.
-func fileID(path string) (dev, ino uint64, ok bool) {
-	var st syscall.Stat_t
-	if syscall.Stat(path, &st) != nil {
-		return 0, 0, false
-	}
-	return uint64(st.Dev), st.Ino, true
-}
-
 // watchSelf restarts the daemon into a replaced program — by an update or
 // by bin/setup — at a moment nobody hears: while paused, or right as a
 // song ends, in which case the new daemon carries on playing.
 func (d *Daemon) watchSelf() {
-	self, err := os.Executable()
-	if err != nil {
-		return
-	}
-	dev, ino, ok := fileID(self)
-	if !ok {
-		return
-	}
-	t := time.NewTicker(time.Minute)
+	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -140,7 +123,7 @@ func (d *Daemon) watchSelf() {
 			return
 		case <-t.C:
 		}
-		if d2, i2, ok := fileID(self); !ok || (d2 == dev && i2 == ino) {
+		if !launch.BinaryUpdated() {
 			continue
 		}
 		// Replaced. Wait for a quiet moment.
@@ -167,8 +150,13 @@ func (d *Daemon) currentID() string {
 }
 
 // restartForUpdate saves where playback is — marked to continue if it was
-// playing — and exits so systemd starts the new program.
+// playing — and becomes the new program.
 func (d *Daemon) restartForUpdate(playing bool) {
+	self, err := launch.Executable()
+	if err != nil {
+		log.Printf("restart: %v", err)
+		return
+	}
 	d.mu.Lock()
 	if r := d.resume; r != nil {
 		r.Autoplay = playing
@@ -183,6 +171,10 @@ func (d *Daemon) restartForUpdate(playing bool) {
 	}
 	_ = os.Remove(config.Socket())
 	log.Printf("restarting into the updated program")
+	// Exec also works when launch started a detached daemon without systemd.
+	if err := syscall.Exec(self, os.Args, os.Environ()); err != nil {
+		log.Printf("restart: %v", err)
+	}
 	os.Exit(ExitUpdated)
 }
 

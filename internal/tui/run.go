@@ -48,25 +48,27 @@ func Run() error {
 	}
 	if m, ok := final.(*Model); ok && m.reexec {
 		// The binary changed under us (an update): continue in the new one.
-		self, err := os.Executable()
+		self, err := launch.Executable()
 		if err != nil {
 			return err
+		}
+		if m.client != nil {
+			m.client.Close()
 		}
 		return syscall.Exec(self, os.Args, os.Environ())
 	}
 	return nil
 }
 
-var started = time.Now()
-
 // binaryUpdated reports whether the executable was replaced since start.
 func binaryUpdated() bool {
-	self, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	fi, err := os.Stat(self)
-	return err == nil && fi.ModTime().After(started)
+	return launch.BinaryUpdated()
+}
+
+type binaryCheckMsg struct{}
+
+func checkBinary() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return binaryCheckMsg{} })
 }
 
 func splitPath() string { return filepath.Join(config.CacheDir(), "split") }
