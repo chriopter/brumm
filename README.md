@@ -2,19 +2,7 @@
 
 <img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
 
-**Apple Music for [Omarchy](https://omarchy.org).** Full tracks in your theme's colors, with a keyboard-friendly TUI and a GUI full of album covers and music visualizers. Explore your library, discover your next favorite album, and switch between terminal and window with <kbd>g</kbd> while the music keeps playing.
-
-## Install
-
-```sh
-curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
-```
-
-![brumm in the terminal](docs/tui.webp)
-
-![brumm as a window](docs/gui.webp)
-
-## Features
+**Apple Music for [Omarchy](https://omarchy.org).**
 
 - 🎵 Library, catalog, search as you type
 - 🏠 Home: recent, heavy rotation, picks, charts
@@ -28,6 +16,17 @@ curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.s
 - 🐧 Theme colors, media keys, bar widget
 - ⇄ Terminal and window, <kbd>g</kbd> to switch, music plays on
 - 🎹 <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> opens brumm instead of Spotify, if you like — `brumm keys on|off`
+
+## Install
+
+```sh
+curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
+```
+
+![brumm in the terminal](docs/tui.webp)
+
+![brumm as a window](docs/gui.webp)
+
 
 ![the visualizer, terminal and window](docs/visualizer.webp)
 
