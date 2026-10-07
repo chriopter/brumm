@@ -13,9 +13,8 @@ Item {
     Row {
         anchors { left: parent.left; verticalCenter: parent.verticalCenter }
         spacing: ui.px(10)
-        visible: ctl.roomy
-        Orb { size: ui.px(34); icon: "󰒝"; on: !!store.st.shuffle; onClicked: store.key("s") }
-        Orb { size: ui.px(34); icon: store.st.repeat === 1 ? "󰑘" : "󰑖"; on: (store.st.repeat || 0) > 0; onClicked: store.key("r") }
+        Orb { visible: ctl.roomy; size: ui.px(34); icon: "󰒝"; on: !!store.st.shuffle; onClicked: store.key("s") }
+        Orb { visible: ctl.roomy; size: ui.px(34); icon: store.st.repeat === 1 ? "󰑘" : "󰑖"; on: (store.st.repeat || 0) > 0; onClicked: store.key("r") }
     }
 
     Row {
@@ -26,19 +25,12 @@ Item {
         Orb { anchors.verticalCenter: parent.verticalCenter; size: ui.px(46); icon: "󰒭"; onClicked: store.key("n") }
     }
 
-    // Dislike, radio and the volume, glass as the rest.
+    // Queue and volume, glass as the rest.
     Row {
         anchors { right: parent.right; verticalCenter: parent.verticalCenter }
         spacing: ui.px(10)
         visible: !store.st.preview && !ctl.tight
-        Orb {
-            visible: ctl.roomy
-            size: ui.px(34); icon: "󰔑"
-            readonly property int mark: { store.ratingRev; return store.rating[store.st.id] || 0 }
-            on: mark < 0
-            onClicked: store.ratePlaying(-1)
-        }
-        Orb { visible: ctl.roomy; size: ui.px(34); icon: "󰐹"; onClicked: store.radioPlaying() }
+        Orb { size: ui.px(34); icon: "󰐑"; on: store.section === store.secQueue; onClicked: { store.switchTo(store.secQueue); store.sideFocus = false } }
         // The volume: click mutes, the wheel turns it and says how loud.
         Orb {
             size: ui.px(34)

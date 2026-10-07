@@ -45,19 +45,20 @@ type section int
 
 const (
 	secHome section = iota
+	secExplore
 	secPlaylists
 	secAlbums
 	secArtists
 	secSongs
+	secRadio
 	secSearch
 	secQueue
-	secRadio
 	numSections
 )
 
 var (
-	sectionNames = []string{"Home", "Playlists", "Albums", "Artists", "Songs", "Search", "Queue", "Radio"}
-	sectionIcons = []string{icHome, icPlaylist, icAlbum, icArtist, icSong, icSearch, icQueue, icStation}
+	sectionNames = []string{"Home", "Explore", "Playlists", "Albums", "Artists", "Songs", "Radio", "Search", "Queue"}
+	sectionIcons = []string{icHome, "󰭎", icPlaylist, icAlbum, icArtist, icSong, icStation, icSearch, icQueue}
 	sectionLists = []string{ipc.ListPlaylists, ipc.ListAlbums, ipc.ListArtists, ipc.ListSongs}
 )
 
@@ -85,6 +86,7 @@ type view struct {
 	filter  string
 	all     []row  // every row while a filter shows some (filter.go)
 	want    string // a song to select once the rows come
+	explore *exploreLoad
 }
 
 // songs returns the view's song ids and maps a row index to its position
@@ -157,11 +159,12 @@ type Model struct {
 	tickAt        time.Time // when it comes
 	tickSeq       int       // the number of the tick that counts
 	blurred       bool      // the terminal lost focus: stop what only a viewer would see
-	eqShown       bool      // the last render drew the playing row's equalizer
-	cardShown     bool      // the last render laid a card on the cover (card.go)
-	marquee       bool      // the last render scrolled a selected row
-	specFPS       int       // the rate the spectrum arrives at
-	specOn        bool      // the stream carries the spectrum
+	playerView    bool
+	eqShown       bool // the last render drew the playing row's equalizer
+	cardShown     bool // the last render laid a card on the cover (card.go)
+	marquee       bool // the last render scrolled a selected row
+	specFPS       int  // the rate the spectrum arrives at
+	specOn        bool // the stream carries the spectrum
 
 	state   ipc.State
 	stateAt time.Time
@@ -245,11 +248,12 @@ type Model struct {
 	ahead     int        // songs in the queue after the playing one
 	songDraw  nextList   // their list as last drawn
 
-	filtering bool    // typing into the list's filter (filter.go)
-	optOpen   bool    // the options menu shows
-	pick      *picker // the add-to-playlist menu, while it shows
-	optLines  []int   // the options menu line of each option
-	optSel    int
+	filtering   bool // typing into the list's filter (filter.go)
+	optOpen     bool // the options menu shows
+	featureForm *featureForm
+	pick        *picker // the add-to-playlist menu, while it shows
+	optLines    []int   // the options menu line of each option
+	optSel      int
 
 	// Covers sent to the terminal as kitty graphics, by address and size.
 	kitty      map[string]*kittyImage
@@ -312,6 +316,7 @@ func newModel(client *ipc.Client, initial ipc.State) *Model {
 		m.stacks[s] = []*view{{title: sectionNames[s], key: "list:" + sectionLists[s-secPlaylists]}}
 	}
 	m.stacks[secHome] = []*view{{title: "Home", key: "home:"}}
+	m.stacks[secExplore] = []*view{{title: "Explore", key: "explore:", item: &apple.Item{Kind: apple.KindShelf, ID: "discover", Name: "Explore", Route: "app:discover", Catalog: true}}}
 	m.stacks[secRadio] = []*view{{title: "Radio", key: "radio:", item: &apple.Item{Kind: apple.KindShelf, ID: "radio", Name: "Radio", Catalog: true}}}
 	m.stacks[secSearch] = []*view{{title: "Search", key: "search:", loaded: true}}
 	m.stacks[secQueue] = []*view{{title: "Queue", key: "queue:"}}
@@ -726,7 +731,20 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.selectSong(msg.v, msg.v.want)
 		msg.v.want = ""
-		return m, tea.Batch(m.maybeResume(), m.fetchRatings(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover(), m.warm(msg.v))
+		var visuals tea.Cmd
+		if msg.v.key == "explore:" {
+			visuals = m.loadExploreVisuals(msg.v, msg.reply)
+		}
+		return m, tea.Batch(visuals, m.maybeResume(), m.fetchRatings(msg.v), m.prefetchCovers(msg.v), m.maybeFetchCover(), m.warm(msg.v))
+	case exploreGroupMsg:
+		if msg.v.explore != msg.load {
+			return m, nil
+		}
+		mergeExploreGroup(msg)
+		if msg.v == m.cur() {
+			return m, m.prefetchCovers(msg.v)
+		}
+		return m, nil
 	case ratingsMsg:
 		for id, v := range msg {
 			m.rating[id] = v
@@ -809,7 +827,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case feedbackMsg:
 		m.feedbackDone(msg)
+	case featureSavedMsg:
+		m.setFlash("Created in Apple Music")
+		return m, m.load(m.cur())
 	case tea.KeyPressMsg:
+		if m.featureForm != nil {
+			return m, m.featureKey(msg)
+		}
 		if m.fb != nil {
 			return m, m.feedbackKey(msg)
 		}
@@ -974,6 +998,7 @@ func (m *Model) position() float64 {
 // ── navigation ─────────────────────────────────────────────────────────
 
 func (m *Model) switchTo(s section) tea.Cmd {
+	m.playerView = false
 	m.section, m.help, m.filtering = s, false, false // a filter stays with its list, the typing does not
 	if s == secQueue {
 		m.stacks[secQueue] = m.stacks[secQueue][:1]
@@ -1043,7 +1068,34 @@ func (m *Model) activate() tea.Cmd {
 	}
 	if r.item != nil {
 		it := *r.item
+		if it.Route == "action:details" {
+			return m.inspectSelected()
+		}
+		if strings.HasPrefix(it.Route, "action:favorite:") {
+			client := m.client
+			return func() tea.Msg {
+				_, err := client.Do(ipc.Request{Cmd: ipc.CmdFavorite, Refs: []apple.Ref{{Kind: strings.TrimPrefix(it.Route, "action:favorite:"), ID: it.ID}}})
+				if err != nil {
+					return errMsg{err}
+				}
+				return flashMsg("Favorite request accepted by Apple Music")
+			}
+		}
+		if strings.HasPrefix(it.Route, "action:") {
+			parent := ""
+			if v.item != nil {
+				if v.item.Route == "app:folders" {
+					parent = "p.playlistsroot"
+				} else if _, tail, ok := strings.Cut(v.item.Route, "/playlist-folders/"); ok {
+					parent = strings.Split(strings.Split(tail, "/")[0], "?")[0]
+				}
+			}
+			m.featureForm = &featureForm{item: it, parent: parent}
+			return nil
+		}
 		switch it.Kind {
+		case apple.KindVideo:
+			return m.openMusicVideo(it)
 		case apple.KindStation:
 			return m.startStation(ipc.Request{Cmd: ipc.CmdStation, Item: &it})
 		case apple.KindTerm:
@@ -1354,7 +1406,7 @@ func (m *Model) jumpToPlaying() tea.Cmd {
 			}
 		}
 	}
-	for s := secHome; s <= secSearch; s++ {
+	for s := secHome; s < numSections; s++ {
 		for _, v := range m.stacks[s] {
 			if v.key == src {
 				m.section = s
@@ -1424,12 +1476,15 @@ func (m *Model) key(k string) tea.Cmd {
 		return tea.Quit // close the window; the music plays on
 	case "L":
 		return signIn()
-	case "1", "2", "3", "4", "5", "6", "7", "8":
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		return m.switchTo(section(k[0] - '1'))
 	case "tab", "right":
-		return m.switchTo((m.section + 1) % numSections)
+		if m.section == secQueue {
+			return m.switchTo(secHome)
+		}
+		return m.switchTo((m.section + 1) % secQueue)
 	case "shift+tab", "left":
-		return m.switchTo((m.section + numSections - 1) % numSections)
+		return m.switchTo((m.section + secQueue - 1) % secQueue)
 	case "/":
 		if m.filterable() {
 			m.startFilter() // here first; tab goes on to all of Apple Music
@@ -1479,11 +1534,15 @@ func (m *Model) key(k string) tea.Cmd {
 		m.setSplit(m.shownSplit() + delta)
 		saveSplit(m.split)
 	case "c":
-		return m.jumpToPlaying()
+		cmd := m.jumpToPlaying()
+		m.playerView = true
+		return cmd
 	case "o":
 		m.optOpen, m.help = true, false
 	case "O":
 		return m.togglePreview()
+	case "ctrl+i":
+		return m.inspectSelected()
 	case "i":
 		return m.addToLibrary()
 	case "a":
@@ -1583,7 +1642,7 @@ func (m *Model) searchKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "left", "right", "tab", "shift+tab":
 		m.searching = false // on to the next section: the box has no cursor to move
 		return m.key(msg.String())
-	case "1", "2", "3", "4", "5", "6", "7", "8":
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if m.query == "" { // nothing typed yet: a digit is a section, as outside the box
 			m.searching = false
 			return m.key(msg.String())
@@ -1761,6 +1820,15 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 	if ms.Button != tea.MouseLeft {
 		return nil
 	}
+	for _, card := range g.cards {
+		if card.r.has(ms.X, ms.Y) {
+			m.cur().sel = card.index
+			return m.activate()
+		}
+	}
+	if g.nowPlaying.has(ms.X, ms.Y) {
+		return m.key("c")
+	}
 	searching := m.searching
 	m.searching = false // a click anywhere but the box leaves it
 	for i, r := range g.tabs {
@@ -1801,6 +1869,8 @@ func (m *Model) click(ms tea.Mouse) tea.Cmd {
 		return m.key("s")
 	case g.repeat.has(ms.X, ms.Y):
 		return m.key("r")
+	case g.queue.has(ms.X, ms.Y):
+		return m.switchTo(secQueue)
 	case g.volume.has(ms.X, ms.Y):
 		return m.key("m")
 	case g.artist.has(ms.X, ms.Y) && m.state.ID != "":

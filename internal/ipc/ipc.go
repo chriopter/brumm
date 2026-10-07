@@ -25,6 +25,9 @@ const (
 	CmdOpen      = "open"      // Item → Tracks (playlist, album) or Shelves (artist, charts)
 	CmdSearch    = "search"    // Query → Shelves
 	CmdHome      = "home"      // → Shelves: recently played, radio, recommendations…
+	CmdFavorite  = "favorite"  // Refs: submit typed resources to Apple Music favorites
+	CmdCreate    = "create"    // List: folder or playlist; Query: name; Start: parent folder
+	CmdExplore   = "explore"   // Query: relative public API route → Explorer page
 	CmdStation   = "station"   // Item (a station, or an artist) or Start (a song): play its station
 	CmdPlaylist  = "playlist"  // IDs to Start (a playlist id), or to a new playlist named Query → Items
 	CmdAutoplay  = "autoplay"  // Value 1: similar music plays on when the queue ends
@@ -109,25 +112,26 @@ type State struct {
 }
 
 type Message struct {
-	ID       int             `json:"id,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	Items    []apple.Item    `json:"items,omitempty"`
-	Tracks   []apple.Track   `json:"tracks,omitempty"`
-	Shelves  []apple.Shelf   `json:"shelves,omitempty"`
-	Ratings  map[string]int  `json:"ratings,omitempty"`
-	State    *State          `json:"state,omitempty"`
-	Spectrum []int           `json:"spectrum,omitempty"`
-	Wave     []int           `json:"wave,omitempty"`
-	Library  bool            `json:"library,omitempty"` // the cached library changed
-	Pos      int             `json:"pos,omitempty"`
-	IDs      []string        `json:"ids,omitempty"`
-	Link     string          `json:"link,omitempty"`
-	Version  string          `json:"version,omitempty"` // the daemon's own, with an update check
-	Notes    []string        `json:"notes,omitempty"`   // with an update check: what the newest release says is new
-	Options  *config.Options `json:"options,omitempty"` // the saved options, answering or announcing a change
-	Omarchy  bool            `json:"omarchy,omitempty"` // with the options: omarchy is here, the bar widget can be switched
-	Agent    bool            `json:"agent,omitempty"`   // with the options: Omarchy has a coding agent to hand feedback to
-	Place    json.RawMessage `json:"place,omitempty"`   // where a player last was (CmdPlace)
+	ID       int                `json:"id,omitempty"`
+	Error    string             `json:"error,omitempty"`
+	Items    []apple.Item       `json:"items,omitempty"`
+	Tracks   []apple.Track      `json:"tracks,omitempty"`
+	Shelves  []apple.Shelf      `json:"shelves,omitempty"`
+	Explorer *apple.ExplorePage `json:"explorer,omitempty"`
+	Ratings  map[string]int     `json:"ratings,omitempty"`
+	State    *State             `json:"state,omitempty"`
+	Spectrum []int              `json:"spectrum,omitempty"`
+	Wave     []int              `json:"wave,omitempty"`
+	Library  bool               `json:"library,omitempty"` // the cached library changed
+	Pos      int                `json:"pos,omitempty"`
+	IDs      []string           `json:"ids,omitempty"`
+	Link     string             `json:"link,omitempty"`
+	Version  string             `json:"version,omitempty"` // the daemon's own, with an update check
+	Notes    []string           `json:"notes,omitempty"`   // with an update check: what the newest release says is new
+	Options  *config.Options    `json:"options,omitempty"` // the saved options, answering or announcing a change
+	Omarchy  bool               `json:"omarchy,omitempty"` // with the options: omarchy is here, the bar widget can be switched
+	Agent    bool               `json:"agent,omitempty"`   // with the options: Omarchy has a coding agent to hand feedback to
+	Place    json.RawMessage    `json:"place,omitempty"`   // where a player last was (CmdPlace)
 }
 
 // Client is one connection to the daemon.

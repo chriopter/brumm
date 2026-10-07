@@ -33,6 +33,9 @@ const (
 	KindStation  = "station" // plays, never opens
 	KindShelf    = "shelf"   // a page of shelves: charts, a recommendation
 	KindTerm     = "term"    // a search suggestion
+	KindVideo    = "music-videos"
+	KindFolder   = "playlist-folders"
+	KindGenre    = "genres"
 )
 
 // Item is a container the user can open: a playlist, an album or an artist.
@@ -48,8 +51,13 @@ type Item struct {
 	// Info is a one-line summary: year, label, song count, audio quality.
 	Info string `json:"info,omitempty"`
 	// Note is Apple's editorial blurb or a playlist's description.
-	Note     string `json:"note,omitempty"`
-	Editable bool   `json:"editable,omitempty"` // a playlist songs can be added to
+	Note       string   `json:"note,omitempty"`
+	Editable   bool     `json:"editable,omitempty"` // a playlist songs can be added to
+	Route      string   `json:"route,omitempty"`    // a public API resource or explorer route
+	Details    []Detail `json:"details,omitempty"`
+	Favorite   bool     `json:"favorite,omitempty"`
+	URL        string   `json:"url,omitempty"`
+	PreviewURL string   `json:"previewUrl,omitempty"`
 }
 
 // Key identifies an item across kinds and sources.
@@ -64,13 +72,15 @@ func (it Item) Key() string {
 // Track is one playable song. ID is what MusicKit plays: a library id
 // ("i.…") or a catalog id.
 type Track struct {
-	ID       string  `json:"id"`
-	Title    string  `json:"title"`
-	Artist   string  `json:"artist"`
-	Album    string  `json:"album"`
-	Duration float64 `json:"duration"` // seconds
-	Artwork  string  `json:"artwork,omitempty"`
-	Number   int     `json:"number,omitempty"` // position on its album
+	ID       string   `json:"id"`
+	Title    string   `json:"title"`
+	Artist   string   `json:"artist"`
+	Album    string   `json:"album"`
+	Duration float64  `json:"duration"` // seconds
+	Artwork  string   `json:"artwork,omitempty"`
+	Number   int      `json:"number,omitempty"` // position on its album
+	Details  []Detail `json:"details,omitempty"`
+	Favorite bool     `json:"favorite,omitempty"`
 }
 
 // artworkSize is the cover size brumm asks for everywhere, so the same
@@ -103,6 +113,7 @@ func New(developerToken, userToken string) *Client {
 type resource struct {
 	ID         string     `json:"id"`
 	Type       string     `json:"type"`
+	Href       string     `json:"href,omitempty"`
 	Attributes attributes `json:"attributes"`
 }
 
@@ -112,12 +123,13 @@ type notes struct {
 }
 
 type attributes struct {
-	Name        string `json:"name"`
-	ArtistName  string `json:"artistName"`
-	AlbumName   string `json:"albumName"`
-	CuratorName string `json:"curatorName"`
-	DurationMS  int64  `json:"durationInMillis"`
-	TrackNumber int    `json:"trackNumber"`
+	Extra       map[string]any `json:"-"`
+	Name        string         `json:"name"`
+	ArtistName  string         `json:"artistName"`
+	AlbumName   string         `json:"albumName"`
+	CuratorName string         `json:"curatorName"`
+	DurationMS  int64          `json:"durationInMillis"`
+	TrackNumber int            `json:"trackNumber"`
 	PlayParams  *struct {
 		ID string `json:"id"`
 	} `json:"playParams"`
@@ -132,6 +144,16 @@ type attributes struct {
 	EditorialNotes *notes   `json:"editorialNotes"`
 	Description    *notes   `json:"description"`
 	IsLive         bool     `json:"isLive"`
+}
+
+func (a *attributes) UnmarshalJSON(data []byte) error {
+	type plain attributes
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*a = attributes(v)
+	return json.Unmarshal(data, &a.Extra)
 }
 
 type page struct {
@@ -221,10 +243,17 @@ func (c *Client) all(path string, maxPages int) ([]resource, error) {
 			break
 		}
 		out = append(out, p.Data...)
-		path = p.Next
+		if p.Next != "" {
+			path = inheritPageQuery(path, p.Next)
+		} else {
+			path = ""
+		}
 		if path != "" && !strings.HasPrefix(path, "/v1/") {
 			path = "/v1/" + strings.TrimPrefix(path, "/")
 		}
+	}
+	if path != "" {
+		return out, ErrPartial
 	}
 	return out, nil
 }
@@ -309,6 +338,17 @@ func item(r resource, kind string, catalog bool) Item {
 	}
 	it := Item{Kind: kind, ID: r.ID, Name: a.Name, Artist: artist, Catalog: catalog, Artwork: artworkURL(a.Artwork),
 		Editable: a.CanEdit}
+	it.Details = attributeDetails(a.Extra)
+	it.Favorite, _ = a.Extra["inFavorites"].(bool)
+	it.URL = attributeString(a.Extra, "url")
+	if previews, ok := a.Extra["previews"].([]any); ok && len(previews) > 0 {
+		if p, ok := previews[0].(map[string]any); ok {
+			it.PreviewURL = attributeString(p, "url")
+		}
+	}
+	if kind != KindAlbum && kind != KindPlaylist && kind != KindArtist && kind != KindStation {
+		it.Route = r.Href
+	}
 	var info []string
 	if len(a.ReleaseDate) >= 4 {
 		info = append(info, a.ReleaseDate[:4])
@@ -358,6 +398,8 @@ func kindOf(typ string) (kind string, catalog, ok bool) {
 		return KindArtist, catalog, true
 	case "stations":
 		return KindStation, true, true
+	case "music-videos", "playlist-folders", "genres", "station-genres", "activities", "curators", "apple-curators", "record-labels":
+		return strings.TrimPrefix(typ, "library-"), catalog, true
 	}
 	return "", false, false
 }
@@ -385,7 +427,7 @@ func tracks(rs []resource) []Track {
 			id = a.PlayParams.ID
 		}
 		out = append(out, Track{ID: id, Title: a.Name, Artist: a.ArtistName, Album: a.AlbumName,
-			Duration: float64(a.DurationMS) / 1000, Artwork: artworkURL(a.Artwork), Number: a.TrackNumber})
+			Duration: float64(a.DurationMS) / 1000, Artwork: artworkURL(a.Artwork), Number: a.TrackNumber, Details: attributeDetails(a.Extra), Favorite: a.Extra["inFavorites"] == true})
 	}
 	return out
 }
@@ -393,34 +435,45 @@ func tracks(rs []resource) []Track {
 // Library listings.
 
 func (c *Client) Playlists() ([]Item, error) {
-	rs, err := c.all("/v1/me/library/playlists?limit=100", 20)
+	rs, err := c.all("/v1/me/library/playlists?limit=100&extend=inFavorites", 20)
 	return items(rs, KindPlaylist, false), err
 }
 
 func (c *Client) Albums() ([]Item, error) {
-	rs, err := c.all("/v1/me/library/albums?limit=100", 100)
+	rs, err := c.all("/v1/me/library/albums?limit=100&extend=inFavorites", 100)
 	return items(rs, KindAlbum, false), err
 }
 
 func (c *Client) Artists() ([]Item, error) {
-	rs, err := c.all("/v1/me/library/artists?limit=100", 100)
+	rs, err := c.all("/v1/me/library/artists?limit=100&extend=inFavorites", 100)
 	return items(rs, KindArtist, false), err
 }
 
 func (c *Client) Songs() ([]Track, error) {
-	rs, err := c.all("/v1/me/library/songs?limit=100", 300)
+	rs, err := c.all("/v1/me/library/songs?limit=100&extend=inFavorites", 300)
 	return tracks(rs), err
 }
 
 // Tracks lists a playlist's or an album's songs.
 func (c *Client) Tracks(it Item) ([]Track, error) {
 	id := url.PathEscape(it.ID)
+	storefront := ""
+	if it.Catalog && it.Route != "" && validExploreRoute(it.Route) == nil {
+		u, _ := url.Parse(it.Route)
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) == 5 && parts[0] == "v1" && parts[1] == "catalog" && parts[3] == it.Kind+"s" && parts[4] == it.ID {
+			storefront = parts[2]
+		}
+	}
+	if it.Catalog && storefront == "" {
+		storefront = c.Storefront()
+	}
 	var path string
 	switch {
 	case it.Catalog && it.Kind == KindPlaylist:
-		path = "/v1/catalog/" + c.Storefront() + "/playlists/" + id + "/tracks?limit=100"
+		path = "/v1/catalog/" + storefront + "/playlists/" + id + "/tracks?limit=100"
 	case it.Catalog:
-		path = "/v1/catalog/" + c.Storefront() + "/albums/" + id + "/tracks?limit=100"
+		path = "/v1/catalog/" + storefront + "/albums/" + id + "/tracks?limit=100"
 	case it.Kind == KindPlaylist:
 		path = "/v1/me/library/playlists/" + id + "/tracks?limit=100"
 	default:

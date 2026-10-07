@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -577,6 +578,30 @@ func (d *Daemon) handle(c *conn, r ipc.Request, reply *ipc.Message) error {
 		}
 		reply.Shelves, err = api.Search(r.Query)
 		return d.authCheck(err)
+	case ipc.CmdFavorite:
+		api, err := d.client()
+		if err != nil {
+			return err
+		}
+		if err = api.Favorite(r.Refs); err != nil {
+			return d.authCheck(err)
+		}
+		go d.refresh()
+		return nil
+	case ipc.CmdCreate:
+		api, err := d.client()
+		if err != nil {
+			return err
+		}
+		it, err := api.CreateContainer(r.List, r.Query, r.Start)
+		if err != nil {
+			return d.authCheck(err)
+		}
+		reply.Items = []apple.Item{it}
+		go d.refresh()
+		return nil
+	case ipc.CmdExplore:
+		return d.explore(r.Query, reply)
 	case ipc.CmdHome:
 		api, err := d.client()
 		if err != nil {
@@ -832,6 +857,9 @@ func (d *Daemon) fetchList(api *apple.Client, name string, reply *ipc.Message) e
 
 // open lists what is inside an item: tracks, or an artist's albums.
 func (d *Daemon) open(it apple.Item, reply *ipc.Message) error {
+	if it.Route != "" && it.Kind != apple.KindAlbum && it.Kind != apple.KindPlaylist {
+		return d.explore(it.Route, reply)
+	}
 	key := it.Key()
 	switch it.Kind {
 	case apple.KindArtist, apple.KindShelf:
@@ -1146,4 +1174,61 @@ func (d *Daemon) wakeDo(f func(*engine.Engine) error) {
 		return
 	}
 	d.do(f)
+}
+
+// Favorited library resources have already been fetched in the background.
+// Reuse that snapshot so opening Favorites does not rescan the entire library.
+func (d *Daemon) explore(route string, reply *ipc.Message) error {
+	if strings.HasPrefix(route, "app:favorites:") {
+		typ := strings.TrimPrefix(route, "app:favorites:")
+		page := apple.ExplorePage{Title: "Favorite " + typ}
+		known := false
+		if typ == ipc.ListSongs {
+			if ts, ok := d.lib.tracks(typ); ok {
+				for _, t := range ts {
+					for _, detail := range t.Details {
+						if detail.Label == "Favorite" {
+							known = true
+						}
+					}
+					if t.Favorite {
+						page.Tracks = append(page.Tracks, t)
+					}
+				}
+				if len(ts) == 0 {
+					known = true
+				}
+			}
+		} else if typ == ipc.ListAlbums || typ == ipc.ListArtists || typ == ipc.ListPlaylists {
+			if items, ok := d.lib.items(typ); ok {
+				for _, it := range items {
+					for _, detail := range it.Details {
+						if detail.Label == "Favorite" {
+							known = true
+						}
+					}
+					if it.Favorite {
+						page.Items = append(page.Items, it)
+					}
+				}
+				if len(items) == 0 {
+					known = true
+				}
+			}
+		}
+		if known {
+			reply.Explorer = &page
+			return nil
+		}
+	}
+	api, err := d.client()
+	if err != nil {
+		return err
+	}
+	page, err := api.Feature(route)
+	if err != nil {
+		return d.authCheck(err)
+	}
+	reply.Explorer = &page
+	return nil
 }

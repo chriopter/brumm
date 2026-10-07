@@ -19,7 +19,25 @@ func (r row) selectable() bool { return r.track != nil || r.item != nil }
 // contents, plain lists stay plain. An album or playlist opens with its
 // facts and Apple's note above the songs.
 func fill(v *view, reply ipc.Message) {
+	if page := reply.Explorer; page != nil {
+		if page.Title != "" {
+			v.title = page.Title
+		}
+		reply.Shelves, reply.Items, reply.Tracks = page.Shelves, page.Items, page.Tracks
+		if page.Info != "" {
+			reply.Shelves = append([]apple.Shelf{{Title: page.Info}}, reply.Shelves...)
+		}
+		if page.Next != "" {
+			reply.Items = append(reply.Items, apple.Item{Kind: apple.KindShelf, ID: page.Next, Name: "More", Route: page.Next, Catalog: true})
+		}
+	}
 	var rows []row
+	if reply.Explorer != nil {
+		if len(reply.Explorer.Details) > 0 {
+			it := apple.Item{Kind: apple.KindShelf, ID: "details:" + v.key, Name: "Details", Route: "action:details", Details: reply.Explorer.Details}
+			rows = append(rows, row{item: &it})
+		}
+	}
 	if it := v.item; it != nil && (it.Kind == apple.KindAlbum || it.Kind == apple.KindPlaylist) {
 		if it.Info != "" {
 			rows = append(rows, row{note: it.Info})

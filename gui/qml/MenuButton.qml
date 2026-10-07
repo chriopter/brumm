@@ -34,7 +34,7 @@ Item {
     Item {
         id: menu
         parent: win.contentItem
-        visible: store.menuOpen
+        visible: store.menuOpen && f.visible
         readonly property point at: { store.menuOpen; win.width; win.height; return f.mapToItem(win.contentItem, 0, 0) }
         x: at.x
         y: at.y + button.height + ui.px(10)

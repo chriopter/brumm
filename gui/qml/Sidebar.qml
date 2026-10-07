@@ -7,6 +7,7 @@ import QtQuick.Effects
 Item {
     id: side
     width: ui.px(46)
+    readonly property real rowHeight: Math.min(ui.px(38), Math.max(ui.px(24), (height - menu.height - ui.px(64)) / 9 - ui.px(8)))
 
     MenuButton {
         id: menu
@@ -19,14 +20,14 @@ Item {
         anchors { horizontalCenter: parent.horizontalCenter; top: menu.bottom; topMargin: ui.px(26) }
         spacing: ui.px(8)
         Repeater {
-            model: store.sectionIcons
+            model: store.sectionIcons.slice(0, store.secQueue)
             Item {
                 id: tab
                 required property int index
                 required property string modelData
                 readonly property bool active: store.section === index
                 width: ui.px(40)
-                height: ui.px(38)
+                height: side.rowHeight
                 RectangularShadow { // lit from behind, as the XMB lights what is chosen
                     visible: tab.active || hover.hovered
                     anchors { fill: parent; margins: ui.px(4) }
@@ -64,6 +65,23 @@ Item {
                     font { family: ui.mono; pixelSize: ui.px(19) }
                 }
                 HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
+                Rectangle {
+                    visible: hover.hovered
+                    z: 20
+                    anchors { left: parent.right; leftMargin: ui.px(8); verticalCenter: parent.verticalCenter }
+                    width: label.implicitWidth + ui.px(24)
+                    height: ui.px(32)
+                    radius: ui.px(8)
+                    color: Qt.tint(ui.bg, Qt.alpha(ui.bright, 0.08))
+                    border.color: Qt.alpha(ui.bright, 0.2)
+                    Text {
+                        id: label
+                        anchors.centerIn: parent
+                        text: store.sectionNames[tab.index]
+                        color: ui.fg
+                        font { family: ui.sans; pixelSize: ui.px(13) }
+                    }
+                }
                 TapHandler { onTapped: { store.switchTo(tab.index); store.sideFocus = false } }
             }
         }

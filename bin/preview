@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Build and open the current code with the real account on workspace 4.
+# Credentials, socket and caches remain private in a separate runtime.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if ! go version >/dev/null 2>&1 && command -v mise >/dev/null; then
+  export PATH="$(mise where go)/bin:$PATH"
+fi
+export GOCACHE=${GOCACHE:-/tmp/brumm-go-cache}
+build=tmp/live-preview-build
+GUI_BUILD="$build" bin/build-gui "$build"
+go build -o "$build/brumm" .
+run=$(mktemp -d /tmp/brumm-live-preview.XXXXXX)
+chmod 700 "$run"
+python3 - "$run" <<'PY'
+import os,sys,json,re,base64,time
+root=sys.argv[1]
+source=os.path.join(os.environ.get('XDG_CONFIG_HOME',os.path.expanduser('~/.config')),'brumm','config.json')
+c=json.load(open(source))
+if not c.get('developer_token'):
+    installed=os.path.join(os.environ.get('XDG_BIN_HOME',os.path.expanduser('~/.local/bin')),'brumm')
+    tokens=re.findall(rb'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}',open(installed,'rb').read())
+    valid=[]
+    for token in set(tokens):
+        try:
+            exp=json.loads(base64.urlsafe_b64decode(token.split(b'.')[1]+b'==='))['exp']
+            if exp>time.time():valid.append((exp,token.decode()))
+        except (ValueError,KeyError):pass
+    if valid:c['developer_token']=max(valid)[1]
+if not c.get('developer_token') or not c.get('user_token'):raise SystemExit('Sign in to brumm before opening the live preview.')
+p=os.path.join(root,'config','brumm');os.makedirs(p,mode=0o700)
+fd=os.open(os.path.join(p,'config.json'),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+with os.fdopen(fd,'w') as f:json.dump(c,f)
+PY
+desktop_runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+if [[ -n ${WAYLAND_DISPLAY:-} && $WAYLAND_DISPLAY != /* ]]; then
+  export WAYLAND_DISPLAY="$desktop_runtime/$WAYLAND_DISPLAY"
+fi
+export PULSE_SERVER="${PULSE_SERVER:-unix:$desktop_runtime/pulse/native}" PIPEWIRE_RUNTIME_DIR="${PIPEWIRE_RUNTIME_DIR:-$desktop_runtime}"
+export XDG_RUNTIME_DIR="$run" XDG_CONFIG_HOME="$run/config" XDG_CACHE_HOME="$run/cache" BRUMM_PREVIEW=1 BRUMM_DESKTOP_RUNTIME="$desktop_runtime"
+unset BRUMM_PROTOTYPE
+"$build/brumm" daemon >"$run/daemon.log" 2>&1 &
+player=$!
+trap 'kill "$player" 2>/dev/null || true; wait "$player" 2>/dev/null || true; rm -rf "$run"' EXIT
+for ((i=0;i<100;i++)); do
+  [[ -S "$run/brumm.sock" ]] && break
+  kill -0 "$player" || { echo 'Preview daemon failed' >&2; exit 1; }
+  sleep .1
+done
+[[ -S "$run/brumm.sock" ]] || { echo 'Preview socket did not appear' >&2; exit 1; }
+if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && command -v hyprctl >/dev/null; then
+  {
+    printf '#!/usr/bin/env bash\nexec env '
+    printf '%q ' "XDG_RUNTIME_DIR=$run" "XDG_CONFIG_HOME=$run/config" "XDG_CACHE_HOME=$run/cache" "BRUMM_PREVIEW=1" "PULSE_SERVER=$PULSE_SERVER" "PIPEWIRE_RUNTIME_DIR=$PIPEWIRE_RUNTIME_DIR" "BRUMM_PROTOTYPE=" "BRUMM_DESKTOP_RUNTIME=$desktop_runtime" "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" "$(realpath "$build/brumm-gui")"
+    printf '\n'
+  } > "$run/start-gui"
+  XDG_RUNTIME_DIR="$desktop_runtime" hyprctl dispatch "hl.dsp.exec_cmd(\"exec bash $run/start-gui\", { workspace = \"4 silent\", no_initial_focus = true })"
+  wait "$player"
+else
+  "$build/brumm-gui"
+fi

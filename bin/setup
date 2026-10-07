@@ -51,6 +51,13 @@ trap 'rm -rf "$stage"' EXIT
 echo "building brumm"
 go build -trimpath -ldflags "$ldflags" -o "$stage/brumm" .
 if command -v qmake6 >/dev/null; then
+  if command -v pacman >/dev/null && ! pacman -Q qt6-multimedia >/dev/null 2>&1; then
+    if (( EUID == 0 )); then
+      pacman -S --needed --noconfirm qt6-multimedia
+    else
+      sudo pacman -S --needed --noconfirm qt6-multimedia
+    fi
+  fi
   echo "building the window"
   bin/build-gui "$stage"
 else

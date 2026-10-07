@@ -100,15 +100,17 @@ type footHit struct {
 
 // geometry records where things were drawn, for mouse hit-testing.
 type geometry struct {
-	list, crumb, search, divider                   rect
-	tabs                                           [numSections]rect
-	prev, play, next, shuffle, repeat, volume, bar rect
-	artist, album                                  rect          // under the now-playing title
-	upnext                                         [nextMax]rect // the covers coming up (upnext.go)
-	upsongs                                        rect          // or the songs, one row each
-	options                                        rect          // the options menu
-	foot                                           []footHit
-	optRow0                                        int // its first row
+	list, crumb, search, divider                          rect
+	tabs                                                  [numSections]rect
+	prev, play, next, shuffle, repeat, queue, volume, bar rect
+	artist, album                                         rect          // under the now-playing title
+	upnext                                                [nextMax]rect // the covers coming up (upnext.go)
+	upsongs                                               rect          // or the songs, one row each
+	options                                               rect          // the options menu
+	foot                                                  []footHit
+	cards                                                 []cardHit
+	nowPlaying                                            rect
+	optRow0                                               int // its first row
 }
 
 func (m *Model) View() tea.View {
@@ -139,6 +141,8 @@ func (m *Model) View() tea.View {
 	case m.full && m.vizList:
 		v.Content = m.overlay(content, m.vizListBox())
 	case m.full:
+	case m.featureForm != nil:
+		v.Content = m.overlay(content, m.featureBox())
 	case m.fb != nil:
 		v.Content = m.overlay(content, m.feedbackBox())
 	case m.upd != nil:
@@ -178,7 +182,22 @@ func (m *Model) render() string {
 	pad := strings.Repeat(" ", margin)
 	lines := []string{""}
 	navW, colW, coverH := m.layout(inner, bodyH)
-	if colW == 0 {
+	if m.discovering() {
+		dockH := min(8, bodyH/2)
+		nav := strings.Split(m.nav(inner, bodyH-dockH, margin, bodyTop), "\n")
+		dockW := colW
+		if dockW == 0 {
+			dockW = inner
+		}
+		dockX := inner - dockW
+		dock := m.stage(dockW, 0, dockH, margin+dockX, bodyTop+bodyH-dockH)
+		for i := range dock {
+			dock[i] = strings.Repeat(" ", dockX) + dock[i]
+		}
+		for _, l := range append(nav, dock...) {
+			lines = append(lines, pad+l)
+		}
+	} else if colW == 0 {
 		mini := m.miniPlayer(inner)
 		body := lipgloss.JoinVertical(lipgloss.Left, append([]string{m.nav(inner, bodyH-len(mini), margin, bodyTop)}, mini...)...)
 		for _, l := range strings.Split(body, "\n") {
@@ -322,12 +341,13 @@ func (m *Model) nav(w, h, x, y int) string {
 	// tighter when the list is narrow, and only icons for the inactive
 	// ones when even that does not fit.
 	sep, icons := 3, false
-	names := strings.Join(sectionNames, "")
+	navNames := sectionNames[:secQueue]
+	names := strings.Join(navNames, "")
 	digits := 0 // "1 " before each tab while keytips show
 	if m.showTips() {
-		digits = 2 * len(sectionNames)
+		digits = 2 * len(navNames)
 	}
-	switch n := len(sectionNames) - 1; {
+	switch n := len(navNames) - 1; {
 	case len(names)+digits+3*n <= inner-2:
 	case len(names)+digits+2*n <= inner-2:
 		sep = 2
@@ -336,7 +356,17 @@ func (m *Model) nav(w, h, x, y int) string {
 	}
 	var tabs []string
 	tx := tx0
-	for i, name := range sectionNames {
+	for i, name := range navNames {
+		if section(i) == secSearch && tx+15 < x+w-1 {
+			style := sDim
+			if m.playerView {
+				style = sHere.Bold(true)
+			}
+			label := "♪ Now Playing"
+			tabs = append(tabs, style.Render(label))
+			m.geo.nowPlaying = rect{tx, y + 1, tx + 13, y + 2}
+			tx += 13 + sep
+		}
 		active := section(i) == m.section
 		if icons && !active {
 			name = sectionIcons[i]
@@ -383,44 +413,48 @@ func (m *Model) nav(w, h, x, y int) string {
 		lines = append(lines, msg(sDim.Render("nothing here"))...)
 	default:
 		head = len(lines) // list rows below are fitted as they are built
-		v.off = scroll(v.sel, v.off, rows)
-		m.geo.list = rect{x + 1, top, x + w - 1, top + rows}
-		// Lists of playlists, albums and artists are short names with room
-		// to spare: the right side shows a card for the selected one.
-		var card []string // the selected item's card is on the stage now
-		cw := 0
-		listW := inner
-		if card != nil {
-			listW = inner - cw - 3
-		}
-		f := &m.fr
-		f.v, f.off, f.sel, f.listW, f.inner = v, v.off, v.sel, listW, inner
-		for i := v.off; i < v.off+rows; i++ {
-			line := ""
-			if i < len(v.rows) {
-				eq, mq := m.eqShown, m.marquee
-				m.eqShown, m.marquee = false, false
-				line = m.row(v, i, listW)
-				if m.eqShown || m.marquee { // it moves by itself: a patch draws it again
-					m.fr.live = append(m.fr.live, liveRow{1 + len(lines), i, m.eqShown, m.marquee}) // under the box's top border
-				}
-				m.eqShown, m.marquee = m.eqShown || eq, m.marquee || mq
-			} else if card == nil {
-				break
-			}
+		if m.discovering() {
+			lines = append(lines, m.discoveryRows(inner, rows, x+1, top)...)
+		} else {
+			v.off = scroll(v.sel, v.off, rows)
+			m.geo.list = rect{x + 1, top, x + w - 1, top + rows}
+			// Lists of playlists, albums and artists are short names with room
+			// to spare: the right side shows a card for the selected one.
+			var card []string // the selected item's card is on the stage now
+			cw := 0
+			listW := inner
 			if card != nil {
-				c := ""
-				if j := i - v.off; j < len(card) {
-					c = card[j]
-				}
-				if c == "" {
-					c = strings.Repeat(" ", cw)
-				}
-				line = fit(line, listW) + "   " + c // card lines are cw wide
-			} else {
-				line = fit(line, inner)
+				listW = inner - cw - 3
 			}
-			lines = append(lines, line)
+			f := &m.fr
+			f.v, f.off, f.sel, f.listW, f.inner = v, v.off, v.sel, listW, inner
+			for i := v.off; i < v.off+rows; i++ {
+				line := ""
+				if i < len(v.rows) {
+					eq, mq := m.eqShown, m.marquee
+					m.eqShown, m.marquee = false, false
+					line = m.row(v, i, listW)
+					if m.eqShown || m.marquee { // it moves by itself: a patch draws it again
+						m.fr.live = append(m.fr.live, liveRow{1 + len(lines), i, m.eqShown, m.marquee}) // under the box's top border
+					}
+					m.eqShown, m.marquee = m.eqShown || eq, m.marquee || mq
+				} else if card == nil {
+					break
+				}
+				if card != nil {
+					c := ""
+					if j := i - v.off; j < len(card) {
+						c = card[j]
+					}
+					if c == "" {
+						c = strings.Repeat(" ", cw)
+					}
+					line = fit(line, listW) + "   " + c // card lines are cw wide
+				} else {
+					line = fit(line, inner)
+				}
+				lines = append(lines, line)
+			}
 		}
 	}
 
@@ -756,7 +790,7 @@ func (m *Model) helpLines() []stageLine {
 		name string
 		keys [][2]string
 	}{
-		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"← → tab 1–8", "sections"}, {"/", "filter the list; tab searches all of Apple Music (or paste a link)"}, {"a A", "the song's album / artist (or click them)"}, {"c", "go to what's playing"}}},
+		{"browse", [][2]string{{"↑↓ jk", "move"}, {"enter l", "open / play"}, {"esc h", "back"}, {"← → tab 1–9", "sections"}, {"/", "filter the list; tab searches all of Apple Music (or paste a link)"}, {"a A", "the song's album / artist (or click them)"}, {"c", "go to what's playing"}}},
 		{"play", [][2]string{{"space", "play / pause"}, {"hold space  O", "preview the selected song"}, {"n p", "next / previous (p restarts after 3 s)"}, {"R", "radio: a station from the song or artist"}, {"z Z", "add to queue / play next"}, {"shift ← →", "seek 10 s"}, {"s", "shuffle"}, {"r", "repeat off / all / one"}, {"+ - m", "volume, mute"}}},
 		{"library", [][2]string{{"* d", "love / dislike"}, {"i", "add to your library"}, {"P", "add to a playlist, or a new one"}, {"y", "copy the song's link"}}},
 		{"brumm", [][2]string{{"?", "this list (keys on the buttons: in the options)"}, {"o", "options: covers, autoplay and more"}, {"f", "fullscreen visualizer (tab: next, v: all styles, a: auto-change, F: frame rate)"}, {"[ ]", "narrower / wider list"}, {"g", "go over to the gui (and g there comes back)"}, {"Q", "close, music keeps playing"}, {"q", "quit: stop the music"}, {"shift+L", "sign in again"}, {"U", "look for an update, install it"}, {"!", "send feedback: a new issue on GitHub"}}},

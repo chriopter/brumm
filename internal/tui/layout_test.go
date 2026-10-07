@@ -88,7 +88,7 @@ func TestControlsMinWidth(t *testing.T) {
 		r    rect
 		icon string
 	}{"play": {m.geo.play, icPlay}, "prev": {m.geo.prev, icPrev}, "next": {m.geo.next, icNext},
-		"shuffle": {m.geo.shuffle, icShuffle}, "repeat": {m.geo.repeat, icRepeat}, "volume": {m.geo.volume, icVolume}} {
+		"shuffle": {m.geo.shuffle, icShuffle}, "repeat": {m.geo.repeat, icRepeat}, "queue": {m.geo.queue, icQueue}, "volume": {m.geo.volume, icVolume}} {
 		r := want.r
 		if r.x0 < b.x0 || r.x1 > b.x1 || !strings.Contains(at(r), want.icon) {
 			t.Fatalf("%s at %v reads %q", name, r, at(r))

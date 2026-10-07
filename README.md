@@ -2,10 +2,13 @@
 
 <img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
 
-**Apple Music for [Omarchy](https://omarchy.org) with GUI & TUI**
+**Apple Music for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
 - 🎵 Library, catalog, search as you type
-- 🏠 Home: recent, heavy rotation, picks, charts
+- 🏠 Home: recent, heavy rotation, picks
+- 🧭 Explore: charts, genres, videos, countries
+- ❤️ Favorites, Replay and playlist folders
+- 🎬 Music video previews in the GUI
 - 📻 Radio: your station, live, any song
 - 🎤 Artists: top songs, releases, similar ones
 - ♥ Love, dislike, library, playlists
@@ -23,11 +26,18 @@
 curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
 ```
 
+Music-video previews need Qt 6 Multimedia. The installer adds
+`qt6-multimedia` on Omarchy and Arch Linux; install your distribution's
+Qt 6 Multimedia QML package on other Linux systems.
+
 ![brumm in the terminal](docs/tui.webp)
 TUI
 
 ![brumm as a window](docs/gui.webp)
 GUI
+
+![Explore with covers and the glass player](docs/release-1.0.0.webp)
+Explore
 
 ![the visualizer, terminal and window](docs/visualizer.webp)
 Visuals
@@ -38,7 +48,7 @@ Visuals
 |---|---|
 | <kbd>enter</kbd> | play / open |
 | <kbd>space</kbd> | pause · hold to preview |
-| <kbd>←</kbd> <kbd>→</kbd> <kbd>1</kbd>–<kbd>8</kbd> | sections |
+| <kbd>←</kbd> <kbd>→</kbd> <kbd>1</kbd>–<kbd>9</kbd> | sections |
 | <kbd>/</kbd> | filter here · <kbd>tab</kbd> search everywhere |
 | <kbd>R</kbd> | radio from song or artist |
 | <kbd>*</kbd> <kbd>d</kbd> <kbd>i</kbd> <kbd>P</kbd> | love · dislike · library · playlist |

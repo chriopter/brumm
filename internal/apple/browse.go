@@ -121,9 +121,25 @@ func (c *Client) Home() ([]Shelf, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !recent.empty() {
+		recent.Items = append(recent.Items, featureLink("More recently played", "/v1/me/recent/played?limit=25"))
+	}
+	if !songs.empty() {
+		songs.Items = append(songs.Items, featureLink("More recently played songs", "/v1/me/recent/played/tracks?types=songs,library-songs&limit=25"))
+	}
+	if !rotation.empty() {
+		rotation.Items = append(rotation.Items, featureLink("More heavy rotation", "/v1/me/history/heavy-rotation?limit=25"))
+	}
+	if !added.empty() {
+		added.Items = append(added.Items, featureLink("More recently added", "/v1/me/library/recently-added?limit=25"))
+	}
 	browse := Shelf{Title: "Browse", Items: []Item{{Kind: KindShelf, ID: "charts", Name: "Top charts", Catalog: true}}}
+	personal := Shelf{Title: "Your music", Items: []Item{
+		featureLink("Favorites", "app:favorites"), featureLink("Your Replay", "app:replay"),
+		featureLink("Playlist folders", "app:folders"),
+	}}
 	var out []Shelf
-	for _, s := range append(append([]Shelf{recent, songs, rotation, added}, recs...), browse) {
+	for _, s := range append(append([]Shelf{personal, recent, songs, rotation, added}, recs...), browse) {
 		if !s.empty() {
 			out = append(out, s)
 		}
@@ -257,6 +273,9 @@ var artistViews = []struct{ view, title string }{
 	{"compilation-albums", "Compilations"},
 	{"appears-on-albums", "Appears on"},
 	{"featured-playlists", "Playlists"},
+	{"featured-albums", "Featured albums"},
+	{"top-music-videos", "Music videos"},
+	{"featured-music-videos", "Featured videos"},
 	{"similar-artists", "Similar artists"},
 }
 
@@ -289,6 +308,7 @@ func (c *Client) Artist(it Item) ([]Shelf, error) {
 					Title string `json:"title"`
 				} `json:"attributes"`
 				Data []resource `json:"data"`
+				Next string     `json:"next"`
 			} `json:"views"`
 			Relationships struct {
 				Station struct {
@@ -318,6 +338,9 @@ func (c *Client) Artist(it Item) ([]Shelf, error) {
 			s.Title = view.Attributes.Title
 		}
 		s.Items, s.Tracks = mixed(view.Data)
+		if view.Next != "" {
+			s.Items = append(s.Items, featureLink("More "+v.title, view.Next))
+		}
 		if !s.empty() {
 			out = append(out, s)
 		}
@@ -357,19 +380,44 @@ func (c *Client) Search(term string) ([]Shelf, error) {
 			var doc struct {
 				Results struct {
 					Suggestions []struct {
-						Kind string `json:"kind"`
-						Term string `json:"searchTerm"`
-						Show string `json:"displayTerm"`
+						Kind    string    `json:"kind"`
+						Content *resource `json:"content"`
+						Term    string    `json:"searchTerm"`
+						Show    string    `json:"displayTerm"`
 					} `json:"suggestions"`
 				} `json:"results"`
 			}
-			q := url.Values{"term": {term}, "kinds": {"terms"}, "limit": {"5"}}
+			q := url.Values{"term": {term}, "kinds": {"terms,topResults"}, "limit": {"5"}}
 			_, err := c.get(c.catalogPath("/search/suggestions?"+q.Encode()), &doc)
 			suggest = Shelf{Title: "Suggestions"}
 			for _, s := range doc.Results.Suggestions {
+				if s.Content != nil {
+					its, ts := mixed([]resource{*s.Content})
+					suggest.Items = append(suggest.Items, its...)
+					suggest.Tracks = append(suggest.Tracks, ts...)
+				}
 				if s.Kind == "terms" && s.Term != "" && !strings.EqualFold(s.Term, term) {
 					suggest.Items = append(suggest.Items, Item{Kind: KindTerm, ID: s.Term, Name: s.Term})
 				}
+			}
+			var hints struct {
+				Results struct {
+					Terms []string `json:"terms"`
+				} `json:"results"`
+			}
+			_, hintErr := c.get(c.catalogPath("/search/hints?"+url.Values{"term": {term}, "limit": {"5"}}.Encode()), &hints)
+			seen := map[string]bool{strings.ToLower(term): true}
+			for _, it := range suggest.Items {
+				seen[strings.ToLower(it.Name)] = true
+			}
+			for _, hint := range hints.Results.Terms {
+				if !seen[strings.ToLower(hint)] {
+					suggest.Items = append(suggest.Items, Item{Kind: KindTerm, ID: hint, Name: hint})
+					seen[strings.ToLower(hint)] = true
+				}
+			}
+			if errors.Is(hintErr, ErrUnauthorized) {
+				return hintErr
 			}
 			return err
 		},
@@ -377,7 +425,7 @@ func (c *Client) Search(term string) ([]Shelf, error) {
 			var doc struct {
 				Results map[string]page `json:"results"`
 			}
-			q := url.Values{"term": {term}, "types": {"songs,albums,artists,playlists,stations"},
+			q := url.Values{"term": {term}, "types": {"songs,albums,artists,playlists,stations,music-videos,activities,curators,apple-curators,record-labels"},
 				"limit": {"15"}, "with": {"topResults"}}
 			_, err := c.get(c.catalogPath("/search?"+q.Encode()), &doc)
 			top = Shelf{Title: "Top results"}
@@ -385,9 +433,13 @@ func (c *Client) Search(term string) ([]Shelf, error) {
 			for _, k := range []struct{ typ, title string }{
 				{"songs", "Songs"}, {"albums", "Albums"}, {"artists", "Artists"},
 				{"playlists", "Playlists"}, {"stations", "Stations"},
+				{"music-videos", "Music videos"}, {"activities", "Activities"}, {"curators", "Curators"}, {"apple-curators", "Apple curators"}, {"record-labels", "Record labels"},
 			} {
 				s := Shelf{Title: k.title}
 				s.Items, s.Tracks = mixed(doc.Results[k.typ].Data)
+				if next := doc.Results[k.typ].Next; next != "" {
+					s.Items = append(s.Items, featureLink("More "+k.title, next))
+				}
 				byKind = append(byKind, s)
 			}
 			return err
@@ -397,11 +449,14 @@ func (c *Client) Search(term string) ([]Shelf, error) {
 				Results map[string]page `json:"results"`
 			}
 			q := url.Values{"term": {term}, "limit": {"10"},
-				"types": {"library-songs,library-albums,library-artists,library-playlists"}}
+				"types": {"library-songs,library-albums,library-artists,library-playlists,library-music-videos"}}
 			_, err := c.get("/v1/me/library/search?"+q.Encode(), &doc)
 			lib = Shelf{Title: "In your library"}
-			for _, typ := range []string{"library-songs", "library-albums", "library-artists", "library-playlists"} {
+			for _, typ := range []string{"library-songs", "library-albums", "library-artists", "library-playlists", "library-music-videos"} {
 				its, trs := mixed(doc.Results[typ].Data)
+				if next := doc.Results[typ].Next; next != "" {
+					its = append(its, featureLink("More library results", next))
+				}
 				lib.Items, lib.Tracks = append(lib.Items, its...), append(lib.Tracks, trs...)
 			}
 			return err

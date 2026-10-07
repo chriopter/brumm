@@ -15,10 +15,12 @@ import (
 // there. The daemon keeps it (CmdPlace) without reading it; the window
 // (gui/qml/Store.qml) writes and reads the same shape.
 type place struct {
-	Section int         `json:"section"`
-	Views   []placeView `json:"views,omitempty"` // the stack above the section's root
-	Sel     placeSel    `json:"sel"`
-	Query   string      `json:"query,omitempty"`
+	Section     int         `json:"section"`
+	SectionName string      `json:"sectionName,omitempty"`
+	PlayerView  bool        `json:"playerView,omitempty"`
+	Views       []placeView `json:"views,omitempty"` // the stack above the section's root
+	Sel         placeSel    `json:"sel"`
+	Query       string      `json:"query,omitempty"`
 }
 
 // placeView is an opened view, enough to open it again.
@@ -39,7 +41,7 @@ type placeMsg struct{ p *place }
 
 // here is the place the player is at.
 func (m *Model) here() place {
-	p := place{Section: int(m.section), Query: m.query}
+	p := place{Section: int(m.section), SectionName: sectionNames[m.section], PlayerView: m.playerView, Query: m.query}
 	for _, v := range m.stack()[1:] {
 		if v.item != nil {
 			p.Views = append(p.Views, placeView{v.key, v.title, v.item})
@@ -95,6 +97,13 @@ func (m *Model) gotPlace(msg placeMsg) tea.Cmd {
 // is not yet.
 func (m *Model) goPlace(p place) tea.Cmd {
 	s := section(max(0, min(p.Section, int(numSections)-1)))
+	for i, name := range sectionNames {
+		if name == p.SectionName {
+			s = section(i)
+			break
+		}
+	}
+	m.playerView = p.PlayerView
 	m.query = p.Query
 	if q := strings.TrimSpace(p.Query); len([]rune(q)) >= 2 {
 		m.stacks[secSearch] = []*view{{title: "Search", key: "search:" + q}}

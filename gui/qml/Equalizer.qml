@@ -32,7 +32,9 @@ Row {
             width: ui.px(3)
             height: Math.round(eq.height * (eq.running ? eq.levels[index] : 0.4))
             anchors.bottom: parent.bottom
-            color: eq.color
+            radius: width / 2
+            color: Qt.alpha(eq.color, 0.85)
+            Behavior on height { enabled: !ui.calm; NumberAnimation { duration: 180; easing.type: Easing.InOutSine } }
         }
     }
 }

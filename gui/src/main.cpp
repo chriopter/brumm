@@ -29,6 +29,11 @@
 
 int main(int argc, char *argv[])
 {
+    const QByteArray desktopRuntime = qgetenv("BRUMM_DESKTOP_RUNTIME");
+    if (!desktopRuntime.isEmpty()) {
+        if (qgetenv("PULSE_SERVER").isEmpty()) qputenv("PULSE_SERVER", "unix:" + desktopRuntime + "/pulse/native");
+        if (qgetenv("PIPEWIRE_RUNTIME_DIR").isEmpty()) qputenv("PIPEWIRE_RUNTIME_DIR", desktopRuntime);
+    }
     QGuiApplication app(argc, argv);
     app.setApplicationName("brumm");
     app.setOrganizationName("brumm");
@@ -101,6 +106,8 @@ int main(int argc, char *argv[])
     ctx->setContextProperty("sansFont", sans);
     // For tests: keys to press once the window is up, as the terminal
     // player names them, separated by spaces.
+    ctx->setContextProperty("livePreview", !qEnvironmentVariable("BRUMM_PREVIEW").isEmpty());
+    ctx->setContextProperty("prototypeMode", !qEnvironmentVariable("BRUMM_PROTOTYPE").isEmpty());
     ctx->setContextProperty("testKeys", qEnvironmentVariable("BRUMM_GUI_KEYS"));
     const QStringList size = qEnvironmentVariable("BRUMM_GUI_SIZE").split('x');
     ctx->setContextProperty("testSize", size.size() == 2 ? QSize(size[0].toInt(), size[1].toInt()) : QSize(0, 0));
@@ -123,19 +130,24 @@ int main(int argc, char *argv[])
     QTimer::singleShot(300, &app, opaque);
     QTimer::singleShot(1500, &app, opaque); // once more, should the window have come late
 
-    // For tests: BRUMM_GUI_CLICKS="x,y x,y …" clicks there, one a quarter
+    // For tests: BRUMM_GUI_CLICKS="x,y right:x,y …" clicks there, one a quarter
     // second, starting a second after the window opens.
     if (const QStringList clicks = qEnvironmentVariable("BRUMM_GUI_CLICKS").split(' ', Qt::SkipEmptyParts); !clicks.isEmpty()) {
         for (int i = 0; i < clicks.size(); i++) {
-            const QStringList xy = clicks[i].split(',');
+            QString click = clicks[i];
+            const bool right = click.startsWith(QStringLiteral("right:"));
+            if (right) click.remove(0, 6);
+            const auto button = right ? Qt::RightButton : Qt::LeftButton;
+            const QStringList xy = click.split(',');
             const QPointF at(xy.value(0).toDouble(), xy.value(1).toDouble());
-            QTimer::singleShot(1000 + 250 * i, &app, [&engine, at] {
+            const int firstClick = qEnvironmentVariableIntValue("BRUMM_GUI_CLICK_MS");
+            QTimer::singleShot((firstClick > 0 ? firstClick : 1000) + 250 * i, &app, [&engine, at, button] {
                 auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0));
                 if (!w)
                     return;
                 for (auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease}) {
-                    QMouseEvent e(type, at, w->mapToGlobal(at), Qt::LeftButton,
-                                  type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton, Qt::NoModifier);
+                    QMouseEvent e(type, at, w->mapToGlobal(at), button,
+                                  type == QEvent::MouseButtonPress ? button : Qt::NoButton, Qt::NoModifier);
                     QCoreApplication::sendEvent(w, &e);
                 }
             });

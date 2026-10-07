@@ -64,7 +64,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Tools
-        run: pacman -Syu --noconfirm --needed base-devel git qt6-base qt6-declarative qt6-shadertools
+        run: pacman -Syu --noconfirm --needed base-devel git qt6-base qt6-declarative qt6-shadertools qt6-multimedia
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -98,6 +98,10 @@ jobs:
         with:
           name: brumm-gui
           path: dist/brumm
+
+      - name: Test
+        if: needs.version.outputs.tag != ''
+        run: go test ./...
 
       - name: Build
         if: needs.version.outputs.tag != ''
