@@ -24,10 +24,10 @@ curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.s
 ```
 
 ![brumm in the terminal](docs/tui.webp)
-GUI
+TUI
 
 ![brumm as a window](docs/gui.webp)
-TUI
+GUI
 
 ![the visualizer, terminal and window](docs/visualizer.webp)
 Visuals
