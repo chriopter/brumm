@@ -1,6 +1,8 @@
 # ʕ•ᴥ•ʔ brumm
 
-**Apple Music for [Omarchy](https://omarchy.org).** Full tracks, your theme's colors — in your terminal *and* as a window.
+<img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
+
+**Apple Music for [Omarchy](https://omarchy.org).** Full tracks in your theme's colors, with a keyboard-friendly TUI and a GUI full of album covers and music visualizers. Explore your library, discover your next favorite album, and switch between terminal and window with <kbd>g</kbd> while the music keeps playing.
 
 ## Install
 
@@ -8,14 +10,9 @@
 curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
 ```
 
-<table>
-<tr>
-<td width="50%"><img src="docs/tui.webp" alt="brumm in the terminal"></td>
-<td width="50%"><img src="docs/gui.webp" alt="brumm as a window"></td>
-</tr>
-</table>
+![brumm in the terminal](docs/tui.webp)
 
-One player, two faces: `brumm --tui` in the terminal, `brumm --gui` as a window lit like the PSP's XMB. <kbd>g</kbd> switches, right where you were; the music never stops.
+![brumm as a window](docs/gui.webp)
 
 ## Features
 
