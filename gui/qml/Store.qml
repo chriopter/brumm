@@ -131,7 +131,8 @@ Item {
         const rows = []
         if (st.status === "logged-out")
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to Apple Music…" }, { sep: true })
-        rows.push({ act: "f", icon: "󰊓", label: "Full-Screen Visualizer" },
+        rows.push({ act: "f", icon: "󰊓", label: "Visualizer" },
+                  { act: "F", icon: "󰊓", label: "Full-Screen Visualizer" },
                   { act: "g", icon: "󰆍", label: "Open in Terminal" },
                   { act: "y", icon: "󰌷", label: "Copy Song Link" },
                   { sep: true }, { heading: "Options" },
@@ -237,6 +238,7 @@ Item {
     // vizKey answers a key while the visualizer shows, as the terminal
     // player's fullKey; false when it is not the visualizer's.
     function vizKey(k) {
+        if (k === "F") { win.toggleVizFullscreen(); return true }
         const n = vizNames.length
         const digit = k.length === 1 && k >= "0" && k <= "9" ? (k === "0" ? 9 : parseInt(k) - 1) : -1
         if (vizList) {
@@ -1479,7 +1481,7 @@ Item {
     // (the sections) and the few keys that mean something everywhere.
     function typesSearch(k) {
         return section === secSearch && stack().length === 1 && !full && k.length === 1 && k > " "
-            && !(k >= "0" && k <= "9") && !"/?ofgqQ".includes(k)
+            && !(k >= "0" && k <= "9") && !"/?ofFgqQ".includes(k)
     }
 
     function key(k) {
@@ -1512,6 +1514,7 @@ Item {
             help = false
             refresh()
             return
+        case "F": return win.toggleVizFullscreen()
         case "f": // it opens on the showpiece
             if (!full) vizShow(0, true)
             full = !full; help = false; vizList = false

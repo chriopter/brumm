@@ -12,7 +12,9 @@ Item {
     id: wall
     property string url
     property real size: ui.px(360)           // the cover playing, three tiles wide
-    readonly property real tile: size / 3
+    // Small stages can shrink the cover to zero. Keep the grid bounded
+    // while it is hidden or resized instead of dividing by that size.
+    readonly property real tile: Math.max(ui.px(40), size / 3)
     readonly property int gap: ui.px(5)
     // Enough tiles to run past every edge; odd counts keep the cover centered.
     // How many tiles: counted from the size once it rests, so dragging the
@@ -93,6 +95,7 @@ Item {
     // get what comes next.
     readonly property var cells: {
         const out = []
+        if (!visible || !roomy) return out
         for (let r = 0; r < rows; r++)
             for (let c = 0; c < cols; c++)
                 if (c < mc || c > mc + 2 || r < mr || r > mr + 2)

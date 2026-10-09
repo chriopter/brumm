@@ -122,6 +122,7 @@ Item {
         }
         Image {
             id: thumb
+            visible: !win.compact
             anchors { left: parent.left; leftMargin: ui.gap; bottom: parent.bottom; bottomMargin: ui.px(18) }
             width: ui.px(48)
             height: width
@@ -131,6 +132,7 @@ Item {
             asynchronous: true
         }
         Column {
+            visible: !win.compact
             anchors { left: thumb.right; leftMargin: ui.px(14); verticalCenter: thumb.verticalCenter }
             width: Math.max(0, Math.min(ui.px(360), (strip.width - transport.width) / 2 - thumb.x - thumb.width - ui.px(34))) // clear of the controls
             Text {
@@ -151,9 +153,10 @@ Item {
         Controls {
             id: transport
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: ui.px(12) }
-            width: Math.min(ui.px(560), strip.width - 2 * ui.px(200)) // clear of the buttons beside it
+            width: win.compact ? Math.max(0, strip.width - ui.px(24)) : Math.min(ui.px(560), strip.width - 2 * ui.px(200)) // clear of the buttons beside it
         }
         Row {
+            visible: !win.compact
             anchors { right: parent.right; rightMargin: ui.gap; verticalCenter: thumb.verticalCenter }
             spacing: ui.px(2)
             Repeater {
