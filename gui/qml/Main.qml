@@ -11,8 +11,29 @@ Window {
     id: win
     width: testSize.width || 1280
     height: testSize.height || 820
-    minimumWidth: 820
-    minimumHeight: 560
+    minimumWidth: 240
+    minimumHeight: 180
+    readonly property bool compact: width < ui.px(820) || height < ui.px(420)
+    property int beforeFullscreen: Window.Windowed
+    function toggleVizFullscreen() {
+        if (visibility === Window.FullScreen) {
+            visibility = beforeFullscreen
+        } else {
+            beforeFullscreen = visibility
+            if (!store.full) store.vizShow(0, true)
+            store.full = true
+            store.help = false
+            store.vizList = false
+            showFullScreen()
+        }
+    }
+    Connections {
+        target: store
+        function onFullChanged() {
+            if (!store.full && win.visibility === Window.FullScreen)
+                win.visibility = win.beforeFullscreen
+        }
+    }
     visible: true
     title: livePreview ? "brumm · API preview · live account" : prototypeMode ? "brumm · API prototype · sample data" : store.st.title ? store.st.title + " · " + store.st.artist + " — brumm" : "brumm"
     color: ui.deep
@@ -187,7 +208,7 @@ Window {
 
     Item {
         id: body
-        anchors { fill: parent; margins: ui.gap; bottomMargin: ui.px(12) }
+        anchors { fill: parent; margins: win.compact ? ui.px(12) : ui.gap; bottomMargin: ui.px(12) }
         // Under a popup, blurred: drawn again only while one shows.
         layer.enabled: win.popup && ui.effects
         layer.effect: MultiEffect { blurEnabled: true; blur: 0.8; blurMax: 40; brightness: -0.12; saturation: -0.2 }
@@ -206,7 +227,7 @@ Window {
         TopNavigation {
             id: topNavigation
             onSearchFinished: keys.forceActiveFocus()
-            visible: true
+            visible: !win.compact
             height: ui.px(44)
             z: 2
             anchors { left: parent.left; right: parent.right; top: parent.top }
@@ -221,6 +242,7 @@ Window {
 
         Browser {
             id: browser
+            visible: !win.compact
             discovery: win.discovering
             onFilterFinished: keys.forceActiveFocus()
             anchors { left: sidebar.right; leftMargin: 0; top: topNavigation.bottom; topMargin: ui.px(14); bottom: footer.top; bottomMargin: ui.px(4) }
@@ -231,7 +253,7 @@ Window {
         // at it offers to move, and a drag sets the list's width.
         MouseArea {
             id: divider
-            visible: !win.discovering
+            visible: !win.discovering && !win.compact
             x: browser.x + browser.width + ui.gap * 0.4
             width: ui.gap * 0.8
             anchors { top: browser.top; bottom: browser.bottom }
@@ -250,16 +272,17 @@ Window {
 
         Stage {
             id: playbackStage
-            compact: win.discovering
+            compact: win.discovering && !win.compact
             readonly property real originalBrowserWidth: Math.round(Math.max(ui.px(160), Math.min(body.width - sidebar.width - ui.px(420), body.width * store.split)))
-            x: originalBrowserWidth + ui.gap * 1.6
-            y: topNavigation.height + ui.px(14)
-            width: body.width - x - ui.gap * 0.6
-            height: footer.y - y - ui.px(4)
+            x: win.compact ? 0 : originalBrowserWidth + ui.gap * 1.6
+            y: win.compact ? 0 : topNavigation.height + ui.px(14)
+            width: body.width - x - (win.compact ? 0 : ui.gap * 0.6)
+            height: (win.compact ? body.height : footer.y - ui.px(4)) - y
         }
 
         Footer {
             id: footer
+            visible: !win.compact
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         }
     }

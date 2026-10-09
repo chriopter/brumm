@@ -20,7 +20,7 @@ Item {
     // the rest, the cover up to most of the width: its neighbours stand
     // in what is left beside it.
     readonly property real coverHeight: store.wall ? Math.max(coverSize, stage.height - info.implicitHeight - ui.px(30)) : Math.round(coverSize * 1.2 + ui.px(4))
-    readonly property int coverSize: Math.max(ui.px(120), Math.min(width * 0.5, ui.px(500), (height - info.implicitHeight - ui.px(56)) / 1.2))
+    readonly property int coverSize: Math.max(0, Math.min(width * 0.5, ui.px(500), (height - info.implicitHeight - ui.px(win.compact ? 24 : 56)) / 1.28))
 
     // A message instead of the stage: starting up, signed out, broken.
     Column {
@@ -61,14 +61,14 @@ Item {
         // The cover in a flow of what played and comes next, or in a wall
         // of covers, as the menu says.
         CoverFlow {
-            visible: !stage.compact && !store.wall
+            visible: !stage.compact && !store.wall && stage.coverSize > 0
             anchors.horizontalCenter: parent.horizontalCenter
             width: stage.width
             size: stage.coverSize
             url: win.artwork
         }
         CoverWall {
-            visible: !stage.compact && store.wall
+            visible: !stage.compact && store.wall && stage.coverSize > 0
             anchors.horizontalCenter: parent.horizontalCenter
             width: stage.width
             height: Math.max(stage.coverSize, stage.height - info.implicitHeight - ui.px(30))
@@ -77,12 +77,12 @@ Item {
         }
 
         Item { visible: stage.compact; width: 1; height: stage.coverHeight }
-        Item { width: 1; height: ui.px(10) }
+        Item { visible: stage.coverSize > 0; width: 1; height: ui.px(10) }
 
         Column {
             id: info
             width: col.width
-            spacing: ui.px(4)
+            spacing: ui.px(win.compact ? 2 : 4)
 
             // The title, and where in the queue it is.
             Item {
@@ -96,7 +96,7 @@ Item {
                     color: ui.bright
                     style: ui.lift
                     styleColor: ui.liftColor
-                    font { family: ui.sans; pixelSize: ui.px(26); weight: Font.DemiBold }
+                    font { family: ui.sans; pixelSize: ui.px(win.compact ? 22 : 26); weight: Font.DemiBold }
                     elide: Text.ElideRight
                 }
                 // Add (to a playlist, the library) and love, glass as the
@@ -146,9 +146,9 @@ Item {
                 }
             }
 
-            Item { width: 1; height: ui.px(16) }
+            Item { visible: !win.compact; width: 1; height: ui.px(16) }
             Progress { width: parent.width }
-            Item { width: 1; height: ui.px(12) }
+            Item { visible: !win.compact; width: 1; height: ui.px(12) }
             Controls { width: parent.width }
         }
     }

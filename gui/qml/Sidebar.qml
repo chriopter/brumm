@@ -17,6 +17,7 @@ Item {
 
     Column {
         id: icons
+        visible: !win.compact
         anchors { horizontalCenter: parent.horizontalCenter; top: menu.bottom; topMargin: ui.px(26) }
         spacing: ui.px(8)
         Repeater {
@@ -90,6 +91,7 @@ Item {
     // Help, a step under the sections: always there to send feedback or
     // report an issue (!).
     Item {
+        visible: !win.compact
         anchors { horizontalCenter: parent.horizontalCenter; top: icons.bottom; topMargin: ui.px(22) }
         width: ui.px(40)
         height: ui.px(38)
