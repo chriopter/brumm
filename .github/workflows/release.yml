@@ -54,9 +54,11 @@ jobs:
           IFS=. read -r major minor patch <<<"${tag#v}"
           echo "tag=v$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
 
-  # The window (gui/, Qt 6 Quick) is built on Arch, against the Qt that
-  # Omarchy runs. It holds no secrets; the release job signs it with the
-  # rest.
+  # Build against Qt 6.11, which Omarchy still ships. Arch's rolling
+  # repositories may already have a newer Qt whose symbols would prevent
+  # the released window from starting on Omarchy. Move this snapshot only
+  # when the oldest supported Omarchy Qt moves too.
+  # The window holds no secrets; the release job signs it with the rest.
   gui:
     needs: version
     if: needs.version.outputs.tag != ''
@@ -64,12 +66,26 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Tools
-        run: pacman -Syu --noconfirm --needed base-devel git qt6-base qt6-declarative qt6-shadertools qt6-multimedia
+        run: |
+          printf 'Server = https://archive.archlinux.org/repos/2026/09/30/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
+          pacman -Syyuu --noconfirm base-devel git qt6-base qt6-declarative qt6-shadertools qt6-multimedia
+          [[ $(qmake6 -query QT_VERSION) == 6.11.* ]] || { echo 'GUI build needs Qt 6.11'; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build
-        run: bin/build-gui dist
+        run: |
+          bin/build-gui dist
+          readelf --version-info dist/brumm-gui | awk '
+            /Name: Qt_6\./ {
+              split($3, version, ".")
+              if (version[2] > 11) {
+                print "GUI requires newer Qt: " $3
+                incompatible = 1
+              }
+            }
+            END { exit incompatible }
+          '
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: brumm-gui
