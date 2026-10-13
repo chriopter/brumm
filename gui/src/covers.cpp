@@ -1,4 +1,5 @@
 #include "covers.h"
+#include "brumm_shared.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -15,7 +16,7 @@
 #include <QThreadPool>
 #include <cmath>
 
-// The covers the terminal player keeps (internal/art): the same folder,
+// The covers the terminal player keeps (crates/brumm/src/art): the same folder,
 // the same names, so what one has fetched the other shows at once.
 static QString cacheDir()
 {
@@ -179,81 +180,21 @@ private:
 QQuickAsyncImageProvider *Covers::provider() { return new Provider(this); }
 
 // ── accent ─────────────────────────────────────────────────────────────
-// The same pick as the terminal player's (internal/tui/accent.go): the
+// The same pick as the terminal player's (crates/brumm-shared/src/accent.rs): the
 // dominant vivid hue, made readable on the background.
-
-static double lum(const QColor &c)
-{
-    auto lin = [](double f) { return f <= 0.03928 ? f / 12.92 : std::pow((f + 0.055) / 1.055, 2.4); };
-    return 0.2126 * lin(c.redF()) + 0.7152 * lin(c.greenF()) + 0.0722 * lin(c.blueF());
-}
-
-static double contrast(const QColor &a, const QColor &b)
-{
-    const double la = lum(a), lb = lum(b);
-    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
-}
-
-static QColor vivid(const QImage &src)
-{
-    const int bins = 24;
-    double w[bins] = {}, sum[bins][3] = {};
-    const QImage img = src.convertToFormat(QImage::Format_RGB32);
-    const int step = std::max(1, std::max(img.width(), img.height()) / 48);
-    int n = 0;
-    for (int y = 0; y < img.height(); y += step) {
-        for (int x = 0; x < img.width(); x += step) {
-            const QColor c = QColor::fromRgb(img.pixel(x, y));
-            n++;
-            const double s = c.hsvSaturationF(), v = c.valueF();
-            if (s < 0.25 || v < 0.2)
-                continue;
-            const int i = int(std::max(0.0f, c.hsvHueF()) * bins) % bins;
-            const double wt = s * s * v;
-            w[i] += wt;
-            sum[i][0] += c.redF() * wt;
-            sum[i][1] += c.greenF() * wt;
-            sum[i][2] += c.blueF() * wt;
-        }
-    }
-    int best = 0;
-    double score = 0;
-    for (int i = 0; i < bins; i++) {
-        const double s = w[(i + bins - 1) % bins] / 2 + w[i] + w[(i + 1) % bins] / 2;
-        if (s > score)
-            best = i, score = s;
-    }
-    if (n == 0 || score < 0.03 * n)
-        return {};
-    double tw = 0, rgb[3] = {};
-    for (int i : {(best + bins - 1) % bins, best, (best + 1) % bins}) {
-        tw += w[i];
-        for (int k = 0; k < 3; k++)
-            rgb[k] += sum[i][k];
-    }
-    const QColor avg = QColor::fromRgbF(float(rgb[0] / tw), float(rgb[1] / tw), float(rgb[2] / tw));
-    return QColor::fromHslF(std::max(0.0f, avg.hslHueF()), std::max(avg.hslSaturationF(), 0.55f), avg.lightnessF());
-}
-
-static QColor readable(QColor c, const QColor &bg)
-{
-    const float h = std::max(0.0f, c.hslHueF()), s = c.hslSaturationF();
-    float l = c.lightnessF();
-    const float dir = contrast(Qt::black, bg) > contrast(Qt::white, bg) ? -0.02f : 0.02f;
-    for (int i = 0; i < 50 && contrast(c, bg) < 4.5 && l > 0 && l < 1; i++) {
-        l = std::clamp(l + dir, 0.0f, 1.0f);
-        c = QColor::fromHslF(h, s, l);
-    }
-    return c;
-}
 
 void Covers::accent(const QString &url, const QColor &bg)
 {
     image(url, [this, url, bg](QImage img) {
         QThreadPool::globalInstance()->start([this, url, bg, img, self = QPointer<Covers>(this)] {
-            QColor c = img.isNull() ? QColor() : vivid(img.scaled(96, 96));
-            if (c.isValid())
-                c = readable(c, bg);
+            QColor c;
+            if (!img.isNull()) {
+                const QImage rgba = img.scaled(96, 96).convertToFormat(QImage::Format_RGBA8888);
+                std::uint32_t rgb = 0;
+                if (brumm_accent(rgba.constBits(), rgba.width(), rgba.height(), rgba.bytesPerLine(),
+                                 bg.rgb() & 0xffffff, &rgb))
+                    c = QColor::fromRgb(rgb);
+            }
             QMetaObject::invokeMethod(self, [this, url, c] { emit accentReady(url, c); });
         });
     });

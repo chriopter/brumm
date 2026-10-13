@@ -9,7 +9,8 @@ export GOCACHE=${GOCACHE:-/tmp/brumm-go-cache}
 build=tmp/prototype-build
 GUI_BUILD="$build" bin/build-gui "$build"
 go build -o "$build/fakedaemon" ./tools/fakedaemon
-go build -o "$build/brumm" .
+cargo build --release --locked -p brumm
+cp "${CARGO_TARGET_DIR:-target}/release/brumm" "$build/brumm"
 run=$(mktemp -d /tmp/brumm-prototype.XXXXXX)
 desktop_runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 export BRUMM_DESKTOP_RUNTIME="$desktop_runtime"

@@ -1,0 +1,12 @@
+[package]
+name = "brumm-shared"
+version = "0.0.0"
+description = "What brumm's terminal player and its window compute alike: the visualizer's listener and a cover's accent color"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+# rlib for the terminal player, staticlib for the window (gui/brumm-gui.pro).
+crate-type = ["rlib", "staticlib"]

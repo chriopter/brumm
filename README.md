@@ -74,6 +74,11 @@ gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 
 ## Development
 
+The daemon and terminal player use Rust; the window uses Qt Quick/QML
+with Rust for shared calculations. Building needs Rust 1.89 or newer,
+Qt 6 and a C++ compiler. Go is used for development fixtures and signing
+tools.
+
 ```sh
 bin/setup     # build and install from this checkout (the window too, with Qt 6)
 bin/dev       # the daemon in the foreground; bin/dev ui / gui for a player
@@ -87,17 +92,26 @@ One background service is the core — music, queue, library, options, sign-in, 
 flowchart TB
   daemon["<b>brumm daemon</b><br/>background service (systemd)<br/>Apple Music · playback · MPRIS · options"]
   daemon -- MPRIS --> bar["<b>bar widget</b><br/>Omarchy top bar"]
-  daemon -- socket --> tui["<b>brumm --tui</b><br/>terminal player (Go)"]
+  daemon -- socket --> tui["<b>brumm --tui</b><br/>terminal player (Rust)"]
   daemon -- socket --> gui["<b>brumm --gui</b><br/>window (Qt Quick)"]
 ```
 
-CPU, share of one core (`bin/bench`):
+CPU, share of one core (median of three 8-second fixture runs;
+terminal visualizer at 30 fps, window paced at 60 Hz):
 
 | | paused | playing | visualizer |
 |---|---|---|---|
-| terminal | 1 % | 3 % | 8 % |
-| window | 0 % | 2 % | 6 % |
+| terminal | 0.25 % | 1.0 % | 1.9 % |
+| window | 0 % | 4.4 % | 4.2 % |
 
-The terminal rebuilds only the lines that changed; the window hands its drawing to the GPU, which these figures leave out.
+The terminal writes only the cells that changed; the window hands its drawing to the GPU. These process measurements exclude the terminal emulator, Chrome and GPU work.
+
+The [Rust migration measurements](benchmarks/rust-migration/comparison.json)
+include the Go baseline, Rust results and ranges for CPU, RSS, startup and
+local control latency. [bin/bench-compare](bin/bench-compare) compares built
+binaries with the same fixture and isolated configuration; it never uses
+the installed music session. TUI RSS fell from 33–39 MiB to 15–16 MiB;
+the daemon without playback fell from 22 MiB to 7.5 MiB. Live Apple Music
+playback still needs verification on this test branch.
 
 Inspired by [vibez](https://github.com/simonepelosi/vibez).

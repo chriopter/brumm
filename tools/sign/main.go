@@ -4,7 +4,7 @@
 //
 // With -new it instead prints a fresh key pair (seed, then public key),
 // both base64. brumm's updater checks releases against the public key
-// compiled into internal/update.
+// compiled into crates/brumm/src/update.
 package main
 
 import (
