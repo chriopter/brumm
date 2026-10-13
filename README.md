@@ -89,21 +89,24 @@ bin/bench     # what the players cost
 One background service is the core — music, queue, library, options, sign-in, where you were. The players only draw, and come and go while the music plays on:
 
 ```text
-                 brumm daemon (Rust / Tokio)
-              Apple Music API, queue, library,
-                 options, sign-in and MPRIS
-                            |
-             Chrome / Widevine / MusicKit JS
-                       audio playback
-
-       daemon -- MPRIS --> Omarchy bar widget
-          |
-          +-- socket --> brumm --tui
-          |              Rust / Ratatui / Crossterm
-          |
-          +-- socket --> brumm --gui
-                         Qt Quick / QML / C++ / GLSL
-                         shared calculations in Rust
++--------------------------------------------------------+
+| brumm daemon  |  Rust / Tokio                          |
+| systemd background service                             |
+|                                                        |
+| Apple Music API / library / queue / sign-in / options  |
++--+-----------------------------------------------------+
+   |
+   +-- playback --> Chrome / Widevine
+   |                MusicKit JS / Web Audio
+   |
+   +-- MPRIS -----> Omarchy bar widget
+   |
+   +-- socket ----> brumm --tui
+   |                Rust / Ratatui / Crossterm
+   |
+   +-- socket ----> brumm --gui
+                    Qt Quick / QML / C++ / GLSL
+                    Rust: cover colors / visualizer analysis
 ```
 
 CPU, share of one core (median of three 8-second fixture runs;
