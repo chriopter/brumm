@@ -15,7 +15,7 @@ path = "src/main.rs"
 brumm-shared = { path = "../brumm-shared" }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 flate2 = "1"
 getrandom = "0.3"
 htmlize = { version = "1.1", features = ["unescape"] }
