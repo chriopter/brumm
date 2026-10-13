@@ -88,12 +88,22 @@ bin/bench     # what the players cost
 
 One background service is the core — music, queue, library, options, sign-in, where you were. The players only draw, and come and go while the music plays on:
 
-```mermaid
-flowchart TB
-  daemon["<b>brumm daemon</b><br/>background service (systemd)<br/>Apple Music · playback · MPRIS · options"]
-  daemon -- MPRIS --> bar["<b>bar widget</b><br/>Omarchy top bar"]
-  daemon -- socket --> tui["<b>brumm --tui</b><br/>terminal player (Rust)"]
-  daemon -- socket --> gui["<b>brumm --gui</b><br/>window (Qt Quick)"]
+```text
+                 brumm daemon (Rust / Tokio)
+              Apple Music API, queue, library,
+                 options, sign-in and MPRIS
+                            |
+             Chrome / Widevine / MusicKit JS
+                       audio playback
+
+       daemon -- MPRIS --> Omarchy bar widget
+          |
+          +-- socket --> brumm --tui
+          |              Rust / Ratatui / Crossterm
+          |
+          +-- socket --> brumm --gui
+                         Qt Quick / QML / C++ / GLSL
+                         shared calculations in Rust
 ```
 
 CPU, share of one core (median of three 8-second fixture runs;
@@ -101,8 +111,13 @@ terminal visualizer at 30 fps, window paced at 60 Hz):
 
 | | paused | playing | visualizer |
 |---|---|---|---|
-| terminal | 0.25 % | 1.0 % | 1.9 % |
-| window | 0 % | 4.4 % | 4.2 % |
+| terminal, before (Go) | 1.25 % | 2.75 % | 7.49 % |
+| terminal, now (Rust) | 0.25 % | 1.00 % | 1.87 % |
+| window, before | 0 % | 5.12 % | 4.62 % |
+| window, now | 0 % | 4.37 % | 4.24 % |
+
+The terminal used 64% less CPU while playing and 75% less with its
+visualizer. The window's ranges overlap; these runs show no clear gain.
 
 The terminal writes only the cells that changed; the window hands its drawing to the GPU. These process measurements exclude the terminal emulator, Chrome and GPU work.
 
@@ -111,7 +126,8 @@ include the Go baseline, Rust results and ranges for CPU, RSS, startup and
 local control latency. [bin/bench-compare](bin/bench-compare) compares built
 binaries with the same fixture and isolated configuration; it never uses
 the installed music session. TUI RSS fell from 33–39 MiB to 15–16 MiB;
-the daemon without playback fell from 22 MiB to 7.5 MiB. Live Apple Music
-playback still needs verification on this test branch.
+the daemon without playback fell from 22 MiB to 7.5 MiB. Apple Music
+search, DRM playback, seeking, pause/resume and the queue were also
+verified with a real account in an isolated session.
 
 Inspired by [vibez](https://github.com/simonepelosi/vibez).
