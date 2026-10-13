@@ -12,13 +12,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-command -v go >/dev/null || { echo "brumm needs Go: omarchy pkg add go" >&2; exit 1; }
+command -v cargo >/dev/null || { echo "building brumm needs Rust (cargo)" >&2; exit 1; }
 
-ldflags="-s -w -X main.version=dev-$(git describe --tags --always --dirty 2>/dev/null || echo local)"
+build_version="dev-$(git describe --tags --always --dirty 2>/dev/null || echo local)"
 # BRUMM_TOKEN_FROM names another brumm to take the token from, e.g. an
 # unpacked release, when the installed one has none.
 installed="${BRUMM_TOKEN_FROM:-${XDG_BIN_HOME:-$HOME/.local/bin}/brumm}"
 if [[ -n ${APPLE_PRIVATE_KEY:-} ]]; then
+  command -v go >/dev/null || { echo "signing a developer token needs Go" >&2; exit 1; }
   token=$(go run ./tools/devtoken)
   echo "embedded a new developer token (valid six months)"
 elif [[ -x $installed ]]; then
@@ -42,14 +43,11 @@ elif [[ -x $installed ]]; then
     echo "  reinstall a release, or run with BRUMM_TOKEN_FROM=/path/to/release/brumm" >&2
   fi
 fi
-if [[ -n ${token:-} ]]; then
-  ldflags+=" -X github.com/chriopter/brumm/internal/config.DevToken=$token"
-fi
-
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 echo "building brumm"
-go build -trimpath -ldflags "$ldflags" -o "$stage/brumm" .
+BRUMM_VERSION="$build_version" BRUMM_EMBED_DEV_TOKEN="${token:-}" cargo build --release --locked -p brumm
+cp "${CARGO_TARGET_DIR:-target}/release/brumm" "$stage/brumm"
 if command -v qmake6 >/dev/null; then
   if command -v pacman >/dev/null && ! pacman -Q qt6-multimedia >/dev/null 2>&1; then
     if (( EUID == 0 )); then

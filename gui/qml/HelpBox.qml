@@ -5,7 +5,7 @@ Box {
     title: "keys"
     boxWidth: ui.px(780)
 
-    // The terminal player's list (internal/tui/view.go helpLines), in the
+    // The terminal player's list (crates/brumm/src/tui/view.rs help_lines), in the
     // same groups and order; only the window's own keys differ.
     readonly property var groups: [
         ["Browse", [["↑↓  j k", "move"], ["enter  l  →", "open · play"], ["esc  h", "back"], ["←  then ↑↓", "the sections"],

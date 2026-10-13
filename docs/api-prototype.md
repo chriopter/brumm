@@ -60,7 +60,7 @@ layout position. Floating or grouped windows use a normal launch.
 
 ## Verified locally
 
-The Go test suite passes, including typed favorite requests, folder parent
+The prototype's Go test suite passed, including typed favorite requests, folder parent
 relationships, root-folder metadata, sparse Replay resources, encoded catalog
 queries, shared navigation and Hyprland handoff selection.
 

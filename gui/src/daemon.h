@@ -1,6 +1,6 @@
 // Daemon is the GUI's connection to the brumm daemon: newline-delimited
 // JSON over its unix socket, the same protocol the terminal player speaks
-// (internal/ipc). Requests carry an id and get one answer back; state and
+// (crates/brumm/src/ipc.rs). Requests carry an id and get one answer back; state and
 // library changes arrive on their own.
 #pragma once
 

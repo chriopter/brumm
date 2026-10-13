@@ -3,13 +3,10 @@
 # Credentials, socket and caches remain private in a separate runtime.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if ! go version >/dev/null 2>&1 && command -v mise >/dev/null; then
-  export PATH="$(mise where go)/bin:$PATH"
-fi
-export GOCACHE=${GOCACHE:-/tmp/brumm-go-cache}
 build=tmp/live-preview-build
 GUI_BUILD="$build" bin/build-gui "$build"
-go build -o "$build/brumm" .
+cargo build --release --locked -p brumm
+cp "${CARGO_TARGET_DIR:-target}/release/brumm" "$build/brumm"
 run=$(mktemp -d /tmp/brumm-live-preview.XXXXXX)
 chmod 700 "$run"
 python3 - "$run" <<'PY'

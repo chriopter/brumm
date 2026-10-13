@@ -9,12 +9,14 @@
 #include <cmath>
 
 VizAudio::VizAudio(QObject *parent)
-    : QObject(parent), m_in(Bands, 0), m_wave(WaveN, 0), m_spec(Bands, 0), m_sm(Bands, 0), m_peak(Bands, 0),
-      m_vel(Bands, 0), m_hold(Bands, 0), m_tex(Bands, 4, QImage::Format_RGBA8888), m_waveTex(WaveN, 1, QImage::Format_RGBA8888)
+    : QObject(parent), m_listener(brumm_listener_new()), m_in(Bands, 0), m_wave(WaveN, 0),
+      m_tex(Bands, 4, QImage::Format_RGBA8888), m_waveTex(WaveN, 1, QImage::Format_RGBA8888)
 {
     m_tex.fill(Qt::black);
     m_waveTex.fill(QColor(128, 0, 0));
 }
+
+VizAudio::~VizAudio() { brumm_listener_free(m_listener); }
 
 void VizAudio::feed(const QVector<int> &spectrum, const QVector<int> &wave)
 {
@@ -28,60 +30,33 @@ void VizAudio::feed(const QVector<int> &spectrum, const QVector<int> &wave)
 
 void VizAudio::tick(double dt, bool playing)
 {
-    dt = std::clamp(dt, 0.0, 0.1);
-    m_t += dt;
-    m_live += ((playing ? 1.0 : 0.0) - m_live) * std::min(1.0, dt * 4);
-    // Paused: a low rolling hill that swells and settles over six seconds.
-    const double breath = 0.5 - 0.5 * std::cos(m_t * 2 * M_PI / 6);
-    const double up = std::min(1.0, dt * 30), down = std::min(1.0, dt * 9);
-    const int nl = std::max(1, Bands / 8);
-    double bass = 0, mid = 0, high = 0, level = 0;
-    for (int i = 0; i < Bands; i++) {
-        double x = m_in[i];
-        if (m_live < 0.999) {
-            const double u = (i + 0.5) / Bands;
-            const double idle = (0.03 + 0.09 * breath) * (1 - 0.6 * u) * (0.7 + 0.3 * std::sin(u * 9 - m_t * 0.7));
-            x = idle + (x - idle) * m_live;
-        }
-        m_spec[i] = x;
-        m_sm[i] += (x - m_sm[i]) * (x > m_sm[i] ? up : down);
-        // peaks fall with gravity after a short hold
-        if (m_hold[i] > 0)
-            m_hold[i] -= dt;
-        else {
-            m_vel[i] += 1.8 * dt;
-            m_peak[i] -= m_vel[i] * dt;
-        }
-        if (x >= m_peak[i])
-            m_peak[i] = x, m_vel[i] = 0, m_hold[i] = 0.35;
-        level += x;
-        (i < nl ? bass : i < Bands / 2 ? mid : high) += x;
-    }
-    bass /= nl;
-    mid /= std::max(1, Bands / 2 - nl);
-    high /= std::max(1, Bands - Bands / 2);
-    level /= Bands;
-    const double e = std::min(1.0, dt * 12);
-    m_bass += (bass - m_bass) * e;
-    m_mid += (mid - m_mid) * e;
-    m_high += (high - m_high) * e;
-    m_level += (level - m_level) * e;
-    // A kick: the bass well above its recent average while rising, at
-    // most five a second.
-    m_since += dt;
-    if (dt > 0) {
-        if (playing && bass > m_avg * 1.3 + 0.03 && bass > m_prev && m_since > 0.2)
-            m_beat = 1, m_kicks++, m_since = 0;
-        m_avg += (bass - m_avg) * std::min(1.0, dt * 2.5);
-        m_prev = bass;
-    }
-    m_beat *= std::exp(-dt * 6);
+    brumm_listener_tick(m_listener, m_in.constData(), m_in.size(), dt, playing);
+    BrummLevels levels{};
+    brumm_listener_levels(m_listener, &levels);
+    m_t = levels.t;
+    m_live = levels.live;
+    m_bass = levels.bass;
+    m_mid = levels.mid;
+    m_high = levels.high;
+    m_level = levels.level;
+    m_beat = levels.beat;
+    m_since = levels.since;
+    m_kicks = levels.kicks;
+    std::size_t ns = 0, nsm = 0, np = 0;
+    const double *spec = brumm_listener_bands(m_listener, Spectrum, &ns);
+    const double *sm = brumm_listener_bands(m_listener, Smoothed, &nsm);
+    const double *peak = brumm_listener_bands(m_listener, Peaks, &np);
+    // The listener has as many bands as it was fed (m_in's); anything else
+    // would read past them.
+    constexpr std::size_t n = Bands;
+    if (!spec || !sm || !peak || ns < n || nsm < n || np < n)
+        return;
 
     auto px = [](double v) { return uchar(std::clamp(v, 0.0, 1.0) * 255); };
     for (int i = 0; i < Bands; i++) {
         uchar *r0 = m_tex.scanLine(0) + i * 4, *r1 = m_tex.scanLine(1) + i * 4, *r2 = m_tex.scanLine(2) + i * 4,
               *r3 = m_tex.scanLine(3) + i * 4;
-        r0[0] = px(m_spec[i]), r1[0] = px(m_sm[i]), r2[0] = px(m_peak[i]);
+        r0[0] = px(spec[i]), r1[0] = px(sm[i]), r2[0] = px(peak[i]);
         r3[0] = px(0.5 + 0.5 * m_wave[i * WaveN / Bands] * m_live);
         r0[3] = r1[3] = r2[3] = r3[3] = 255;
     }
@@ -98,8 +73,10 @@ QVariantList VizAudio::smList() const
 {
     QVariantList out;
     out.reserve(Bands);
-    for (double v : m_sm)
-        out << v;
+    std::size_t count = 0;
+    const double *sm = brumm_listener_bands(m_listener, Smoothed, &count);
+    for (int i = 0; i < Bands; ++i)
+        out << (i < int(count) ? sm[i] : 0.0);
     return out;
 }
 

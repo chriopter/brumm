@@ -1,6 +1,6 @@
 // VizEffect is one visualizer style: the window's visualizer (FullStage)
 // loads one per style from qml/viz/<Name>.qml, each named and built as the
-// terminal player's style of that name (internal/tui/viz_*.go), drawn as
+// terminal player's style of that name (crates/brumm/src/tui/viz), drawn as
 // the window draws: shaders, light, color.
 //
 // What a style has to work with:

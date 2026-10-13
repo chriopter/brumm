@@ -1,4 +1,4 @@
-// Store is the player's mind, the terminal player's model (internal/tui)
+// Store is the player's mind, the terminal player's model (crates/brumm/src/tui)
 // in QML: one navigation stack per section, what plays, and every key.
 // The window's parts only draw what it holds.
 import QtQuick
@@ -727,7 +727,7 @@ Item {
     // Where the player is — the section, the views opened in it, the
     // selected row and the search — so that g opens the other one right
     // there. The daemon keeps it without reading it; the terminal player
-    // (internal/tui/place.go) writes and reads the same shape:
+    // (crates/brumm/src/tui/place.rs) writes and reads the same shape:
     //   {section, views: [{key, title, item}], sel: {id, index}, query}
 
     property bool placing: true // asking for a place the terminal left: no resuming till it answers

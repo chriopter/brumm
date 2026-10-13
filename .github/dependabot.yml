@@ -2,6 +2,10 @@
 # requires for the scheduled release workflow to keep running.
 version: 2
 updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
   - package-ecosystem: gomod
     directory: /
     schedule:

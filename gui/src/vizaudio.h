@@ -1,5 +1,5 @@
 // VizAudio is what every visualizer style listens to, as in the terminal
-// player (internal/tui/viz.go, vizAudio): the spectrum blended with an
+// player (crates/brumm-shared/src/listen.rs): the spectrum blended with an
 // idle breath while paused, a smoothed copy, falling peaks, band energies
 // and a kick detector. It is ticked once a frame while the visualizer
 // shows, and hands the bands to the shaders as a small texture
@@ -11,6 +11,8 @@
 #include <QPointer>
 #include <QQuickItem>
 #include <QVector>
+
+#include "brumm_shared.h"
 
 class VizAudio : public QObject {
     Q_OBJECT
@@ -31,6 +33,7 @@ public:
     static constexpr int WaveN = 256;
 
     explicit VizAudio(QObject *parent = nullptr);
+    ~VizAudio() override;
 
     // feed takes a frame from the daemon: spectrum 0–255, wave −100–100.
     void feed(const QVector<int> &spectrum, const QVector<int> &wave);
@@ -50,9 +53,9 @@ signals:
 
 private:
     double m_t = 0, m_live = 0, m_bass = 0, m_mid = 0, m_high = 0, m_level = 0, m_beat = 0, m_since = 0;
-    double m_avg = 0, m_prev = 0;
     int m_kicks = 0, m_frame = 0;
-    QVector<double> m_in, m_wave, m_spec, m_sm, m_peak, m_vel, m_hold;
+    BrummListener *m_listener;
+    QVector<double> m_in, m_wave;
     QImage m_tex, m_waveTex;
 };
 

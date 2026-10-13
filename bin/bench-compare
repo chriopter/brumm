@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Compare built players/daemons against identical isolated fixtures.
+
+bin/bench-compare --label go --player /path/brumm --gui /path/brumm-gui \
+    --fixture /path/fakedaemon --output /path/results.json
+No installed services, credentials or desktop D-Bus session are used.
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import pty
+import selectors
+import signal
+import socket
+import statistics
+import struct
+import subprocess
+import tempfile
+import termios
+import time
+
+
+def proc_stats(pid):
+    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    ticks = int(fields[11]) + int(fields[12])
+    rss = int(fields[21]) * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024)
+    return ticks, rss
+
+
+def stop(process):
+    if process is not None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=3)
+        except ProcessLookupError:
+            process.wait()
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+
+
+def spawn(argv, env, log, **kwargs):
+    return subprocess.Popen(argv, env=env, stderr=log, start_new_session=True, **kwargs)
+
+
+def environment(root):
+    env = os.environ.copy()
+    for name, directory in (("XDG_RUNTIME_DIR", "runtime"),
+                            ("XDG_CONFIG_HOME", "config"),
+                            ("XDG_CACHE_HOME", "cache"),
+                            ("XDG_DATA_HOME", "data")):
+        path = root / directory
+        path.mkdir(mode=0o700)
+        env[name] = str(path)
+    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(root / "no-desktop-bus")
+    env["BRUMM_PROTOTYPE"] = ""
+    env["BRUMM_DEV_TOKEN"] = ""
+    return env
+
+
+def wait_socket(path, process):
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"daemon exited with {process.returncode}")
+        if path.exists():
+            return
+        time.sleep(0.005)
+    raise TimeoutError("daemon did not create its socket")
+
+
+def measure(process, seconds, pump=lambda: None):
+    ticks0, _ = proc_stats(process.pid)
+    start = time.monotonic()
+    rss_samples = []
+    deadline = start + seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"player exited with {process.returncode}")
+        pump()
+        rss_samples.append(proc_stats(process.pid)[1])
+        time.sleep(0.01)
+    ticks1, _ = proc_stats(process.pid)
+    elapsed = time.monotonic() - start
+    return {"cpu_percent_one_core": 100 * (ticks1 - ticks0) / os.sysconf("SC_CLK_TCK") / elapsed,
+            "rss_mib": statistics.median(rss_samples), "sample_seconds": elapsed}
+
+
+def frames(path):
+    try:
+        return tuple(map(int, path.read_text().split()))
+    except (FileNotFoundError, ValueError):
+        return (0, 0)
+
+
+def player_run(args, face, mode, iteration):
+    fixture = player = None
+    master = slave = None
+    with tempfile.TemporaryDirectory(prefix="brumm-speed-") as directory:
+        root = Path(directory)
+        env = environment(root)
+        env["FAKE_PAUSED"] = "1" if mode == "paused" else ""
+        logpath = args.output.parent / f"{args.label}-{face}-{mode}-{iteration}.log"
+        with logpath.open("wb") as log:
+            try:
+                fixture = spawn([args.fixture], env, log, stdout=subprocess.DEVNULL)
+                wait_socket(root / "runtime/brumm.sock", fixture)
+                env["PATH"] = "/nonexistent"
+                started = time.monotonic()
+                captured = bytearray()
+                first_frame_ms = None
+                queries = bytearray()
+                answered = set()
+                if face == "tui":
+                    master, slave = pty.openpty()
+                    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 160, 0, 0))
+                    env["TERM"] = "xterm-256color"
+                    player = spawn([args.player, "--tui"], env, log, stdin=slave, stdout=slave)
+                    os.close(slave)
+                    slave = None
+                    os.set_blocking(master, False)
+
+                    def pump():
+                        nonlocal first_frame_ms
+                        try:
+                            while chunk := os.read(master, 65536):
+                                queries.extend(chunk)
+                                if b"\x1b]11;?" in queries and "background" not in answered:
+                                    os.write(master, b"\x1b]11;rgb:1010/1010/1010\x1b\\")
+                                    answered.add("background")
+                                if b"\x1b[c" in queries and "attributes" not in answered:
+                                    os.write(master, b"\x1b[?1;2c")
+                                    answered.add("attributes")
+                                if len(queries) > 4096:
+                                    del queries[:-1024]
+                                if len(captured) < 2_000_000:
+                                    captured.extend(chunk)
+                                if first_frame_ms is None and b"Instant Crush" in captured:
+                                    first_frame_ms = (time.monotonic() - started) * 1000
+                        except (BlockingIOError, OSError):
+                            pass
+                else:
+                    env.pop("QT_QPA_PLATFORMTHEME", None)
+                    env.update(QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="rhi",
+                               QSG_RHI_BACKEND="opengl", BRUMM_GUI_PACE="60",
+                               BRUMM_GUI_FRAMES=str(root / "frames"),
+                               BRUMM_GUI_KEYS="f" if mode == "visualizer" else "")
+                    player = spawn([args.gui], env, log, stdout=subprocess.DEVNULL)
+                    pump = lambda: None
+                until = time.monotonic() + args.warmup
+                sent = False
+                while time.monotonic() < until:
+                    if player.poll() is not None:
+                        raise RuntimeError(f"player exited; see {logpath}")
+                    pump()
+                    if face == "tui" and mode == "visualizer" and not sent and time.monotonic() - started >= 1:
+                        os.write(master, b"f")
+                        sent = True
+                    time.sleep(0.01)
+                if face == "tui" and first_frame_ms is None:
+                    raise RuntimeError(f"TUI never showed fixture song; see {logpath}")
+                if face == "tui" and mode == "visualizer":
+                    if b"styles" not in captured or b"30 fps" not in captured:
+                        raise RuntimeError(f"TUI did not enter its 30 fps visualizer; see {logpath}")
+                f0 = frames(root / "frames")
+                result = measure(player, args.seconds, pump)
+                f1 = frames(root / "frames")
+                if face == "gui":
+                    if len(f1) != 2 or f1[1] <= 0 or (mode != "paused" and f1[0] <= 0):
+                        raise RuntimeError(f"GUI did not draw frames; see {logpath}")
+                    result["fps"] = 1000 * (f1[0] - f0[0]) / (f1[1] - f0[1]) if f1[1] > f0[1] else 0
+                else:
+                    result["first_song_ms"] = first_frame_ms
+                return result
+            finally:
+                stop(player)
+                stop(fixture)
+                for fd in (master, slave):
+                    if fd is not None:
+                        os.close(fd)
+
+
+def daemon_run(args, iteration):
+    """Real daemon's local control path without credentials/network/playback."""
+    process = None
+    with tempfile.TemporaryDirectory(prefix="brumm-control-speed-") as directory:
+        root = Path(directory)
+        env = environment(root)
+        with (args.output.parent / f"{args.label}-daemon-{iteration}.log").open("wb") as log:
+            try:
+                started = time.monotonic()
+                process = spawn([args.player, "daemon"], env, log, stdout=subprocess.DEVNULL)
+                path = root / "runtime/brumm.sock"
+                wait_socket(path, process)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(5)
+                    client.connect(str(path))
+                    reader = client.makefile("rb")
+                    timings = {}
+                    for command in ("options", "place"):
+                        latencies = []
+                        for request_id in range(1, 501):
+                            start = time.monotonic()
+                            client.sendall(json.dumps({"id": request_id, "cmd": command}).encode() + b"\n")
+                            while True:
+                                line = reader.readline()
+                                if not line:
+                                    raise RuntimeError("daemon closed control socket")
+                                reply = json.loads(line)
+                                if reply.get("id") == request_id:
+                                    if reply.get("error") or (command == "options" and "options" not in reply):
+                                        raise RuntimeError(f"{command} request failed: {reply}")
+                                    break
+                            if request_id == 1 and command == "options":
+                                ready_ms = (time.monotonic() - started) * 1000
+                            if request_id > 20:
+                                latencies.append((time.monotonic() - start) * 1000)
+                        ordered = sorted(latencies)
+                        timings[command + "_roundtrip_median_ms"] = statistics.median(ordered)
+                        timings[command + "_roundtrip_p95_ms"] = ordered[int(len(ordered) * 0.95)]
+                result = measure(process, args.seconds)
+                result.update(control_ready_ms=ready_ms, **timings)
+                return result
+            finally:
+                stop(process)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("label", "player", "gui", "fixture"):
+        parser.add_argument("--" + name, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--seconds", type=float, default=8)
+    parser.add_argument("--warmup", type=float, default=4)
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--baseline", type=Path, help="Include a comparison with an earlier JSON result")
+    args = parser.parse_args()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    data = {"label": args.label, "terminal": "160x45 xterm-256color", "gui": "offscreen OpenGL, 60 Hz pacing",
+            "terminal_protocol": "DA1 VT100; OSC11 rgb16/16/16; no enhanced keyboard or image protocol",
+            "scope": "Players with fixture; real daemon without credentials or Chrome; GPU cost excluded",
+            "seconds": args.seconds, "warmup": args.warmup, "repeats": args.repeats, "runs": {}}
+    data["host"] = {"kernel": platform.release(), "architecture": platform.machine(),
+                    "cpu": next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
+                                 if line.startswith("model name")), "unknown")}
+    data["binaries"] = {name: {"sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                                "bytes": Path(path).stat().st_size}
+                        for name, path in (("brumm", args.player), ("brumm-gui", args.gui), ("fakedaemon", args.fixture))}
+    baseline = json.loads(args.baseline.read_text()) if args.baseline else None
+    if baseline:
+        for key in ("terminal", "terminal_protocol", "gui", "seconds", "warmup", "repeats", "host"):
+            if baseline.get(key) != data[key]:
+                parser.error(f"baseline uses different {key}")
+        if baseline["binaries"]["fakedaemon"]["sha256"] != data["binaries"]["fakedaemon"]["sha256"]:
+            parser.error("baseline uses a different fixture binary")
+    for iteration in range(args.repeats):
+        jobs = [(face, mode) for face in ("tui", "gui") for mode in ("paused", "playing", "visualizer")]
+        if iteration % 2:
+            jobs.reverse()
+        for face, mode in jobs:
+            key = face + "/" + mode
+            result = player_run(args, face, mode, iteration)
+            data["runs"].setdefault(key, []).append(result)
+            args.output.write_text(json.dumps(data, indent=2) + "\n")
+            print(args.label, iteration + 1, key, json.dumps(result), flush=True)
+        result = daemon_run(args, iteration)
+        data["runs"].setdefault("daemon/control", []).append(result)
+        args.output.write_text(json.dumps(data, indent=2) + "\n")
+        print(args.label, iteration + 1, "daemon/control", json.dumps(result), flush=True)
+    if baseline:
+        comparison = {}
+        for key, runs in data["runs"].items():
+            old_runs = baseline["runs"][key]
+            if len(old_runs) != args.repeats:
+                raise ValueError(f"baseline has incomplete runs for {key}")
+            comparison[key] = {}
+            for metric in runs[0]:
+                if metric == "sample_seconds":
+                    continue
+                before = statistics.median(run[metric] for run in old_runs)
+                after = statistics.median(run[metric] for run in runs)
+                comparison[key][metric] = {"before_median": before, "after_median": after,
+                    "before_range": [min(run[metric] for run in old_runs), max(run[metric] for run in old_runs)],
+                    "after_range": [min(run[metric] for run in runs), max(run[metric] for run in runs)],
+                    "change_percent": 100 * (after / before - 1) if before else None}
+        data["comparison"] = comparison
+        args.output.write_text(json.dumps(data, indent=2) + "\n")
+        print("\n| scenario | CPU before / after | RSS MiB before / after |")
+        print("|---|---:|---:|")
+        for key, metrics in comparison.items():
+            cpu, rss = metrics["cpu_percent_one_core"], metrics["rss_mib"]
+            print(f"| {key} | {cpu['before_median']:.2f}% / {cpu['after_median']:.2f}% | "
+                  f"{rss['before_median']:.1f} / {rss['after_median']:.1f} |")
+
+
+if __name__ == "__main__":
+    main()
