@@ -6,6 +6,34 @@ import QtQuick
 Item {
     id: s
     visible: false
+    property var providers: []
+    property int providerIndex: 0
+    property bool providerRequested: false
+    readonly property bool providerChoiceNeeded: st.status === "choose-provider"
+    function askProviders() {
+        if (providerRequested) return
+        providerRequested = true
+        daemon.request({ cmd: "provider" }, (err, reply) => {
+            if (err) { providerRequested = false; return setFlash(err) }
+            providers = reply.provider ? reply.provider.choices : []
+            providerIndex = Math.max(0, providers.findIndex(p => p.available))
+        })
+    }
+    function chooseProvider(id) {
+        const provider = providers.find(p => p.id === id)
+        if (!provider || !provider.available) return
+        daemon.request({ cmd: "provider", query: id }, (err) => { if (err) setFlash(err) })
+    }
+    function providerKey(k) {
+        if (k === "Q" || k === "q" || k === "ctrl+c") { Qt.quit(); return }
+        if (k === "enter") { const p = providers[providerIndex]; if (p) chooseProvider(p.id); return }
+        if (!["up", "down", "tab", "k", "j"].includes(k)) return
+        const n = providers.length
+        for (let i = 0; i < n; i++) {
+            providerIndex = (providerIndex + (["up", "k"].includes(k) ? n - 1 : 1)) % n
+            if (providers[providerIndex].available) return
+        }
+    }
     property bool playerView: false
     function showPlayer() { jumpToPlaying(); playerView = true }
     property var video: null
@@ -47,7 +75,7 @@ Item {
         daemon.request(prototypeMode ? { cmd: "preview-favorite", start: it.id, value: it.favorite ? 0 : 1 } : { cmd: "favorite", refs: [{kind: it.kind || "song", id: it.id}] }, (err) => {
             if (err) return setFlash(err)
             if (prototypeMode) inspect = Object.assign({}, it, { favorite: !it.favorite })
-            else setFlash("Favorite request accepted by Apple Music")
+            else setFlash("Favorite request accepted")
             load(cur())
         })
     }
@@ -60,8 +88,7 @@ Item {
             push(newView(item.name, itemKey(item), item), "")
         } else {
             const parentRoute = cur().item ? cur().item.route : "app:folders"
-            const parent = parentRoute === "app:folders" ? "p.playlistsroot" : parentRoute.split("/playlist-folders/")[1] || ""
-            daemon.request(prototypeMode ? { cmd: "preview-create", list: form.route.includes("folder") ? "folder" : "playlist", query: text, source: parentRoute } : { cmd: "create", list: form.route.includes("folder") ? "folder" : "playlist", query: text, start: parent.split("/")[0].split("?")[0] }, (err) => {
+            daemon.request(prototypeMode ? { cmd: "preview-create", list: form.route.includes("folder") ? "folder" : "playlist", query: text, source: parentRoute } : { cmd: "create", list: form.route.includes("folder") ? "folder" : "playlist", query: text, start: parentRoute }, (err) => {
                 if (err) return setFlash(err)
                 prototypeForm = null
                 load(cur())
@@ -387,8 +414,6 @@ Item {
     function loadExploreVisuals(v, initial) {
         const page = initial.explorer || initial
         const links = (page.items || []).concat((page.shelves || []).reduce((all, sh) => all.concat(sh.items || []), []))
-        const genre = links.find(it => it.route && it.route.endsWith("/genres"))
-        const base = genre ? genre.route.slice(0, -7) : ""
         const groups = [[], [], []]
         const generation = (v.exploreGeneration || 0) + 1
         v.exploreGeneration = generation
@@ -405,16 +430,15 @@ Item {
         }
         daemon.request({ cmd: "home" }, (err, reply) => {
             if (err) return
-            groups[0] = (reply.shelves || []).filter(sh => sh.title !== "Your music" && sh.title !== "Browse" && (sh.items || []).some(it => it.artwork)).slice(0, 2).map(sh => Object.assign({}, sh, { items: sh.items.filter(it => it.artwork).slice(0, 6), tracks: [], route: /recent/i.test(sh.title) ? "/v1/me/recent/played" : /rotation/i.test(sh.title) ? "/v1/me/history/heavy-rotation" : "/v1/me/recommendations" }))
+            groups[0] = (reply.shelves || []).filter(sh => sh.title !== "Your music" && sh.title !== "Browse" && (sh.items || []).some(it => it.artwork)).slice(0, 2).map(sh => Object.assign({}, sh, { items: sh.items.filter(it => it.artwork).slice(0, 6), tracks: [] }))
             render()
         })
-        if (!base) return
-        for (const spec of [[1, "albums,playlists"], [2, "music-videos"]]) {
-            daemon.request({ cmd: "explore", query: base + "/charts?types=" + spec[1] + "&limit=6" }, (err, reply) => {
+        for (const [i, link] of (page.visuals || []).slice(0, 2).entries()) {
+            daemon.request({ cmd: "explore", query: link.route }, (err, reply) => {
                 if (err || !reply.explorer) return
                 const p = reply.explorer
-                groups[spec[0]] = (p.shelves || []).map(sh => Object.assign({}, sh, { items: (sh.items || []).slice(0, 6), tracks: (sh.tracks || []).slice(0, 6), route: base + "/charts?types=" + spec[1] }))
-                if ((p.items || []).length) groups[spec[0]].push({ title: spec[0] === 2 ? "Music videos" : "Charts", items: p.items.slice(0, 6), route: base + "/charts?types=" + spec[1] })
+                groups[i + 1] = (p.shelves || []).map(sh => Object.assign({}, sh, { items: (sh.items || []).slice(0, 6), tracks: (sh.tracks || []).slice(0, 6), route: sh.route || link.route }))
+                if ((p.items || []).length) groups[i + 1].push({ title: link.name, items: p.items.slice(0, 6), route: link.route })
                 render()
             })
         }
@@ -542,6 +566,7 @@ Item {
             state.pos = position(Date.now())
         }
         st = state
+        if (providerChoiceNeeded) askProviders()
         stateAt = Date.now()
         const key = [state.id, state.preview ? state.preview.artwork : "", state.artwork].join("|")
         if (key !== artKey) { artKey = key; artwork = stageArtwork() }
@@ -1057,7 +1082,7 @@ Item {
     function runSearch(final) {
         const q = query.trim()
         section = secSearch
-        if (/^(https?:\/\/)?([a-z]+\.)?music\.apple\.com\//i.test(q)) { // a link: open what it names
+        if (/^https?:\/\/[^/\s]+/i.test(q)) { // a link: open what it names
             if (!final) return
             searching = false
             stacks[secSearch] = stacks[secSearch].slice(0, 1)
@@ -1485,6 +1510,8 @@ Item {
     }
 
     function key(k) {
+        if (providerChoiceNeeded) return providerKey(k)
+
         if (typesSearch(k)) {
             searching = true
             help = false
@@ -1560,7 +1587,7 @@ Item {
         case "U": return checkUpdate()
         case "!": fb = { input: "", sending: false }; help = false; return
         case "g": return toTerminal()
-        case "ctrl+v": { // a pasted music.apple.com link opens; words search
+        case "ctrl+v": { // a pasted provider link opens; words search
             const t = clipboard()
             if (!t) return
             query = t

@@ -8,8 +8,8 @@ use super::browse::fill;
 use super::geometry::{CardHit, Rect};
 use super::model::{ExploreLoad, Model, Msg, Row, SEC_EXPLORE, View};
 use super::text::*;
-use crate::apple::{ExplorePage, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, Shelf};
 use crate::ipc::{self, Message, Request};
+use crate::music::{ExplorePage, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, Shelf};
 
 /// Each Explore load's number, so a late group for an older one is dropped.
 static LOADS: AtomicU64 = AtomicU64::new(0);
@@ -142,11 +142,7 @@ impl Model {
     pub fn load_explore_visuals(&mut self, id: u64, page: ExplorePage) {
         let Some(c) = self.client.clone() else { return };
         let load = LOADS.fetch_add(1, Ordering::Relaxed) + 1;
-        let base = page
-            .items
-            .iter()
-            .find_map(|it| it.route.strip_suffix("/genres").map(str::to_string))
-            .unwrap_or_default();
+        let visuals: Vec<_> = page.visuals.iter().take(2).cloned().collect();
         let Some(v) = self.view_by_id(id) else { return };
         v.explore = Some(ExploreLoad {
             id: load,
@@ -184,11 +180,8 @@ impl Model {
                 shelves,
             })
         });
-        if base.is_empty() {
-            return;
-        }
-        for (i, types) in ["albums,playlists", "music-videos"].into_iter().enumerate() {
-            let (c, query) = (c.clone(), format!("{base}/charts?types={types}&limit=6"));
+        for (i, link) in visuals.into_iter().enumerate() {
+            let (c, query) = (c.clone(), link.route);
             self.task(async move {
                 let mut shelves = Vec::new();
                 if let Ok(data) = c
@@ -206,9 +199,9 @@ impl Model {
                         shelves.push(sh);
                     }
                     if !page.items.is_empty() {
-                        let title = if i == 1 { "Music videos" } else { "Charts" };
+                        let title = link.name;
                         shelves.push(Shelf {
-                            title: title.into(),
+                            title,
                             items: page.items.into_iter().take(6).collect(),
                             ..Default::default()
                         });

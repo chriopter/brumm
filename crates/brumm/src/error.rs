@@ -1,15 +1,17 @@
-//! One error type for brumm: what Apple Music says about the session, and
+//! One error type for brumm: what a provider says about the session, and
 //! everything else as the message a player shows.
 
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// Apple rejected the session; the user must sign in again.
+    /// The provider rejected the session; the user must sign in again.
     Unauthorized,
     /// A listing stopped after some pages: what came is usable, but it is
     /// not the whole list.
     Partial,
+    /// The active provider does not implement this operation.
+    Unsupported,
     Msg(String),
 }
 
@@ -18,8 +20,9 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Unauthorized => f.write_str("apple music: not signed in"),
-            Error::Partial => f.write_str("apple music: listing incomplete"),
+            Error::Unauthorized => f.write_str("music: not signed in"),
+            Error::Partial => f.write_str("music: listing incomplete"),
+            Error::Unsupported => f.write_str("music: operation not supported by this provider"),
             Error::Msg(s) => f.write_str(s),
         }
     }

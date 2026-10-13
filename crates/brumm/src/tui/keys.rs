@@ -4,7 +4,7 @@
 
 use super::model::{Model, View};
 use super::text::*;
-use crate::apple::{KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION, KIND_TERM};
+use crate::music::{KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION, KIND_TERM};
 
 /// A key badge at a column.
 #[derive(Clone, Debug)]

@@ -5,11 +5,11 @@ use super::filter::apply_filter;
 use super::model::{Model, Msg, Row, View};
 use super::text::*;
 use super::view::IC_DISLIKE;
-use crate::apple::{
+use crate::ipc::{self, Client, Message, Request};
+use crate::music::{
     self, DISLIKE, Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF, KIND_STATION,
     KIND_TERM, LOVE, Ref, Shelf,
 };
-use crate::ipc::{self, Client, Message, Request};
 
 /// Turns a daemon reply into rows: shelves become a heading and their
 /// contents, plain lists stay plain. An album or playlist opens with its
@@ -286,6 +286,6 @@ impl Model {
 }
 
 /// The kinds a picked row can add to a playlist.
-pub fn addable(it: &apple::Item) -> bool {
+pub fn addable(it: &music::Item) -> bool {
     it.kind == KIND_ALBUM || it.kind == KIND_PLAYLIST
 }

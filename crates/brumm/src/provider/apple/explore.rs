@@ -86,6 +86,7 @@ impl Client {
                             title: collection_title(name, &coll.attributes),
                             items,
                             tracks,
+                            ..Default::default()
                         });
                     }
                 }
@@ -116,6 +117,7 @@ impl Client {
                     title,
                     items,
                     tracks,
+                    ..Default::default()
                 });
             }
         }

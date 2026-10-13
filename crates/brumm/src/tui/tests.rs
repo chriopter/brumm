@@ -21,10 +21,10 @@ use super::options::{
 use super::text::*;
 use super::update::UpdatePopup;
 use super::view::BODY_TOP;
-use crate::apple::{Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION, Shelf, Track};
 use crate::art::Size;
 use crate::config::testenv;
 use crate::ipc::{self, Message, State};
+use crate::music::{Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION, Shelf, Track};
 
 fn ready() -> State {
     State {
@@ -580,23 +580,49 @@ fn search_box() {
     assert!(m.stack().len() == 1 && m.cur().key == "search:daft punk");
 }
 
-/// A pasted music.apple.com link opens what it names.
-#[test]
-fn paste_opens_links() {
+/// Both Apple and other providers resolve pasted links behind IPC.
+#[tokio::test]
+async fn paste_opens_links() {
     let Some(_env) = testenv::isolated() else {
         return;
     };
+    let (a, b) = tokio::net::UnixStream::pair().unwrap();
+    let (client, _events) = ipc::Client::new(a);
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let mut stream = BufReader::new(b);
+        let mut line = String::new();
+        stream.read_line(&mut line).await.unwrap();
+        let request: ipc::Request = serde_json::from_str(&line).unwrap();
+        assert_eq!(request.cmd, ipc::CMD_RESOLVE);
+        assert_eq!(request.query, "https://example.org/music/track");
+        stream
+            .get_mut()
+            .write_all(&ipc::encode(&Message {
+                id: request.id,
+                items: vec![Item {
+                    kind: KIND_ALBUM.into(),
+                    id: "resolved".into(),
+                    ..Default::default()
+                }],
+                ids: vec!["song".into()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+    });
     let mut m = model(120, 35);
-    m.update(Msg::Paste(
-        "https://music.apple.com/us/album/discovery/697194953\n".into(),
-    ));
+    m.client = Some(client);
+    m.update(Msg::Paste("https://example.org/music/track\n".into()));
     assert_eq!(m.section, SEC_SEARCH);
-    let open = m
-        .cmds
-        .iter()
-        .any(|c| matches!(c, Cmd::After(_, msg) if matches!(**msg, Msg::Open(..))));
-    assert!(open, "the album link opens");
-    m.cmds.clear();
+    let task = m.cmds.pop().unwrap();
+    let Cmd::Task(task) = task else {
+        panic!("link was not delegated to the provider")
+    };
+    assert!(
+        matches!(task.await, Some(Msg::Open(it,song)) if it.id == "resolved" && song == "song")
+    );
+    server.await.unwrap();
     m.update(Msg::Paste("daft punk".into()));
     assert_eq!(m.query, "daft punk");
 }
@@ -1689,11 +1715,11 @@ fn discovery_cards() {
     // Late artwork groups merge without losing the selection.
     m.back();
     let id = m.cur().id;
-    m.load_explore_visuals(id, crate::apple::ExplorePage::default());
+    m.load_explore_visuals(id, crate::music::ExplorePage::default());
     let v = m.view_by_id(id).unwrap();
     v.explore = Some(ExploreLoad {
         id: 7,
-        page: crate::apple::ExplorePage {
+        page: crate::music::ExplorePage {
             items: vec![Item {
                 kind: KIND_PLAYLIST.into(),
                 id: "pl.2".into(),
@@ -1839,4 +1865,29 @@ fn daemon_events() {
         m.spec.iter().all(|&s| s > 0.3 && s < 1.0),
         "the bars fall back slowly"
     );
+}
+
+#[test]
+fn provider_choice_skips_unavailable_services_and_blocks_normal_navigation() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(120, 35);
+    m.state.status = ipc::STATUS_CHOOSE_PROVIDER.into();
+    m.provider_choices = crate::provider::registry::choices();
+    m.provider_key("down");
+    assert_eq!(
+        m.provider_index, 0,
+        "Tidal is not selectable before its adapter exists"
+    );
+    m.provider_key("up");
+    assert_eq!(m.provider_index, 0);
+    let text = m
+        .provider_box()
+        .iter()
+        .map(super::text::text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Apple Music"));
+    assert!(text.contains("Tidal (coming soon)"));
 }

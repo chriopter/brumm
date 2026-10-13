@@ -5,8 +5,8 @@
 use super::model::{Key, Model, Msg, Row, View};
 use super::text::*;
 use super::view::{MARGIN, box_lines};
-use crate::apple::{Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF};
 use crate::ipc::{self, Request};
+use crate::music::{Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF};
 
 /// A one-line form for an action row.
 #[derive(Clone, Debug, Default)]
@@ -18,6 +18,68 @@ pub struct FeatureForm {
 }
 
 impl Model {
+    pub fn provider_key(&mut self, key: &str) {
+        match key {
+            "q" | "Q" | "ctrl+c" => self.cmds.push(super::model::Cmd::Quit),
+            "up" | "down" | "tab" | "k" | "j" => {
+                let n = self.provider_choices.len();
+                for _ in 0..n {
+                    self.provider_index = if matches!(key, "up" | "k") {
+                        (self.provider_index + n - 1) % n
+                    } else {
+                        (self.provider_index + 1) % n
+                    };
+                    if self.provider_choices[self.provider_index].available {
+                        break;
+                    }
+                }
+            }
+            "enter" => {
+                if let Some(p) = self
+                    .provider_choices
+                    .get(self.provider_index)
+                    .filter(|p| p.available)
+                {
+                    self.ask(
+                        Request {
+                            cmd: ipc::CMD_PROVIDER.into(),
+                            query: p.id.clone(),
+                            ..Default::default()
+                        },
+                        |reply| {
+                            Some(Msg::ProviderChoices(reply.and_then(|m| {
+                                m.provider
+                                    .ok_or_else(|| "missing provider selection".into())
+                            })))
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    pub fn provider_box(&self) -> Vec<L> {
+        let wd = 54.min(self.width - 2 * MARGIN - 4).max(8);
+        let mut lines = vec![one(" Choose your music service", PLAIN)];
+        for (i, p) in self.provider_choices.iter().enumerate() {
+            lines.push(one(
+                format!(
+                    " {} {}{}",
+                    if i == self.provider_index { ">" } else { " " },
+                    p.name,
+                    if p.available { "" } else { " (coming soon)" }
+                ),
+                if p.available { HERE } else { DIM },
+            ));
+        }
+        if self.provider_choices.is_empty() {
+            lines.push(one(" Loading providers…", DIM));
+        }
+        lines.push(one(" enter continue · q close", DIM));
+        let h = lines.len() as i64 + 2;
+        box_lines("Music provider", false, L::default(), lines, wd, h)
+    }
+
     pub fn feature_key(&mut self, msg: &Key) {
         let Some(f) = self.feature_form.as_mut() else {
             return;
@@ -145,10 +207,10 @@ impl Model {
             let v = self.view(&it.name.clone(), &it.key(), Some(it));
             return self.push(v, "");
         }
-        let ok = url::Url::parse(&it.url)
-            .is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("music.apple.com"));
+        let ok =
+            url::Url::parse(&it.url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some());
         if !ok {
-            return self.set_flash("No Apple Music video link available");
+            return self.set_flash("No video link available");
         }
         let link = it.url.clone();
         self.cmds
@@ -160,7 +222,7 @@ impl Model {
                     .stderr(std::process::Stdio::null())
                     .status();
                 Some(match r {
-                    Ok(s) if s.success() => Msg::Flash("Video opened in Apple Music".into()),
+                    Ok(s) if s.success() => Msg::Flash("Video opened in browser".into()),
                     Ok(s) => Msg::Err(format!("xdg-open: {s}")),
                     Err(e) => Msg::Err(format!("xdg-open: {e}")),
                 })
