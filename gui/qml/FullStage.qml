@@ -1,4 +1,4 @@
-// FullStage is f: the visualizer over the whole window, its twelve styles
+// FullStage is f: the visualizer over the whole window, its thirteen styles
 // named and ordered as the terminal player's, dissolving from one into the
 // next every minute (a: stays), with what plays in a strip along the
 // bottom. It listens to the daemon's sound only while it shows.
@@ -109,10 +109,25 @@ Item {
         function onOptionsChanged() { minutely.restart() }
     }
 
+    // x: the controls fade out while the mouse rests, and come back as
+    // soon as it moves; with the list of styles open they stay.
+    property bool resting: false
+    readonly property bool bare: daemon.options.viz_bare && resting && !store.vizList
+    Timer { id: rest; interval: 2500; running: fs.shown; onTriggered: fs.resting = true }
+    function stir() { resting = false; rest.restart() }
+    onShownChanged: stir()
+    HoverHandler {
+        cursorShape: fs.bare ? Qt.BlankCursor : Qt.ArrowCursor
+        onPointChanged: fs.stir()
+    }
+
     // What plays, in a strip along the bottom.
     Rectangle {
         id: strip
         z: 5
+        opacity: fs.bare ? 0 : 1
+        visible: opacity > 0
+        Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 600; easing.type: Easing.InOutQuad } }
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: ui.px(92)
         gradient: Gradient {
@@ -160,14 +175,19 @@ Item {
             anchors { right: parent.right; rightMargin: ui.gap; verticalCenter: thumb.verticalCenter }
             spacing: ui.px(2)
             Repeater {
-                model: [["󰒭", "next style", "tab", "tab"], ["󰕰", "styles", "v", "v"],
-                        [daemon.options.no_viz_cycle ? "󰐎" : "󰑖", daemon.options.no_viz_cycle ? "style stays" : "changes each minute", "a", "a"],
-                        ["󰊔", "close", "f", "f"]]
+                // In words, not icons: next to the player's buttons, a skip
+                // or a loop would read as the music's. ‹ name › picks the
+                // style, then whether it changes by itself, then out.
+                model: [["‹", "", "shift+tab", "shift+tab"],
+                        ["", store.vizNames[store.vizStyle] || "", "v", "v"],
+                        ["›", "", "tab", "tab"],
+                        ["", daemon.options.no_viz_cycle ? "stays" : "changes each minute", "a", "a"],
+                        ["", daemon.options.viz_bare ? "controls hide" : "controls stay", "x", "x"],
+                        ["✕", "", "f", "f"]]
                 MorphButton {
                     required property var modelData
                     icon: modelData[0]
                     label: modelData[1]
-                    quiet: true
                     key: modelData[2]
                     onClicked: store.dispatch(modelData[3], { text: modelData[3].length === 1 ? modelData[3] : "", modifiers: 0 })
                 }
@@ -175,33 +195,72 @@ Item {
         }
     }
 
-    // v: the styles, as a list to pick from; moving through it shows each.
-    Box {
-        visible: store.vizList
+    // v, or a click on the style's name: the styles unfold upward from the
+    // strip, each with a picture of it, to pick from; moving through them
+    // with the keys shows each.
+    Item {
+        id: styles
         z: 10
-        title: "styles"
-        boxWidth: ui.px(320)
-        Repeater {
-            model: store.vizNames
-            Item {
-                required property int index
-                required property string modelData
-                width: parent.width
-                height: ui.px(26)
-                Rectangle {
-                    anchors { fill: parent; leftMargin: -ui.px(10); rightMargin: -ui.px(10) }
-                    radius: ui.px(8)
-                    visible: store.vizSel === index
-                    color: Qt.alpha(ui.here, 0.2)
-                    border { width: 1; color: Qt.alpha(ui.here, 0.5) }
+        visible: opacity > 0
+        opacity: store.vizList ? 1 : 0
+        Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 180 } }
+        anchors { right: parent.right; rightMargin: ui.gap; bottom: strip.top; bottomMargin: -ui.px(10) }
+        width: grid.width + ui.px(24)
+        height: grid.height + ui.px(24)
+        transform: Translate {
+            y: store.vizList ? 0 : ui.px(14)
+            Behavior on y { enabled: !ui.calm; NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        }
+        TapHandler {} // a click between the pictures does not reach the stage
+
+        Rectangle {
+            anchors.fill: parent
+            radius: ui.px(16)
+            color: Qt.alpha(ui.deep, 0.92)
+            border { width: 1; color: Qt.alpha(ui.here, 0.35) }
+        }
+        Grid {
+            id: grid
+            anchors.centerIn: parent
+            readonly property int tile: ui.px(150)
+            columns: Math.max(2, Math.min(4, Math.floor((fs.width - 2 * ui.gap - ui.px(24)) / (tile + ui.px(8)))))
+            spacing: ui.px(8)
+            Repeater {
+                model: store.vizNames
+                Item {
+                    id: tile
+                    required property int index
+                    required property string modelData
+                    readonly property bool picked: store.vizSel === index || tileHover.hovered
+                    width: grid.tile
+                    height: picture.height + ui.px(26)
+                    Rectangle {
+                        anchors { fill: parent; margins: -ui.px(4) }
+                        radius: ui.px(10)
+                        visible: tile.picked
+                        color: Qt.alpha(ui.here, store.vizSel === tile.index ? 0.22 : 0.1)
+                        border { width: 1; color: Qt.alpha(ui.here, 0.55) }
+                    }
+                    Image {
+                        id: picture
+                        width: parent.width
+                        height: Math.round(width / 2)
+                        source: Qt.resolvedUrl("viz/thumbs/" + tile.modelData + ".jpg")
+                        sourceSize: Qt.size(320, 160)
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                        opacity: tile.picked ? 1 : 0.8
+                    }
+                    Text {
+                        anchors { left: parent.left; right: parent.right; top: picture.bottom; topMargin: ui.px(5) }
+                        text: (tile.index < 10 ? (tile.index + 1) % 10 + "  " : "    ") + tile.modelData
+                        color: tile.picked ? ui.bright : ui.fg
+                        elide: Text.ElideRight
+                        font { family: ui.sans; pixelSize: ui.px(12); weight: tile.picked ? Font.DemiBold : Font.Normal }
+                    }
+                    HoverHandler { id: tileHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: store.vizPick(tile.index) }
                 }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: (index < 10 ? (index + 1) % 10 + "   " : "     ") + modelData
-                    color: store.vizSel === index ? ui.bright : ui.fg
-                    font { family: ui.sans; pixelSize: ui.px(14) }
-                }
-                TapHandler { onTapped: store.vizPick(index) }
             }
         }
     }

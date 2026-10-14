@@ -20,7 +20,7 @@ Window {
             visibility = beforeFullscreen
         } else {
             beforeFullscreen = visibility
-            if (!store.full) store.vizShow(0, true)
+            if (!store.full) store.vizShow(store.vizLast(), true)
             store.full = true
             store.help = false
             store.vizList = false
