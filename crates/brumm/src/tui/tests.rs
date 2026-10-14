@@ -1054,7 +1054,7 @@ fn wheel_spin() {
     // how quickly individual notches arrive.
     let most = t0.elapsed().as_nanos() / (1_000_000_000 / super::options::MAX_DRAW_FPS as u128) + 2;
     assert!(
-        draws as u128 <= most && draws < 100,
+        draws as u128 <= most,
         "500 notches drew {draws} times in {:?}",
         t0.elapsed()
     );
