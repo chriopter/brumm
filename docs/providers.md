@@ -156,6 +156,17 @@ fictional provider data and does not require personal credentials.
 - Live testing exposed and fixed a nested heartbeat payload that had hidden SDK
   readiness. The adapter now emits the shared flat player/revision document;
   an SDK test guards both immediate and heartbeat responses.
+- Live playback exposed a batch-metadata failure: `GET /v2/tracks?filter[id]=<ids>`
+  answers 400 "Must be a positive integer" when commas are percent-encoded under
+  a raw-bracket key. The client now re-serializes query pairs, so the wire form
+  is `filter%5Bid%5D=…%2C…`, which returns 200 live; a fixture test pins the
+  encoding and duplicate order.
+- Native HOME_EDITORIAL Explore still fails for this client, so Explore falls
+  back to the legacy device-client pages under `api.tidal.com/v1/pages/`. Live
+  Explore returns Featured, Genres, Moods & Activities and Decades shelves, and
+  shelf continuation routes (`tidal:page:…`) resolve live. Opening a catalog
+  playlist that previously failed now returns all ten tracks through the daemon
+  socket.
 
 For a fictional Tidal preview, run `tmp/fakedaemon` with
 `BRUMM_FIXTURE_PROVIDER=tidal` inside omabox, then launch the Qt frontend in the
