@@ -879,6 +879,9 @@ fn viz_controls() {
     m.full_key("v");
     m.full_key("3");
     assert!(!m.viz_list && m.viz_style == 2);
+    m.toggle_full();
+    m.toggle_full();
+    assert_eq!(m.viz_style, 2, "f opens on the style shown last");
     m.full_key("a");
     assert!(m.opts.o.no_viz_cycle);
     screen(&mut m);

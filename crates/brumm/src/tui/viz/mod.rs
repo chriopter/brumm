@@ -1,4 +1,4 @@
-//! The fullscreen visualizer: twelve Winamp / demoscene styles drawn with
+//! The fullscreen visualizer: thirteen Winamp / demoscene styles drawn with
 //! nothing but the terminal's 16 ANSI colors (foreground and background).
 //! Everything renders into a reusable cell grid (glyph + fg + bg per cell)
 //! that is copied into the screen's buffer, whose diff sends only what
@@ -11,6 +11,7 @@
 //! areas are spaces on a background color, and shading changes the glyph
 //! within one color pair rather than the color.
 
+mod cathedral;
 mod fire;
 mod lava;
 mod lines;
@@ -28,8 +29,9 @@ use ratatui::style::Color;
 
 /// The styles, best first: digits 1–9, 0 pick the first ten, the list (v)
 /// shows all of them.
-pub const NAMES: [&str; 12] = [
+pub const NAMES: [&str; 13] = [
     "milkdrop",  // spectrum + waveform rings in zoom/twist feedback
+    "cathedral", // stained-glass window, sun shafts and dust, slow pan
     "synth",     // synthwave: striped sun, spectrum mountains, racing grid
     "stars",     // braille warp starfield, kicks jump to hyperspace
     "wire",      // 3D wireframes (icosahedron, tesseract, torus) in braille
@@ -44,18 +46,19 @@ pub const NAMES: [&str; 12] = [
 ];
 
 const VZ_MILK: usize = 0;
-const VZ_SYNTH: usize = 1;
-const VZ_STARS: usize = 2;
-const VZ_WIRE: usize = 3;
-const VZ_FIREWORKS: usize = 4;
-const VZ_LAVA: usize = 5;
-const VZ_SCOPE: usize = 6;
-const VZ_PLASMA: usize = 7;
-const VZ_FIRE: usize = 8;
-const VZ_MATRIX: usize = 9;
-const VZ_RIDGE: usize = 10;
-const VZ_LED: usize = 11;
-const COUNT: usize = 12;
+const VZ_CATHEDRAL: usize = 1;
+const VZ_SYNTH: usize = 2;
+const VZ_STARS: usize = 3;
+const VZ_WIRE: usize = 4;
+const VZ_FIREWORKS: usize = 5;
+const VZ_LAVA: usize = 6;
+const VZ_SCOPE: usize = 7;
+const VZ_PLASMA: usize = 8;
+const VZ_FIRE: usize = 9;
+const VZ_MATRIX: usize = 10;
+const VZ_RIDGE: usize = 11;
+const VZ_LED: usize = 12;
+const COUNT: usize = 13;
 
 // ANSI SGR foreground codes (the theme's 16 colors). 0 means "no color";
 // a background uses the same code.
@@ -177,6 +180,7 @@ pub struct Visualizer {
     pub(crate) fw: fire::Fireworks,
     pub(crate) lava: lava::Lava,
     pub(crate) mx: retro::Matrix,
+    pub(crate) cathedral: cathedral::Cathedral,
 }
 
 /// The seconds from last to t, moving last: 1/25 s the first time, at most
@@ -271,6 +275,7 @@ impl Visualizer {
         self.grid(w, h);
         match style {
             VZ_MILK => self.draw_milk(style, wave, dt),
+            VZ_CATHEDRAL => self.draw_cathedral(dt),
             VZ_SYNTH => self.draw_synth(dt),
             VZ_STARS => self.draw_stars(dt),
             VZ_WIRE => self.draw_wire(dt),
