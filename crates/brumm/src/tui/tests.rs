@@ -1050,8 +1050,9 @@ fn wheel_spin() {
         m.render();
     }
     assert_eq!(m.cur().sel, 500);
-    // At most a frame per WHEEL_EVERY (25 ms), however fast the notches.
-    let most = t0.elapsed().as_millis() / 25 + 2;
+    // Active scrolling follows the loop's 120 Hz budget, regardless of
+    // how quickly individual notches arrive.
+    let most = t0.elapsed().as_nanos() / (1_000_000_000 / super::options::MAX_DRAW_FPS as u128) + 2;
     assert!(
         draws as u128 <= most && draws < 100,
         "500 notches drew {draws} times in {:?}",
@@ -1890,4 +1891,63 @@ fn provider_choice_skips_unavailable_services_and_blocks_normal_navigation() {
         .join("\n");
     assert!(text.contains("Apple Music"));
     assert!(text.contains("Tidal (coming soon)"));
+}
+
+#[test]
+fn drawing_uses_the_current_terminal_size() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(180, 60);
+    // A resize event may lag behind ratatui's own terminal size query.
+    let mut buf = Buffer::empty(Area::new(0, 0, 90, 24));
+    m.draw(&mut buf);
+    assert_eq!((m.width, m.height), (90, 24));
+    let mut buf = Buffer::empty(Area::new(0, 0, 160, 45));
+    m.draw(&mut buf);
+    assert_eq!((m.width, m.height), (160, 45));
+}
+
+#[test]
+fn pixel_cover_resize_runs_off_the_input_thread() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(160, 45);
+    m.opts.o.cover = COVER_PIXEL.into();
+    let first = Size {
+        width: 40,
+        height: 20,
+    };
+    let next = Size {
+        width: 48,
+        height: 24,
+    };
+    let preview = m.cover_lines(first, false);
+    assert_eq!(preview.len(), first.height);
+    assert!(m.stage_busy);
+    assert!(!m.rendered.contains_key(&(first, false)));
+    let jobs = std::mem::take(&mut m.cmds);
+    assert_eq!(jobs.len(), 1);
+    let preview = m.cover_lines(next, false);
+    assert_eq!(preview.len(), next.height);
+    assert!(m.cmds.is_empty(), "Only one palette job may run at a time");
+    let Cmd::Blocking(job) = jobs.into_iter().next().unwrap() else {
+        panic!("Cover work must run on a worker");
+    };
+    m.update(job().unwrap());
+    assert!(!m.stage_busy);
+    assert!(m.rendered.contains_key(&(first, false)));
+    m.cmds.clear();
+    m.cover_lines(next, false);
+    assert!(m.stage_busy);
+
+    // A late result from the previous song must never replace its cover.
+    let Cmd::Blocking(job) = m.cmds.remove(0) else {
+        panic!("Cover worker")
+    };
+    m.cover_url = "another.jpg".into();
+    m.update(job().unwrap());
+    assert!(!m.stage_busy);
+    assert!(!m.rendered.contains_key(&(next, false)));
 }

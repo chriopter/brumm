@@ -14,6 +14,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QStandardPaths>
+#include <QSurfaceFormat>
 #include <QThread>
 #include <QThreadPool>
 #include <QMouseEvent>
@@ -38,6 +39,23 @@ int main(int argc, char *argv[])
     app.setApplicationName("brumm");
     app.setOrganizationName("brumm");
     app.setDesktopFileName("brumm"); // the Wayland app id, for Hyprland's rules
+
+    // On Wayland, a resize arriving during threaded rendering can force
+    // an extra frame at the old size before Qt applies the configure.
+    // Keep geometry and rendering on one thread for this single window.
+    // Still GPU-rendered and event-driven; explicit overrides remain useful
+    // for profiling and for platforms with different driver behavior.
+    if (QGuiApplication::platformName().startsWith("wayland")
+        && !qEnvironmentVariableIsSet("QSG_RENDER_LOOP")) {
+        qputenv("QSG_RENDER_LOOP", "basic");
+        if (!qEnvironmentVariableIsSet("QSG_NO_VSYNC")) {
+            // Avoid blocking geometry processing on a buffer swap. The
+            // basic loop remains driven by changes and animation timers.
+            auto format = QSurfaceFormat::defaultFormat();
+            format.setSwapInterval(0);
+            QSurfaceFormat::setDefaultFormat(format);
+        }
+    }
 
     // One window: a second start brings the first to the front.
     QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
@@ -151,6 +169,24 @@ int main(int argc, char *argv[])
                     QCoreApplication::sendEvent(w, &e);
                 }
             });
+        }
+    }
+
+    // Repeatable live-resize workload for profiling, separate from idle
+    // animation: 240 geometry changes at 60 Hz, after covers have loaded.
+    if (qEnvironmentVariableIsSet("BRUMM_GUI_RESIZE")) {
+        if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
+            auto *resize = new QTimer(w);
+            resize->setTimerType(Qt::PreciseTimer);
+            resize->setInterval(1000 / 60);
+            QObject::connect(resize, &QTimer::timeout, w, [w, resize, step = 0]() mutable {
+                const int phase = step % 120;
+                const int ramp = phase < 60 ? phase : 120 - phase;
+                w->resize(800 + ramp * 10, 500 + ramp * 5);
+                if (++step == 240)
+                    resize->stop();
+            });
+            QTimer::singleShot(2000, resize, [resize] { resize->start(); });
         }
     }
 

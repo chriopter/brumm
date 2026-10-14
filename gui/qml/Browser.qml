@@ -86,6 +86,8 @@ Item {
         target: store
         function onFilteringChanged() { if (store.filtering && !filterInput.activeFocus) filterInput.forceActiveFocus() }
     }
+    RenderSurface { id: listSurface; width: list.width; height: list.height }
+
     // The list.
     ListView {
         id: list
@@ -95,6 +97,7 @@ Item {
         // It fades out where it runs on past its edges, drawn again only
         // when the list changes.
         layer.enabled: ui.effects
+        layer.textureSize: listSurface.textureSize
         layer.effect: ShaderEffect {
             property real fadeTop: list.fadeTop / Math.max(1, list.height)
             property real fadeBottom: list.fadeBottom / Math.max(1, list.height)
