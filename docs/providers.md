@@ -81,6 +81,8 @@ subscription. This branch has not verified Apple Music subscription playback;
 the available environment has no Apple Music subscription. The clean
 architecture plan and phase roadmap are in
 [`provider-abstraction-plan.md`](provider-abstraction-plan.md).
+The accepted Tidal product decisions and implementation details are in
+[`tidal-provider-spec.md`](tidal-provider-spec.md).
 
 ## Development checks
 
