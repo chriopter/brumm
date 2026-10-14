@@ -39,7 +39,9 @@ Flickable {
                     radius: ui.coverRadius
                     color: Qt.alpha(ui.bright, 0.04)
                     clip: true
-                    Image { anchors.fill: parent; sourceSize: Qt.size(Math.ceil(width), Math.ceil(height)); source: card.nearViewport && card.artwork ? "image://cover/" + encodeURIComponent(card.artwork) : ""; fillMode: Image.PreserveAspectCrop; asynchronous: true }
+                    // Tiles stay below 305 px with the two-column minimum.
+                    // A fixed decode size avoids reloading every pixel of a resize.
+                    Image { anchors.fill: parent; sourceSize: Qt.size(ui.px(320), ui.px(320)); source: card.nearViewport && card.artwork ? "image://cover/" + encodeURIComponent(card.artwork) : ""; fillMode: Image.PreserveAspectCrop; asynchronous: true }
                 }
                 Text {
                     id: caption

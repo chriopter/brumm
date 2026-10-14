@@ -6,7 +6,7 @@ use std::time::Instant;
 use ratatui::buffer::Buffer;
 
 use super::geometry::{FootHit, Geometry, Rect};
-use super::model::{Model, NUM_SECTIONS, SEC_QUEUE, SEC_SEARCH, SECTION_NAMES};
+use super::model::{Cmd, Model, Msg, NUM_SECTIONS, SEC_QUEUE, SEC_SEARCH, SECTION_NAMES};
 use super::text::*;
 use super::viz;
 use crate::art::Size;
@@ -127,6 +127,10 @@ impl Model {
 
     /// Draws the whole screen into buf.
     pub fn draw(&mut self, buf: &mut Buffer) {
+        // Ratatui queries the terminal immediately before drawing. A queued
+        // Resize message may already be obsolete by then.
+        self.width = i64::from(buf.area.width);
+        self.height = i64::from(buf.area.height);
         self.drawn = true;
         if self.full && self.width >= 20 && self.height >= 6 {
             // The browser is not on screen: nothing of it is drawn or wanted.
@@ -874,6 +878,25 @@ impl Model {
         } else {
             cover
         };
+        if style == super::options::COVER_PIXEL {
+            if !self.stage_busy {
+                self.stage_busy = true;
+                let url = self.cover_url.clone();
+                let work = img.clone();
+                self.cmds.push(Cmd::Blocking(Box::new(move || {
+                    Some(Msg::StageCover {
+                        url,
+                        lines: super::cover::draw_cover(&style, &work, size),
+                        style,
+                        size,
+                        dim,
+                    })
+                })));
+            }
+            // Keep layout and input responsive while palette fitting runs.
+            // This cheap preview has exactly the new frame's dimensions.
+            return super::cover::draw_cover(super::options::COVER_SMOOTH, &img, size);
+        }
         let lines = super::cover::draw_cover(&style, &img, size);
         if self.rendered.len() > 8 {
             self.rendered.clear();

@@ -272,6 +272,13 @@ pub enum Msg {
     Album(Result<(Item, String), String>),
     Login(Result<(), String>),
     Err(String),
+    StageCover {
+        url: String,
+        style: String,
+        size: Size,
+        dim: bool,
+        lines: Vec<L>,
+    },
     Tick(u64),
     Wheel,
     Refresh(i64),
@@ -412,6 +419,7 @@ pub struct Model {
     pub cover_url: String,
     pub cover: Option<Arc<RgbaImage>>,
     pub cover_dim: Option<Arc<RgbaImage>>,
+    pub stage_busy: bool,
     pub rendered: HashMap<(Size, bool), Vec<L>>,
     pub covers: HashMap<String, Arc<RgbaImage>>,
     pub cover_lru: Vec<String>,
@@ -528,7 +536,8 @@ pub const VIZ_FADE: Duration = Duration::from_millis(1500);
 /// A free-spinning wheel sends hundreds of notches a second. A notch only
 /// moves the selection; the screen catches up at most once per WHEEL_EVERY,
 /// and covers load once the wheel rests for WHEEL_REST.
-const WHEEL_EVERY: Duration = Duration::from_millis(25);
+const WHEEL_EVERY: Duration =
+    Duration::from_nanos(1_000_000_000 / super::options::MAX_DRAW_FPS as u64);
 const WHEEL_REST: Duration = Duration::from_millis(150);
 
 /// Where the program's own setting lives: the split of the list.
@@ -614,6 +623,7 @@ impl Model {
             cover_url: String::new(),
             cover: None,
             cover_dim: None,
+            stage_busy: false,
             rendered: HashMap::new(),
             covers: HashMap::new(),
             cover_lru: Vec::new(),
@@ -1252,6 +1262,21 @@ impl Model {
             Msg::Refresh(r) => self.refresh = r,
             Msg::Bar(on) => self.bar_read(on),
             Msg::BarSet { on, err } => self.bar_set(on, err),
+            Msg::StageCover {
+                url,
+                style,
+                size,
+                dim,
+                lines,
+            } => {
+                self.stage_busy = false;
+                if url == self.cover_url && style == self.opts.cover(self.has_kitty) {
+                    if self.rendered.len() > 8 {
+                        self.rendered.clear();
+                    }
+                    self.rendered.insert((size, dim), lines);
+                }
+            }
             Msg::Thumb { key, lines } => {
                 self.thumb_busy = false;
                 if self.thumbs.len() > 150 {

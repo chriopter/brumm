@@ -16,29 +16,44 @@ Item {
     // while it is hidden or resized instead of dividing by that size.
     readonly property real tile: Math.max(ui.px(40), size / 3)
     readonly property int gap: ui.px(5)
-    // Enough tiles to run past every edge; odd counts keep the cover centered.
-    // How many tiles: counted from the size once it rests, so dragging the
-    // divider only slides the wall along instead of building it anew each
-    // step (it is centred on the live size meanwhile).
+    // Grow by appending slots with stable, center-relative coordinates.
+    // Keep a spare ring and retain slots throughout a drag.
     property real restW: width
     property real restH: height
-    onWidthChanged: resting.restart()
-    onHeightChanged: resting.restart()
-    onSizeChanged: resting.restart()
-    property real restTile: tile // the size the covers are loaded at: again only once it rests
-    Timer { id: resting; interval: 180; onTriggered: { wall.restW = wall.width; wall.restH = wall.height; wall.restTile = wall.tile } }
-    readonly property int cols: Math.ceil(restW / tile / 2) * 2 + 1
-    readonly property int rows: Math.ceil(restH / tile / 2) * 2 + 1
-    readonly property int mc: (cols - 3) / 2 // the cover's first column and row
+    property real restTile: tile
+    property int cols: 3
+    property int rows: 3
+    readonly property int mc: (cols - 3) / 2
     readonly property int mr: (rows - 3) / 2
     readonly property real x0: (width - cols * tile) / 2
     readonly property real y0: (height - rows * tile) / 2
+    function fit(shrink) {
+        const nc = Math.ceil(width / tile / 2) * 2 + 3
+        const nr = Math.ceil(height / tile / 2) * 2 + 3
+        cols = shrink ? nc : Math.max(cols, nc)
+        rows = shrink ? nr : Math.max(rows, nr)
+    }
+    function resizeWall() { fit(false); resting.restart() }
+    onWidthChanged: resizeWall()
+    onHeightChanged: resizeWall()
+    onSizeChanged: resizeWall()
+    Timer {
+        id: resting
+        interval: 180
+        onTriggered: {
+            wall.restW = wall.width
+            wall.restH = wall.height
+            wall.restTile = wall.tile
+            wall.fit(true)
+        }
+    }
     clip: true
     readonly property color ground: ui.tint(ui.deep, 0.14) // what the dimmed covers sink into
     // Only where there is room above and below the cover does the wall go
     // up; a short window shows the cover alone.
     // (or beside it, in a wide one)
-    readonly property bool roomy: height >= size + tile * 0.8 || width >= size + tile * 3
+    // Topology follows the settled geometry; live geometry only moves tiles.
+    readonly property bool roomy: restH >= restTile * 3.8 || restW >= restTile * 6
 
     // Every cover to put up, each once, the likeliest first: what comes
     // next, what played, then the albums and songs the lists know.
@@ -51,7 +66,7 @@ Item {
         for (const stack of store.stacks)
             for (const v of stack)
                 for (const r of v.rows) {
-                    if (out.length >= cells.length) return out
+                    if (out.length >= 512) return out
                     if (r.item && r.item.kind === "album") add(r.item.artwork, { album: r.item })
                     else if (r.track) add(r.track.artwork, { played: r.track })
                 }
@@ -59,55 +74,94 @@ Item {
     }
     // The albums, to have covers to put up from the start.
     Component.onCompleted: {
+        restW = width
+        restH = height
+        restTile = tile
+        fit(false)
+        syncTiles()
         const albums = store.stacks[store.secAlbums]
         if (albums && !albums[0].loaded) store.load(albums[0])
     }
 
-    // Which cover each tile shows.
-    property var assigned: []
-    // Counts the times the wall was dealt anew: each sends a wave through
-    // every tile, from the top right down to the bottom left, as through
-    // water; the tiles rise, turn over and settle with what they now show.
-    property int wave: 0
-    // One deal, one wave, per song: the news of a new song comes in parts
-    // over a second or two (the song, what comes next, what played), and
-    // only the first settled state is dealt. Later news waits for the next
-    // song, unless tiles are still empty.
+    property var assigned: ({})
+    property var readyArt: ({})
     property string dealtFor: "-"
-    onPoolChanged: {
-        const filled = assigned.filter(a => !!a).length
-        if (url !== dealtFor || (filled < cells.length && pool.length > filled)) settle.restart()
+    ListModel { id: tileModel; objectName: "wallTiles" }
+
+    function fallback(slot) {
+        const ready = Object.values(readyArt)
+        if (!ready.length) return null
+        const hash = Math.abs(slot.split(":").reduce((n, v) => n * 31 + Number(v), 0))
+        return ready[hash % ready.length]
     }
-    onCellsChanged: { dealtFor = "-"; settle.restart() }
+
+    // Update only membership. Existing delegates and their images survive.
+    function syncTiles() {
+        const wanted = new Set(cells.map(c => c.slot))
+        for (let i = tileModel.count - 1; i >= 0; --i)
+            if (!wanted.has(tileModel.get(i).slot)) tileModel.remove(i)
+        const present = new Set()
+        for (let i = 0; i < tileModel.count; ++i) present.add(tileModel.get(i).slot)
+        const next = Object.assign({}, assigned)
+        for (let i = 0; i < cells.length; ++i) {
+            const c = cells[i]
+            if (!next[c.slot]) next[c.slot] = fallback(c.slot) || pool[i % Math.max(1, pool.length)] || null
+        }
+        for (const key of Object.keys(next))
+            if (!wanted.has(key)) delete next[key]
+        assigned = next
+        for (const c of cells)
+            if (!present.has(c.slot)) tileModel.append(c)
+    }
+    onCellsChanged: syncTiles()
+    onPoolChanged: { syncTiles(); settle.restart() }
     Timer {
         id: settle
         interval: 700
         onTriggered: {
-            const next = wall.cells.map((c, i) => wall.pool[i] || null)
-            const same = next.length === wall.assigned.length && next.every((n, i) => (n ? n.art : "") === (wall.assigned[i] ? wall.assigned[i].art : ""))
+            const next = Object.assign({}, wall.assigned)
+            const used = new Set()
+            const freshSong = wall.dealtFor !== wall.url
+            for (let i = 0; i < wall.cells.length; ++i) {
+                const key = wall.cells[i].slot
+                const old = next[key]
+                // Keep each existing unique cover. Only repeated or empty
+                // slots take new artwork as more of the library arrives.
+                if (!freshSong && old && !used.has(old.art)) {
+                    next[key] = wall.pool.find(p => p.art === old.art) || old
+                    used.add(old.art)
+                    continue
+                }
+                const replacement = wall.pool.find(p => !used.has(p.art))
+                    || wall.pool[i % Math.max(1, wall.pool.length)] || old || null
+                next[key] = replacement
+                if (replacement) used.add(replacement.art)
+            }
             wall.dealtFor = wall.url
             wall.assigned = next
-            if (!same) wall.wave++
         }
     }
 
-    // The tiles, ordered by their distance to the cover, so the nearest
-    // get what comes next.
     readonly property var cells: {
         const out = []
-        if (!visible || !roomy) return out
-        for (let r = 0; r < rows; r++)
-            for (let c = 0; c < cols; c++)
-                if (c < mc || c > mc + 2 || r < mr || r > mr + 2)
-                    out.push({ c: c, r: r, d: Math.hypot(c - mc - 1, (r - mr - 1) * 1.2) })
-        return out.sort((a, b) => a.d - b.d)
+        if (!visible) return out
+        const halfC = (cols - 1) / 2, halfR = (rows - 1) / 2
+        for (let cy = -halfR; cy <= halfR; ++cy)
+            for (let cx = -halfC; cx <= halfC; ++cx)
+                if (Math.abs(cx) > 1 || Math.abs(cy) > 1)
+                    out.push({ slot: cx + ":" + cy, cx: cx, cy: cy,
+                               distance: Math.hypot(cx, cy * 1.2) })
+        return out.sort((a, b) => a.distance - b.distance || a.cy - b.cy || a.cx - b.cx)
     }
+
+    RenderSurface { id: wallSurface; width: wall.width; height: wall.height }
 
     // The wall, fading out toward all its edges.
     Item {
         id: covers
         anchors.fill: parent
         layer.enabled: ui.effects
+        layer.textureSize: wallSurface.textureSize
         layer.effect: ShaderEffect {
             property vector2d wallSize: Qt.vector2d(covers.width, covers.height)
             // Up and down: 500 px of wall beyond the cover, the outer 400
@@ -118,35 +172,42 @@ Item {
         }
 
         Repeater {
-            model: wall.roomy ? wall.cells : []
+            model: tileModel
             Item {
                 id: t
-                required property int index
-                required property var modelData
-                readonly property var it: wall.assigned[index] || null
-                // The cover on show, taken over from it with a fade.
-                property var showing: null
-                // Without a wave: the same cover with new news, or the first one.
-                onItChanged: if (!showing || ui.calm || (it && showing.art === it.art)) showing = it
-                Connections {
-                    target: wall
-                    function onWaveChanged() {
-                        if (ui.calm || !(t.showing || t.it)) { t.showing = t.it; return }
-                        swap.restart()
+                required property string slot
+                required property int cx
+                required property int cy
+                required property real distance
+                objectName: "wallTile:" + slot
+                readonly property var it: wall.assigned[slot] || null
+                property var showing: wall.fallback(slot)
+                property var nextFace: null
+                function maybeSwap() {
+                    if (!it || !pending || pending.status !== Image.Ready
+                            || pending.source.toString() !== "image://cover/" + encodeURIComponent(it.art)) return
+                    wall.readyArt[it.art] = it
+                    if (!showing || showing.art === it.art || ui.calm) {
+                        showing = it
+                        return
                     }
+                    if (swap.running) return
+                    nextFace = it
+                    swap.start()
                 }
-                // The tile turns over, the next cover waiting on its back, when
-                // the wave reaches it.
+                onItChanged: maybeSwap()
+                // Loaded replacements turn individually, staggered by slot.
                 property real turn: 0
                 property real lift: 0 // it rises off the wall while it turns
                 SequentialAnimation {
                     id: swap
-                    PauseAnimation { duration: 150 + (wall.cols - 1 - t.modelData.c + t.modelData.r) * 55 }
+                    onFinished: t.maybeSwap()
+                    PauseAnimation { duration: 60 + ((t.cx + t.cy + 128) % 8) * 40 }
                     ParallelAnimation {
                         NumberAnimation { target: t; property: "turn"; to: 90; duration: 220; easing.type: Easing.InQuad }
                         NumberAnimation { target: t; property: "lift"; to: 0.18; duration: 220; easing.type: Easing.OutQuad }
                     }
-                    ScriptAction { script: { t.showing = t.it; t.turn = -90 } }
+                    ScriptAction { script: { t.showing = t.nextFace; t.turn = -90 } }
                     ParallelAnimation {
                         NumberAnimation { target: t; property: "turn"; to: 0; duration: 300; easing.type: Easing.OutCubic }
                         NumberAnimation { target: t; property: "lift"; to: 0; duration: 300; easing.type: Easing.InQuad }
@@ -159,13 +220,13 @@ Item {
                     angle: t.turn
                 }
                 readonly property bool hot: hover.hovered
-                x: wall.x0 + modelData.c * wall.tile + wall.gap / 2
-                y: wall.y0 + modelData.r * wall.tile + wall.gap / 2
+                x: wall.width / 2 + (cx - 0.5) * wall.tile + wall.gap / 2
+                y: wall.height / 2 + (cy - 0.5) * wall.tile + wall.gap / 2
                 width: wall.tile - wall.gap
                 height: width
                 z: hot || lift > 0 ? 3 : 1
                 // Further out, fainter: the wall sinks into the light.
-                readonly property real rest: Math.max(0.18, 0.62 - modelData.d * 0.07)
+                readonly property real rest: Math.max(0.18, 0.62 - distance * 0.07)
                 scale: (hot ? 1.16 : 1) * (1 + lift)
                 Behavior on scale { enabled: !ui.calm; NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
 
@@ -182,8 +243,10 @@ Item {
                     radius: ui.coverRadius
                     color: wall.ground
                 }
-                Image { // what it shows next, loaded before it turns: the turn never waits for a picture
+                Image { // keep the old face until the replacement is decoded
+                    id: pending
                     visible: false
+                    onStatusChanged: t.maybeSwap()
                     source: t.it ? "image://cover/" + encodeURIComponent(t.it.art) : ""
                     sourceSize: art.sourceSize
                     asynchronous: true
@@ -196,8 +259,9 @@ Item {
                     anchors.fill: parent
                     visible: !ui.effects // with effects, drawn rounded below
                     source: t.showing ? "image://cover/" + encodeURIComponent(t.showing.art) : ""
-                    sourceSize: Qt.size(Math.round(wall.restTile * 1.3), Math.round(wall.restTile * 1.3))
+                    sourceSize: Qt.size(ui.px(256), ui.px(256))
                     asynchronous: true
+                    retainWhileLoading: true
                     fillMode: Image.PreserveAspectCrop
                 }
                 ShaderEffect { // the art with the cover's rounded corners
@@ -272,7 +336,7 @@ Item {
             anchors.fill: parent
             visible: !ui.effects
             source: wall.flyArt ? "image://cover/" + encodeURIComponent(wall.flyArt) : ""
-            sourceSize: Qt.size(Math.round(wall.restTile * 1.3), Math.round(wall.restTile * 1.3))
+            sourceSize: Qt.size(ui.px(256), ui.px(256))
             fillMode: Image.PreserveAspectCrop
             smooth: true
         }

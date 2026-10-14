@@ -160,7 +160,14 @@ Window {
     Item {
         id: backgroundLayer
         anchors.fill: parent
-    Backdrop { anchors.fill: parent; visible: ui.effects && !(store.full && full.opacity === 1) }
+    RenderSurface { id: backdropSurface; anchors.fill: parent; density: Math.min(1, Screen.devicePixelRatio) * 0.5 }
+    Backdrop {
+        anchors.fill: parent
+        visible: ui.effects && !(store.full && full.opacity === 1)
+        layer.enabled: ui.effects
+        layer.smooth: true
+        layer.textureSize: backdropSurface.textureSize
+    }
     Rectangle {
         anchors.fill: parent
         visible: !ui.effects
@@ -446,4 +453,5 @@ Window {
         color: ui.dim
         font { family: ui.sans; pixelSize: ui.px(10) }
     }
+
 }
