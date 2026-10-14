@@ -1,7 +1,6 @@
 //! Feedback is an issue on GitHub, written in a player: the browser opens
 //! on it, filled in, or Omarchy's coding agent looks into it first.
 
-use crate::apple::encode_query as text_encode_query;
 use crate::error::{Result, err};
 use crate::update;
 
@@ -124,6 +123,15 @@ fn system() -> String {
         name = format!("{name} · {d}");
     }
     name
+}
+
+// Feedback query encoding belongs to feedback, independently of a music API.
+fn text_encode_query(pairs: &[(String, String)]) -> String {
+    let mut pairs = pairs.to_vec();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(pairs)
+        .finish()
 }
 
 #[cfg(test)]

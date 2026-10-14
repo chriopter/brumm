@@ -10,16 +10,16 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::apple::{Item, Track};
 use crate::config;
 use crate::error::Result;
+use crate::music::{Item, Track};
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Data {
-    #[serde(deserialize_with = "crate::apple::nullable")]
+    #[serde(deserialize_with = "crate::music::nullable")]
     items: HashMap<String, Vec<Item>>,
-    #[serde(deserialize_with = "crate::apple::nullable")]
+    #[serde(deserialize_with = "crate::music::nullable")]
     tracks: HashMap<String, Vec<Track>>,
 }
 

@@ -4,22 +4,22 @@
 mod browse;
 mod explore;
 mod features;
+mod provider;
 mod text;
-mod types;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use crate::music::nullable;
 use reqwest::{Method, StatusCode};
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 use crate::error::{Error, Result, err};
 
-pub use text::encode_query;
+pub use crate::music::*;
 use text::{plain, query_escape};
-pub use types::*;
 
 const API_BASE: &str = "https://api.music.apple.com";
 
@@ -36,13 +36,6 @@ fn artwork_url(a: &Map<String, Value>) -> String {
         Some(u) => u.replace("{w}", ARTWORK_SIZE).replace("{h}", ARTWORK_SIZE),
         None => String::new(),
     }
-}
-
-/// A null where a value belongs is the empty value, as Go's decoder left it.
-pub(crate) fn nullable<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(
-    d: D,
-) -> std::result::Result<T, D::Error> {
-    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
 /// One API resource, as listed in a document's data.
@@ -460,7 +453,10 @@ pub(crate) fn tracks(rs: &[Resource]) -> Vec<Track> {
 /// song within it, if the link names one.
 pub fn parse_link(link: &str) -> Option<(Item, String)> {
     let u = url::Url::parse(link.trim()).ok()?;
-    if !u.host_str().unwrap_or("").ends_with("music.apple.com") {
+    let host = u.host_str().unwrap_or("");
+    if !matches!(u.scheme(), "http" | "https")
+        || (host != "music.apple.com" && !host.ends_with(".music.apple.com"))
+    {
         return None;
     }
     let parts: Vec<&str> = u.path().trim_matches('/').split('/').collect();

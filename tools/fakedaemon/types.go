@@ -74,6 +74,7 @@ type Detail struct {
 }
 
 type ExplorePage struct {
+	Visuals []Item   `json:"visuals,omitempty"`
 	Title   string   `json:"title,omitempty"`
 	Info    string   `json:"info,omitempty"`
 	Details []Detail `json:"details,omitempty"`
@@ -84,6 +85,7 @@ type ExplorePage struct {
 }
 
 type Shelf struct {
+	Route  string  `json:"route,omitempty"`
 	Title  string  `json:"title"`
 	Items  []Item  `json:"items,omitempty"`
 	Tracks []Track `json:"tracks,omitempty"`

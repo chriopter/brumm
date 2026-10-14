@@ -17,11 +17,11 @@ use tokio::task::JoinHandle;
 use cdp::Cdp;
 pub use cdp::CdpError;
 
-use crate::apple::Track;
 use crate::chrome;
 use crate::error::{Error, Result, err};
 use crate::httpd;
 use crate::ipc::Player;
+use crate::music::Track;
 use crate::proc;
 
 pub const PAGE: &str = include_str!("player.html");

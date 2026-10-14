@@ -74,6 +74,9 @@ gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 
 ## Development
 
+The [music provider guide](docs/providers.md) describes the Rust API boundary
+and the remaining work for adding another service.
+
 The daemon and terminal player use Rust; the window uses Qt Quick/QML
 with Rust for shared calculations. Building needs Rust 1.89 or newer,
 Qt 6 and a C++ compiler. Go is used for development fixtures and signing

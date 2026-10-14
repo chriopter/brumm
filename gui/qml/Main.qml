@@ -295,6 +295,33 @@ Window {
         Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
     }
 
+    Dialog {
+        id: providerDialog
+        x: (win.width - width) / 2
+        y: (win.height - height) / 2
+        width: Math.min(ui.px(420), win.width - ui.px(24))
+        title: "Choose your music provider"
+        modal: true
+        visible: store.providerChoiceNeeded
+        closePolicy: Popup.NoAutoClose
+        background: Rectangle { color: ui.deep; radius: ui.px(12); border.color: ui.edge }
+        header: Label { text: providerDialog.title; color: ui.bright; padding: ui.px(16); font.pixelSize: ui.px(20) }
+        contentItem: Column {
+            spacing: ui.px(12)
+            Label { width: parent.width; text: "Choose the service you use for music."; wrapMode: Text.WordWrap; color: ui.fg }
+            Repeater {
+                model: store.providers
+                delegate: Button {
+                    width: providerDialog.availableWidth
+                    text: modelData.name + (modelData.available ? "" : " (coming soon)")
+                    enabled: modelData.available
+                    onClicked: store.chooseProvider(modelData.id)
+                }
+            }
+            Label { visible: store.providers.length === 0; text: "Loading providers…"; color: ui.dim }
+        }
+    }
+
     property int contextIndex: -1
     property var contextRow: null
     property var contextView: null

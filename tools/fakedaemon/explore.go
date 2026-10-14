@@ -61,6 +61,7 @@ func previewExplore(r Request, m *Message) {
 	switch {
 	case route == "app:discover":
 		p.Title = "Explore"
+		p.Visuals = []Item{exploreLink("Charts", "shelf", "app:chart:albums"), exploreLink("Music videos", "shelf", "app:videos")}
 		p.Shelves = []Shelf{{Title: "Browse", Items: []Item{
 			exploreLink("Genres", "genres", "/v1/catalog/{storefront}/genres"),
 			exploreLink("Charts", "charts", "app:charts"),

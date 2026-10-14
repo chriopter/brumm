@@ -16,9 +16,9 @@ use tokio::net::UnixStream;
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::apple::{ExplorePage, Item, Ref, Shelf, Track};
 use crate::config::{self, Options};
 use crate::error::{Error, Result, err};
+use crate::music::{ExplorePage, Item, Ref, Shelf, Track};
 
 // Commands.
 /// Add ids (of kind `list`: songs, albums, playlists) to the library.
@@ -33,11 +33,11 @@ pub const CMD_OPEN: &str = "open";
 pub const CMD_SEARCH: &str = "search";
 /// → shelves: recently played, radio, recommendations…
 pub const CMD_HOME: &str = "home";
-/// `refs`: submit typed resources to Apple Music favorites.
+/// `refs`: submit typed resources to the provider favorites.
 pub const CMD_FAVORITE: &str = "favorite";
 /// `list`: folder or playlist; `query`: name; `start`: parent folder.
 pub const CMD_CREATE: &str = "create";
-/// `query`: relative public API route → explorer page.
+/// `query`: opaque provider navigation handle → explorer page.
 pub const CMD_EXPLORE: &str = "explore";
 /// `item` (a station, or an artist) or `start` (a song): play its station.
 pub const CMD_STATION: &str = "station";
@@ -65,7 +65,7 @@ pub const CMD_RATINGS: &str = "ratings";
 pub const CMD_RATE: &str = "rate";
 /// `start`: a song id → items: its artist.
 pub const CMD_ARTIST: &str = "artist";
-/// `start`: a song id → link: its music.apple.com address.
+/// `start`: a song id → link: its provider's share address.
 pub const CMD_LINK: &str = "link";
 /// `value` 1 installs the available update; 0 checks for one; 2 checks now
 /// and answers; 3 restarts into an installed one.
@@ -92,7 +92,7 @@ pub const CMD_LOGIN: &str = "login";
 /// `query` "tui", "gui" or "" (as the options say): open that player, or
 /// bring it to the front.
 pub const CMD_SHOW: &str = "show";
-/// `query`: a music.apple.com link → items: what it names, ids: the song it
+/// `query`: a provider link → items: what it names, ids: the song it
 /// points at.
 pub const CMD_RESOLVE: &str = "resolve";
 /// `query`: what the user wrote, `source`: the face (tui, gui), `value` 1:
@@ -100,6 +100,8 @@ pub const CMD_RESOLVE: &str = "resolve";
 pub const CMD_FEEDBACK: &str = "feedback";
 /// `place` set: where a player is (section, open views, selection); none →
 /// place: where the last one was.
+/// Read the provider choices, or select an available provider named in query.
+pub const CMD_PROVIDER: &str = "provider";
 pub const CMD_PLACE: &str = "place";
 /// Stop the daemon.
 pub const CMD_QUIT: &str = "quit";
@@ -181,6 +183,7 @@ impl Request {
 pub const STATUS_STARTING: &str = "starting";
 pub const STATUS_READY: &str = "ready";
 pub const STATUS_LOGGED_OUT: &str = "logged-out";
+pub const STATUS_CHOOSE_PROVIDER: &str = "choose-provider";
 pub const STATUS_ERROR: &str = "error";
 
 /// A song being previewed.
@@ -244,6 +247,8 @@ pub struct State {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Message {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<crate::provider::registry::Selection>,
     #[serde(skip_serializing_if = "is_zero_i")]
     pub id: i64,
     #[serde(skip_serializing_if = "String::is_empty")]

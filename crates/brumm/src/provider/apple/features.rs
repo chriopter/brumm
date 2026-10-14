@@ -23,6 +23,10 @@ impl Client {
             "app:discover" => {
                 return Ok(ExplorePage {
                     title: "Explore".into(),
+                    visuals: vec![
+                        feature_link("Charts", "app:charts:albums"),
+                        feature_link("Music videos", "app:charts:videos"),
+                    ],
                     items: vec![
                         feature_link("Genres", &self.catalog_path("/genres").await),
                         feature_link("Radio genres", &self.catalog_path("/station-genres").await),
@@ -38,6 +42,16 @@ impl Client {
                     info: "Search also finds activities, curators and record labels.".into(),
                     ..Default::default()
                 });
+            }
+            "app:charts:albums" => {
+                route = self
+                    .catalog_path("/charts?types=albums,playlists&limit=6")
+                    .await
+            }
+            "app:charts:videos" => {
+                route = self
+                    .catalog_path("/charts?types=music-videos&limit=6")
+                    .await
             }
             "app:charts" => {
                 return Ok(ExplorePage {
@@ -258,6 +272,7 @@ impl Client {
             "playlist" => "playlists",
             _ => return Err(err("unsupported container")),
         };
+        let parent = container_parent(parent)?;
         let mut body = json!({"attributes": {"name": name.trim()}});
         if !parent.is_empty() && parent != "p.playlistsroot" {
             body["relationships"] =
@@ -316,6 +331,27 @@ impl Client {
         .await?;
         Ok(())
     }
+}
+
+// Only the adapter maps a folder handle to the REST relationship ID.
+fn container_parent(parent: &str) -> Result<String> {
+    if parent == "app:folders" || parent == "p.playlistsroot" {
+        return Ok(String::new());
+    }
+    if parent.starts_with('/') {
+        super::explore::valid_route(parent)?;
+        let path = parent.split('?').next().unwrap_or_default();
+        let id = path
+            .strip_prefix("/v1/me/library/playlist-folders/")
+            .and_then(|tail| tail.split('/').next())
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| err("not a playlist folder"))?;
+        return Ok(id.to_string());
+    }
+    if parent.starts_with("app:") {
+        return Err(err("not a playlist folder"));
+    }
+    Ok(parent.to_string())
 }
 
 #[cfg(test)]
@@ -437,5 +473,23 @@ mod tests {
             .await
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod parent_tests {
+    use super::*;
+    #[test]
+    fn folder_handles_are_resolved_only_in_the_adapter() {
+        assert_eq!(container_parent("app:folders").unwrap(), "");
+        assert_eq!(container_parent("p.playlistsroot").unwrap(), "");
+        assert_eq!(container_parent("p.root").unwrap(), "p.root");
+        assert_eq!(
+            container_parent("/v1/me/library/playlist-folders/p.root/children?limit=25").unwrap(),
+            "p.root"
+        );
+        assert!(container_parent("/v1/me/library/songs/i.song").is_err());
+        assert!(container_parent("/v1/me/library/playlist-folders/../songs").is_err());
+        assert!(container_parent("app:charts").is_err());
     }
 }

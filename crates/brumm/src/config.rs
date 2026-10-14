@@ -90,6 +90,9 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// The user's Apple Music session, and a developer token of their own.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Config {
+    /// The saved service; old Apple sessions remain compatible.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub developer_token: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -101,6 +104,17 @@ fn config_path() -> PathBuf {
 }
 
 impl Config {
+    pub fn effective_provider(&self) -> &str {
+        if self.provider.is_empty() && !self.user_token.is_empty() {
+            "apple"
+        } else {
+            &self.provider
+        }
+    }
+    pub fn needs_provider_choice(&self) -> bool {
+        self.effective_provider().is_empty()
+    }
+
     /// The config; a missing file is an empty config, not an error.
     pub fn load() -> Result<Config> {
         match fs::read(config_path()) {

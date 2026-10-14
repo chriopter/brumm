@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::model::{Model, NUM_SECTIONS, SEC_QUEUE, SEC_SEARCH, SECTION_NAMES, View, select_song};
-use crate::apple::Item;
 use crate::ipc::{self, Client, Request};
+use crate::music::Item;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

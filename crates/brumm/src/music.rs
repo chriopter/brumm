@@ -1,6 +1,6 @@
 //! What the players browse, as the daemon hands it to them.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 // Kinds of containers.
 pub const KIND_PLAYLIST: &str = "playlist";
@@ -53,13 +53,13 @@ pub struct Item {
     /// A one-line summary: year, label, song count, audio quality.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub info: String,
-    /// Apple's editorial blurb or a playlist's description.
+    /// An editorial blurb or a playlist's description.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub note: String,
     /// A playlist songs can be added to.
     #[serde(skip_serializing_if = "is_false")]
     pub editable: bool,
-    /// A public API resource or explorer route.
+    /// An opaque provider navigation handle.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub route: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -84,8 +84,7 @@ impl Item {
     }
 }
 
-/// One playable song. `id` is what MusicKit plays: a library id ("i.…")
-/// or a catalog id.
+/// One playable song. The active provider interprets its opaque ID.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Track {
@@ -110,6 +109,9 @@ pub struct Track {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Shelf {
+    /// Opaque handle for opening the complete row.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub route: String,
     pub title: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<Item>,
@@ -135,6 +137,9 @@ impl Shelf {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ExplorePage {
+    /// Optional artwork rows to load on Explore, supplied by the provider.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub visuals: Vec<Item>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -158,4 +163,11 @@ pub struct Ref {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub kind: String,
     pub id: String,
+}
+
+/// A null where a value belongs is the empty value, as Go's decoder left it.
+pub(crate) fn nullable<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(
+    d: D,
+) -> std::result::Result<T, D::Error> {
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }

@@ -2,6 +2,7 @@
 //! MPRIS server for media keys and the bar, and a unix socket the players
 //! talk to. Music keeps playing when the players are closed.
 
+mod apple;
 mod feedback;
 mod frontends;
 mod library;
@@ -19,14 +20,16 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, Semaphore};
 
-use crate::apple::{
-    self, ExplorePage, Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF, KIND_STATION,
-    KIND_TERM, Shelf,
-};
+use self::apple::new_api;
 use crate::config::{self, Config, Options};
 use crate::engine::{self, CdpError, Engine};
 use crate::error::{Error, Result, err};
 use crate::ipc::{self, Message, Player, Request, State};
+use crate::music::{
+    ExplorePage, Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF, KIND_STATION, KIND_TERM,
+    Shelf,
+};
+use crate::provider::Api;
 use crate::{chrome, launch, mpris};
 
 use library::Library;
@@ -103,7 +106,7 @@ struct CachedPage {
 #[derive(Default)]
 struct Inner {
     eng: Option<Arc<Engine>>,
-    api: Option<Arc<apple::Client>>,
+    api: Option<Arc<dyn Api>>,
     state: State,
     conns: HashMap<u64, ConnInfo>,
     booting: bool,
@@ -328,6 +331,15 @@ impl Daemon {
             Ok(c) => c,
             Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
         };
+        if cfg.needs_provider_choice() {
+            return self
+                .set_status(ipc::STATUS_CHOOSE_PROVIDER, "Choose your music provider")
+                .await;
+        }
+        let api = match new_api(&cfg) {
+            Ok(api) => api,
+            Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
+        };
         if cfg.developer().is_empty() {
             return self
                 .set_status(
@@ -343,10 +355,7 @@ impl Daemon {
         }
         let first = {
             let mut i = self.lock();
-            i.api = Some(Arc::new(apple::Client::new(
-                cfg.developer(),
-                &cfg.user_token,
-            )));
+            i.api = Some(api);
             if let Some(exp) = cfg.expires() {
                 i.expires = Some(exp);
                 let days = (exp - chrono::Utc::now().timestamp()) / 86400;
@@ -606,10 +615,7 @@ impl Daemon {
 
     async fn apply(self: &Arc<Self>, mut es: Player) {
         let (status, msg) = if es.needs_auth {
-            (
-                ipc::STATUS_LOGGED_OUT,
-                "Apple Music session expired".to_string(),
-            )
+            (ipc::STATUS_LOGGED_OUT, "music session expired".to_string())
         } else if !es.err.is_empty() {
             (ipc::STATUS_ERROR, es.err.clone())
         } else if es.ready {
@@ -793,6 +799,7 @@ impl Daemon {
                 reply.state = Some(st);
                 return Ok(());
             }
+            ipc::CMD_PROVIDER => return self.select_provider(&r.query, reply).await,
             ipc::CMD_LIST => return self.list(&r.list, reply).await,
             ipc::CMD_OPEN => {
                 let it = r.item.as_ref().ok_or_else(|| err("open: no item"))?;
@@ -1008,11 +1015,11 @@ impl Daemon {
             return Ok(());
         }
         let api = self.client()?;
-        let r = self.fetch_list(&api, name, reply).await;
+        let r = self.fetch_list(api.as_ref(), name, reply).await;
         self.auth_check(r).await
     }
 
-    async fn fetch_list(&self, api: &apple::Client, name: &str, reply: &mut Message) -> Result<()> {
+    async fn fetch_list(&self, api: &dyn Api, name: &str, reply: &mut Message) -> Result<()> {
         let e = match name {
             ipc::LIST_PLAYLISTS => {
                 let (v, e) = api.playlists().await;
@@ -1166,14 +1173,14 @@ impl Daemon {
         Ok(())
     }
 
-    fn client(&self) -> Result<Arc<apple::Client>> {
+    fn client(&self) -> Result<Arc<dyn Api>> {
         self.lock().api.clone().ok_or_else(|| err("still starting"))
     }
 
     /// Says the session expired, when Apple says so.
     async fn auth_check<T>(&self, r: Result<T>) -> Result<T> {
         if let Err(Error::Unauthorized) = &r {
-            self.set_status(ipc::STATUS_LOGGED_OUT, "Apple Music session expired")
+            self.set_status(ipc::STATUS_LOGGED_OUT, "music session expired")
                 .await;
         }
         r
@@ -1186,12 +1193,16 @@ impl Daemon {
             Ok(c) if !c.user_token.is_empty() => c,
             _ => return,
         };
+        let api = match new_api(&cfg) {
+            Ok(api) => api,
+            Err(e) => {
+                self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
+                return;
+            }
+        };
         let eng = {
             let mut i = self.lock();
-            i.api = Some(Arc::new(apple::Client::new(
-                cfg.developer(),
-                &cfg.user_token,
-            )));
+            i.api = Some(api);
             i.eng.clone()
         };
         if let Some(eng) = eng
@@ -1221,7 +1232,7 @@ impl Daemon {
             i.refreshing = true;
             api
         };
-        self.refresh_with(&api).await;
+        self.refresh_with(api.as_ref()).await;
         let again = {
             let mut i = self.lock();
             let again = i.refresh_next;
@@ -1234,7 +1245,7 @@ impl Daemon {
         }
     }
 
-    async fn refresh_with(self: &Arc<Self>, api: &apple::Client) {
+    async fn refresh_with(self: &Arc<Self>, api: &dyn Api) {
         for name in [
             ipc::LIST_PLAYLISTS,
             ipc::LIST_ALBUMS,
@@ -1614,7 +1625,7 @@ mod tests {
             let d = daemon();
             d.lib.set_tracks(
                 &it.key(),
-                vec![apple::Track {
+                vec![crate::music::Track {
                     id: "song".into(),
                     title: "Song".into(),
                     ..Default::default()
@@ -1635,20 +1646,20 @@ mod tests {
             d.favorites_from_cache("songs").is_none(),
             "nothing cached: ask Apple"
         );
-        let fav = apple::Detail {
+        let fav = crate::music::Detail {
             label: "Favorite".into(),
             value: "true".into(),
         };
         d.lib.set_tracks(
             "songs",
             vec![
-                apple::Track {
+                crate::music::Track {
                     id: "a".into(),
                     favorite: true,
                     details: vec![fav.clone()],
                     ..Default::default()
                 },
-                apple::Track {
+                crate::music::Track {
                     id: "b".into(),
                     details: vec![fav],
                     ..Default::default()
@@ -1730,3 +1741,6 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod provider_tests;

@@ -79,6 +79,7 @@ impl Client {
         let recent = async {
             let r = self.fetch("/v1/me/recent/played?limit=10").await;
             let mut s = Shelf::titled("Recently played");
+            s.route = "/v1/me/recent/played".into();
             if let Ok(rs) = &r {
                 s.items = mixed(rs).0;
             }
@@ -97,6 +98,7 @@ impl Client {
         let rotation = async {
             let r = self.fetch("/v1/me/history/heavy-rotation?limit=10").await;
             let mut s = Shelf::titled("Heavy rotation");
+            s.route = "/v1/me/history/heavy-rotation".into();
             if let Ok(rs) = &r {
                 s.items = mixed(rs).0;
             }
@@ -105,6 +107,7 @@ impl Client {
         let added = async {
             let r = self.fetch("/v1/me/library/recently-added?limit=10").await;
             let mut s = Shelf::titled("Recently added");
+            s.route = "/v1/me/library/recently-added".into();
             if let Ok(mut rs) = r.clone() {
                 if let Ok(more) = self
                     .fetch("/v1/me/library/recently-added?limit=10&offset=10")
@@ -218,6 +221,7 @@ impl Client {
             let (items, tracks) = mixed(&g.relationships.contents.data);
             let s = Shelf {
                 title: g.attributes.title.text,
+                route: "/v1/me/recommendations".into(),
                 items,
                 tracks,
             };
@@ -256,6 +260,7 @@ impl Client {
                     title: ch.name.clone(),
                     items,
                     tracks,
+                    ..Default::default()
                 };
                 if !s.is_empty() {
                     out.push(s);

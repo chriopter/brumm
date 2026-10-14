@@ -11,8 +11,8 @@ use super::model::{FRAME_EVERY, Model, ThumbReq};
 use super::options::COVER_ORIGINAL;
 use super::text::*;
 use super::view::{IC_SONG, StageLine, kind_icon};
-use crate::apple::{KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION};
 use crate::art::Size;
+use crate::music::{KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION};
 
 /// What a selected row shows on the stage.
 #[derive(Clone, Debug)]
