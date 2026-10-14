@@ -21,4 +21,3 @@ if (window.fetch) {
     return nativeFetch(mapped === input.url ? input : new Request(mapped,input),init);
   };
 }
-

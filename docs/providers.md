@@ -3,8 +3,8 @@
 Brumm keeps the existing Rust core, Unix socket, Qt frontend, terminal
 frontend, and shared player. Provider implementations are built in and run
 inside the daemon. Apple Music and Tidal use the provider
-contract end to end. Tidal is selectable on this development branch; live
-live sign-in, browsing and full-track playback state pass. Audible output
+contract end to end. Tidal is selectable on this development branch. Live
+sign-in, browsing and full-track playback state pass. Audible output
 is still unverified.
 
 ## Boundaries in this branch
