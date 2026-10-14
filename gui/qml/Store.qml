@@ -413,7 +413,7 @@ Item {
     function setFlash(text) { flash = text; flashTimer.restart() }
 
     Component.onCompleted: {
-        stacks = navigation.map(rootView)
+        stacks = navigation.map(entry => [rootView(entry)])
         const f = parseFloat(sys.setting("split", 0.4))
         if (f >= 0.08 && f <= 0.7) split = f
         refresh()

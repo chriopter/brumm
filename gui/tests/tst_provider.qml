@@ -48,8 +48,18 @@ TestCase {
     }
 
     Brumm.Store { id: store }
+    Component { id: freshStore; Brumm.Store {} }
 
     function init() { fakeDaemon.asked = []; store.st = { status: "starting" }; store.providerRequested = false; store.configureProvider({ selected: "apple", protocolVersion: 1, navigation: appleNavigation, capabilities: appleCapabilities }) }
+
+    function test_initialStacksAreArraysBeforeProviderReply() {
+        const fresh = freshStore.createObject(this)
+        verify(Array.isArray(fresh.stack()))
+        compare(fresh.stack().length, 1)
+        verify(!!fresh.cur())
+        verify(Array.isArray(fresh.cur().rows))
+        fresh.destroy()
+    }
 
     function test_exploreUsesProviderHandles() {
         store.section = store.secExplore

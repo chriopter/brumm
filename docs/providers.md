@@ -124,7 +124,7 @@ fictional provider data and does not require personal credentials.
 ### Current implementation evidence (2026-10-14)
 
 - 170 Rust core unit tests, 5 shared-library tests and 3 daemon integration tests pass.
-- 12 QML checks and 10 SDK adapter checks pass.
+- 13 QML checks and 10 SDK adapter checks pass.
 - Rust formatting, Clippy with warnings denied, Qt build and diff whitespace checks pass.
 - A fictional Tidal desktop fixture renders the approved navigation and unified heart.
 - Live device login completes and survives restarts and Apple → Tidal switching.
