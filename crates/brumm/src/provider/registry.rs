@@ -35,7 +35,7 @@ pub fn choices() -> Vec<ProviderInfo> {
         ProviderInfo {
             id: "tidal".into(),
             name: "Tidal".into(),
-            available: false,
+            available: true,
         },
     ]
 }
@@ -65,8 +65,10 @@ pub fn selection(cfg: &Config) -> Selection {
 /// The sole composition point for built-in service implementations.
 pub fn definition(id: &str) -> Result<&'static dyn super::session::Definition> {
     static APPLE: super::apple::session::Apple = super::apple::session::Apple;
+    static TIDAL: super::tidal::session::Tidal = super::tidal::session::Tidal;
     match id {
         "apple" => Ok(&APPLE),
+        "tidal" => Ok(&TIDAL),
         _ => Err(Error::Unsupported),
     }
 }
@@ -84,7 +86,7 @@ mod tests {
         assert_eq!(selection(&cfg).selected, "apple");
         assert!(!selection(&cfg).needs_choice);
         assert!(validate("apple").is_ok());
-        assert_eq!(validate("tidal"), Err(Error::Unsupported));
+        assert!(validate("tidal").is_ok());
         assert!(validate("unknown").is_err());
     }
 }

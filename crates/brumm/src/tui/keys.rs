@@ -97,7 +97,9 @@ impl Model {
             .filter(|(_, action)| match *action {
                 "preview" => self.capabilities.previews,
                 "radio" => self.capabilities.stations,
-                "rate" | "love" => self.capabilities.ratings,
+                "rate" | "love" => {
+                    self.capabilities.ratings || self.capabilities.preference.is_some()
+                }
                 "playlist" => self.capabilities.playlist_write,
                 "library" => self.capabilities.collection_write,
                 _ => true,

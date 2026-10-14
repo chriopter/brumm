@@ -56,6 +56,7 @@ impl Definition for Apple {
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
+            preference: None,
             collection_kinds: ["song", "album", "playlist"].map(str::to_owned).to_vec(),
             rating_kinds: ["song", "album", "playlist", "station"]
                 .map(str::to_owned)
@@ -101,6 +102,7 @@ impl Definition for Apple {
         self.validate(cfg)?;
         let settings = json!({"developerToken": cfg.developer(), "userToken": cfg.user_token, "version": version});
         Ok(PlaybackPage {
+            resources: PlaybackResources::default(),
             html: include_str!("player.html")
                 .replace("__BRUMM_CFG__", &crate::engine::script_json(&settings)),
             refresh: Some(ScriptCall {

@@ -20,6 +20,7 @@ pub struct FeatureForm {
 impl Model {
     pub fn provider_key(&mut self, key: &str) {
         match key {
+            "esc" if self.provider_picker_open => self.provider_picker_open = false,
             "q" | "Q" | "ctrl+c" => self.cmds.push(super::model::Cmd::Quit),
             "up" | "down" | "tab" | "k" | "j" => {
                 let n = self.provider_choices.len();
@@ -40,6 +41,7 @@ impl Model {
                     .get(self.provider_index)
                     .filter(|p| p.available)
                 {
+                    self.provider_picker_open = false;
                     self.ask(
                         Request {
                             cmd: ipc::CMD_PROVIDER.into(),
@@ -58,6 +60,29 @@ impl Model {
             _ => {}
         }
     }
+    pub fn auth_box(&self) -> Vec<L> {
+        let Some(prompt) = &self.state.auth else {
+            return vec![];
+        };
+        let lines = vec![
+            one(format!(" Connect {}", self.provider_name), BOLD),
+            one(format!(" {}", prompt.url), PLAIN),
+            one(
+                format!(" Code: {}", prompt.code.as_deref().unwrap_or("")),
+                HERE,
+            ),
+            one(" Approve the connection in your browser · esc cancel", DIM),
+        ];
+        box_lines(
+            "Device login",
+            false,
+            L::default(),
+            lines,
+            (self.width - 8).clamp(20, 78),
+            6,
+        )
+    }
+
     pub fn provider_box(&self) -> Vec<L> {
         let wd = 54.min(self.width - 2 * MARGIN - 4).max(8);
         let mut lines = vec![one(" Choose your music service", PLAIN)];
@@ -192,8 +217,21 @@ impl Model {
                 .map_or("song".to_string(), |it| it.kind.clone());
             page.rows.push(Row::item(Item {
                 kind: KIND_SHELF.into(),
-                id,
-                name: "Add favorite".into(),
+                id: id.clone(),
+                name: if let Some(preference) = &self.capabilities.preference {
+                    if self
+                        .favorites
+                        .get(&format!("{kind}:{id}"))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        preference.remove_label.clone()
+                    } else {
+                        preference.label.clone()
+                    }
+                } else {
+                    "Add favorite".into()
+                },
                 route: format!("action:favorite:{kind}"),
                 ..Default::default()
             }));

@@ -54,6 +54,8 @@ pub fn navigation(mut entries: Vec<NavigationEntry>) -> Vec<NavigationEntry> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Capabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preference: Option<Preference>,
     pub collection_kinds: Vec<String>,
     pub rating_kinds: Vec<String>,
     pub favorite_kinds: Vec<String>,
@@ -66,6 +68,15 @@ pub struct Capabilities {
     pub stations: bool,
     pub previews: bool,
     pub autoplay: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Preference {
+    pub label: String,
+    pub remove_label: String,
+    pub collection_equivalent: bool,
+    pub removable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -88,6 +99,30 @@ pub type AuthReporter = Arc<dyn Fn(AuthEvent) + Send + Sync>;
 pub struct PlaybackPage {
     pub html: String,
     pub refresh: Option<ScriptCall>,
+    pub resources: PlaybackResources,
+}
+
+#[derive(Clone, Default)]
+pub struct PlaybackResources {
+    pub assets: Vec<PlaybackAsset>,
+    pub bridge: Option<Arc<dyn PlaybackBridge>>,
+}
+
+#[derive(Clone)]
+pub struct PlaybackAsset {
+    pub name: &'static str,
+    pub content_type: &'static str,
+    pub body: &'static [u8],
+}
+
+/// Private SDK operations. Providers implement a finite route set and capture
+/// their own account; these responses never go to the frontend socket.
+pub trait PlaybackBridge: Send + Sync {
+    fn request<'a>(
+        &'a self,
+        route: &'a str,
+        body: serde_json::Value,
+    ) -> Reply<'a, Result<serde_json::Value>>;
 }
 pub struct ScriptCall {
     pub method: &'static str,
@@ -95,6 +130,9 @@ pub struct ScriptCall {
 }
 
 pub trait Definition: Send + Sync {
+    fn cache_max_age(&self) -> Option<std::time::Duration> {
+        None
+    }
     fn id(&self) -> &'static str;
     fn navigation(&self) -> Vec<NavigationEntry>;
     fn capabilities(&self) -> Capabilities;

@@ -1,0 +1,8 @@
+{
+  "name": "brumm-tidal-player",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test player.test.mjs", "build": "esbuild player.js --bundle --minify --format=esm --legal-comments=external --outfile=../../crates/brumm/src/provider/tidal/player.js" },
+  "dependencies": { "@tidal-music/player": "0.20.1", "@tidal-music/event-producer": "2.6.0" },
+  "devDependencies": { "esbuild": "0.25.12" }
+}

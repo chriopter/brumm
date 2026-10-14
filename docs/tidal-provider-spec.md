@@ -1,9 +1,10 @@
 # Tidal provider specification
 
-Status: approved product decisions and implementation plan, 2026-10-14.
-Implementation starts from the Apple provider snapshot `eb6a79b` on branch
-`tidal-provider`. This document describes work to implement; it is not evidence
-that Tidal is enabled in this branch yet.
+Status: implementation checkpoint, 2026-10-14. Branch `tidal-provider` starts
+from Apple snapshot `eb6a79b`. The shared lifecycle and Tidal adapter are
+implemented, with Tidal enabled for development. See `providers.md` for current
+validation evidence. Completed live login, current endpoint access and full-track
+playback remain pending; development availability is not release readiness.
 
 ## Decisions
 
@@ -152,8 +153,8 @@ Ownership and favorite state remain independent. Determine editability from
 Tidal ownership/permissions, not from presence in the user's collection.
 The playlist picker includes confirmed editable playlists only.
 
-Create playlists using Tidal's normal personal, non-public default; verify its
-API accessType mapping before choosing a value. Require a name and keep the
+Create playlists with `accessType=UNLISTED` (the inspected enum offers PUBLIC
+and UNLISTED and documents no default). Require a name and keep the
 description optional. Creating a playlist and appending tracks are separate
 operations: if creation succeeds but appending fails, retain/report the new
 playlist and let the user retry the append. Preserve duplicate tracks and order.
@@ -227,8 +228,9 @@ evidence, not a claim of Tidal approval.
    artwork, selection, pending mutations and playback state during transitions.
 5. Add the generic preference descriptor/desired-state operation and private
    playback transport. Keep Apple implemented against each shared change.
-6. Register Tidal as available only after authentication, core library/catalog
-   reads and playback initialization pass the required evidence checks.
+6. Tidal is selectable on this development branch to complete live checks.
+   Release readiness still requires completed authentication, current core
+   library/catalog reads and playback initialization/full-track evidence.
 
 Temporary Tidal metadata/art caches need an expiry and refresh policy; do not
 inherit indefinite Apple cache lifetime. Resume state stores only what is needed

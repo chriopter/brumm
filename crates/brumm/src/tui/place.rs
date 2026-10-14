@@ -96,7 +96,7 @@ impl Model {
     /// Asks the daemon for a place left by the other player, and takes it
     /// off, so a later start opens as ever.
     pub fn ask_place(&mut self) {
-        let Some(c) = self.client.clone() else {
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
             self.placing = false;
             return;
         };

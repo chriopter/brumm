@@ -322,6 +322,28 @@ Window {
         }
     }
 
+    Dialog {
+        id: deviceDialog
+        x: (win.width - width) / 2; y: (win.height - height) / 2
+        width: Math.min(ui.px(460), win.width - ui.px(24))
+        modal: true; closePolicy: Popup.NoAutoClose
+        visible: !!store.st.auth && store.st.auth.kind === "device"
+        title: "Connect " + store.providerName
+        background: Rectangle { color: ui.deep; radius: ui.px(12); border.color: ui.edge }
+        header: Label { text: deviceDialog.title; color: ui.bright; padding: ui.px(16); font.pixelSize: ui.px(20) }
+        contentItem: Column {
+            spacing: ui.px(12)
+            Label { width: parent.width; text: "Open Tidal's linking page and approve Brumm with this code:"; color: ui.fg; wrapMode: Text.WordWrap }
+            Label { text: store.st.auth ? store.st.auth.code || "" : ""; color: ui.bright; font.pixelSize: ui.px(28) }
+            Label { width: parent.width; text: store.st.auth ? store.st.auth.url || "" : ""; color: ui.dim; wrapMode: Text.WrapAnywhere }
+            Row {
+                spacing: ui.px(8)
+                Button { text: "Open linking page"; onClicked: { if (store.st.auth) Qt.openUrlExternally(store.st.auth.url) } }
+                Button { text: "Cancel"; onClicked: daemon.send({cmd:"cancel-login"}) }
+            }
+        }
+    }
+
     property int contextIndex: -1
     property var contextRow: null
     property var contextView: null
@@ -389,8 +411,8 @@ Window {
             }
         }
         Text {
-            visible: store.capabilities.favorites && !!store.inspect && (prototypeMode || !store.inspect.favorite) && (!!store.inspect.title || (store.capabilities.favoriteKinds || []).includes(store.inspect.kind))
-            text: prototypeMode && store.inspect && store.inspect.favorite ? "♥ Remove favorite" : "♡ Add favorite"
+            visible: store.capabilities.favorites && !!store.inspect && (prototypeMode || !!store.capabilities.preference || !store.inspect.favorite) && (!!store.inspect.title || (store.capabilities.favoriteKinds || []).includes(store.inspect.kind))
+            text: store.capabilities.preference && store.inspect ? (store.favoriteMark(store.inspect.kind || "song", store.inspect.id) ? "♥ " + store.capabilities.preference.removeLabel : "♡ " + store.capabilities.preference.label) : prototypeMode && store.inspect && store.inspect.favorite ? "♥ Remove favorite" : "♡ Add favorite"
             color: ui.here
             font.pixelSize: ui.px(16)
             TapHandler { onTapped: store.prototypeFavorite() }

@@ -107,6 +107,7 @@ struct CachedPage {
 #[derive(Default)]
 struct Inner {
     login_task: Option<tokio::task::AbortHandle>,
+    auth_serial: u64,
     eng: Option<Arc<Engine>>,
     api: Option<Arc<dyn Api>>,
     state: State,
@@ -176,6 +177,7 @@ fn same(a: &Option<Arc<Engine>>, b: &Arc<Engine>) -> bool {
 pub async fn run(version: &str) -> Result<()> {
     let ln = listen().await?;
     engine::sweep_profiles(); // left behind by crashes
+    config::expire_session_files();
     config::migrate_session_cache()?;
     let cfg = Config::load()?;
     let authenticated = crate::provider::registry::definition(cfg.effective_provider())
@@ -903,6 +905,24 @@ impl Daemon {
                 self.spawn_refresh();
                 return Ok(());
             }
+            "favorites" => {
+                let api = self.client()?;
+                reply.favorites = self.auth_check(api.favorites(&r.refs).await).await?;
+                return Ok(());
+            }
+            "set-favorite" => {
+                let saved = r
+                    .saved
+                    .ok_or_else(|| err("set-favorite: desired state is required"))?;
+                if r.refs.is_empty() {
+                    return Err(err("set-favorite: nothing named"));
+                }
+                let api = self.client()?;
+                self.auth_check(api.set_favorite(&r.refs, saved).await)
+                    .await?;
+                self.spawn_refresh();
+                return Ok(());
+            }
             ipc::CMD_CREATE => {
                 let api = self.client()?;
                 let it = self
@@ -919,7 +939,13 @@ impl Daemon {
                 return Ok(());
             }
             ipc::CMD_STATION => return self.station(r, reply).await,
-            ipc::CMD_PLAYLIST => return self.add_to_playlist(r, reply).await,
+            ipc::CMD_PLAYLIST => {
+                let result = self.add_to_playlist(r, reply).await;
+                if result.is_err() {
+                    self.spawn_refresh();
+                }
+                return result;
+            }
             ipc::CMD_ALBUM => {
                 let api = self.client()?;
                 reply.items = vec![self.auth_check(api.album_of(&r.start).await).await?];

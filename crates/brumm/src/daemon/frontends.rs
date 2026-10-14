@@ -165,6 +165,11 @@ impl Daemon {
     pub(super) fn login(self: &Arc<Self>) {
         let Ok(guard) = LOGIN.try_lock() else { return }; // the page is open already
         let generation = self.session.current();
+        let serial = {
+            let mut i = self.lock();
+            i.auth_serial += 1;
+            i.auth_serial
+        };
         let d = self.clone();
         let report = {
             let d = d.clone();
@@ -174,6 +179,9 @@ impl Daemon {
                 }
                 let state = {
                     let mut i = d.lock();
+                    if i.auth_serial != serial {
+                        return;
+                    }
                     match event {
                         AuthEvent::Progress(message) => i.state.message = message,
                         AuthEvent::Prompt(prompt) => i.state.auth = Some(prompt),
@@ -183,6 +191,9 @@ impl Daemon {
                 let d = d.clone();
                 tokio::spawn(async move {
                     if let Ok(_lease) = d.session.read(generation).await {
+                        if d.lock().auth_serial != serial {
+                            return;
+                        }
                         d.broadcast(Message {
                             generation,
                             state: Some(state),
@@ -206,6 +217,9 @@ impl Daemon {
             let result = tokio::select! { r = login::run_with_report(report) => r, _ = changed.changed() => return };
             {
                 let mut i = d.lock();
+                if i.auth_serial != serial {
+                    return;
+                }
                 i.state.auth = None;
                 i.login_task = None;
             }
@@ -237,6 +251,7 @@ impl Daemon {
     pub(super) async fn cancel_login(&self) {
         let st = {
             let mut i = self.lock();
+            i.auth_serial += 1;
             if let Some(task) = i.login_task.take() {
                 task.abort();
             }

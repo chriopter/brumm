@@ -147,6 +147,8 @@ fn some_value<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<Val
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Request {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved: Option<bool>,
     #[serde(skip_serializing_if = "is_zero_i")]
     pub generation: i64,
     #[serde(rename = "protocolVersion", skip_serializing_if = "is_zero_i")]
@@ -219,6 +221,18 @@ pub struct Clip {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Player {
+    #[serde(rename = "requestedQuality", skip_serializing_if = "String::is_empty")]
+    pub requested_quality: String,
+    #[serde(rename = "audioQuality", skip_serializing_if = "String::is_empty")]
+    pub audio_quality: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub codec: String,
+    #[serde(rename = "sampleRate", skip_serializing_if = "is_zero_i")]
+    pub sample_rate: i64,
+    #[serde(rename = "bitDepth", skip_serializing_if = "is_zero_i")]
+    pub bit_depth: i64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub presentation: String,
     pub ready: bool,
     pub err: String,
     #[serde(rename = "needsAuth")]
@@ -268,6 +282,8 @@ pub struct State {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Message {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub favorites: BTreeMap<String, bool>,
     #[serde(skip_serializing_if = "is_zero_i")]
     pub generation: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -381,6 +397,7 @@ pub struct Client {
     next: Arc<AtomicI64>,
     pending: Pending,
     generation: Arc<AtomicI64>,
+    bound_generation: Option<i64>,
 }
 
 impl Client {
@@ -457,6 +474,7 @@ impl Client {
                 next: Arc::new(AtomicI64::new(0)),
                 pending,
                 generation,
+                bound_generation: None,
             },
             rx,
         )
@@ -467,7 +485,7 @@ impl Client {
     pub async fn request(&self, mut r: Request) -> Result<Message> {
         r.protocol_version = PROTOCOL_VERSION;
         if r.generation == 0 {
-            r.generation = self.generation();
+            r.generation = self.bound_generation.unwrap_or_else(|| self.generation());
         }
         r.id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
@@ -487,6 +505,12 @@ impl Client {
             return Err(Error::Msg(m.error));
         }
         Ok(m)
+    }
+
+    pub fn for_session(&self) -> Self {
+        let mut client = self.clone();
+        client.bound_generation = Some(self.generation());
+        client
     }
 
     pub fn generation(&self) -> i64 {
@@ -658,6 +682,53 @@ mod tests {
         .unwrap();
         assert!(result.unwrap_err().to_string().contains("session changed"));
         assert_eq!(client.generation(), 2);
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_queued_operation_keeps_the_session_it_was_created_for() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let server = tokio::spawn(async move {
+            let (r, mut w) = b.into_split();
+            let mut r = BufReader::new(r);
+            let mut line = Vec::new();
+            let mut provider = crate::provider::registry::selection(&config::Config::default());
+            provider.generation = 1;
+            w.write_all(&encode(&Message {
+                provider: Some(provider.clone()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            read_line(&mut r, &mut line, MAX_LINE).await.unwrap();
+            let trigger: Request = serde_json::from_slice(&line).unwrap();
+            provider.generation = 2;
+            w.write_all(&encode(&Message {
+                id: trigger.id,
+                provider: Some(provider),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            read_line(&mut r, &mut line, MAX_LINE).await.unwrap();
+            let old: Request = serde_json::from_slice(&line).unwrap();
+            assert_eq!(
+                old.generation, 1,
+                "queued mutations must never acquire the new provider's generation"
+            );
+            w.write_all(&encode(&Message {
+                id: old.id,
+                error: "session changed".into(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        });
+        let (client, mut events) = Client::new(a);
+        events.recv().await.unwrap();
+        let queued = client.for_session();
+        client.request(Request::new(CMD_PROVIDER)).await.unwrap();
+        assert_eq!(client.generation(), 2);
+        assert!(queued.request(Request::new(CMD_FAVORITE)).await.is_err());
         server.await.unwrap();
     }
 }

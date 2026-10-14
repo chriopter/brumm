@@ -66,10 +66,43 @@ pub fn session_cache_dir() -> PathBuf {
 
 pub fn session_cache_dir_for(cfg: &Config) -> PathBuf {
     match crate::provider::registry::definition(cfg.effective_provider()) {
-        Ok(provider) if provider.signed_in(cfg) => cache_dir()
+        Ok(provider) => cache_dir()
             .join(provider.id())
-            .join(provider.account_key(cfg)),
+            .join(if provider.signed_in(cfg) {
+                provider.account_key(cfg)
+            } else {
+                "signed-out".into()
+            }),
         _ => cache_dir(),
+    }
+}
+
+/// A provider may expire persisted metadata instead of inheriting Apple's cache
+/// lifetime. Also remove expired files from inactive accounts on startup.
+pub fn expire_session_files() {
+    for provider in crate::provider::registry::choices() {
+        let Some(age) = crate::provider::registry::definition(&provider.id)
+            .ok()
+            .and_then(|p| p.cache_max_age())
+        else {
+            continue;
+        };
+        let Ok(accounts) = fs::read_dir(cache_dir().join(&provider.id)) else {
+            continue;
+        };
+        for account in accounts.flatten() {
+            for name in ["library.json", "resume.json"] {
+                let path = account.path().join(name);
+                if fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|elapsed| elapsed > age)
+                {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
     }
 }
 
@@ -134,6 +167,11 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// The user's Apple Music session, and a developer token of their own.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Config {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::tidal::auth::Session::is_empty"
+    )]
+    pub tidal: crate::provider::tidal::auth::Session,
     /// The saved service; old Apple sessions remain compatible.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider: String,

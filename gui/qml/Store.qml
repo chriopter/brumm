@@ -9,7 +9,8 @@ Item {
     property var providers: []
     property int providerIndex: 0
     property bool providerRequested: false
-    readonly property bool providerChoiceNeeded: st.status === "choose-provider"
+    property bool providerPickerOpen: false
+    readonly property bool providerChoiceNeeded: st.status === "choose-provider" || providerPickerOpen
     function askProviders() {
         if (providerRequested) return
         providerRequested = true
@@ -21,12 +22,14 @@ Item {
             if (placing && daemon.connected) askPlace()
         })
     }
+    function openProviderPicker() { menuOpen = false; providerRequested = false; providerPickerOpen = true; askProviders() }
     function chooseProvider(id) {
         const provider = providers.find(p => p.id === id)
         if (!provider || !provider.available) return
-        daemon.request({ cmd: "provider", query: id }, (err, reply) => { if (err) setFlash(err); else if (reply.provider) configureProvider(reply.provider) })
+        daemon.request({ cmd: "provider", query: id }, (err, reply) => { if (err) setFlash(err); else if (reply.provider) { providerPickerOpen = false; configureProvider(reply.provider) } })
     }
     function providerKey(k) {
+        if (k === "esc" && providerPickerOpen) { providerPickerOpen = false; return }
         if (k === "Q" || k === "q" || k === "ctrl+c") { Qt.quit(); return }
         if (k === "enter") { const p = providers[providerIndex]; if (p) chooseProvider(p.id); return }
         if (!["up", "down", "tab", "k", "j"].includes(k)) return
@@ -72,9 +75,37 @@ Item {
         if (st.playing) daemon.send({ cmd: "toggle" })
         video = it
     }
+    function favoriteMark(kind, id) { ratingRev; return favoriteState[kind + ":" + id] === true }
+    function readFavorites(refs) {
+        if (!refs.length) return
+        daemon.request({cmd:"favorites", refs:refs}, (err, reply) => {
+            if (err || !reply.favorites) return
+            favoriteState = Object.assign({}, favoriteState, reply.favorites); ratingRev++
+        })
+    }
+    function toggleFavorite(ref, name) {
+        if (!capabilities.preference || !(capabilities.favoriteKinds || []).includes(ref.kind) || !ref.id) return
+        const key = ref.kind + ":" + ref.id
+        if (favoritePending[key]) return
+        favoritePending[key] = true
+        daemon.request({cmd:"favorites", refs:[ref]}, (err, reply) => {
+            if (err || !reply.favorites || reply.favorites[key] === undefined) {
+                delete favoritePending[key]; return setFlash(err || "Favorite state is unavailable")
+            }
+            const saved = !reply.favorites[key]
+            daemon.request({cmd:"set-favorite", refs:[ref], saved:saved}, error => {
+                delete favoritePending[key]
+                if (error) return setFlash(error)
+                favoriteState = Object.assign({}, favoriteState, {[key]:saved}); ratingRev++
+                if (inspect && inspect.id === ref.id) inspect = Object.assign({}, inspect, {favorite:saved})
+                setFlash((saved ? "Favorited " : "Removed from My Collection: ") + name)
+            })
+        })
+    }
     function prototypeFavorite() {
         if (!(capabilities.favorites)) return
         const it = inspect
+        if (capabilities.preference) return toggleFavorite({kind:it.kind || "song", id:it.id}, it.title || it.name)
         daemon.request(prototypeMode ? { cmd: "preview-favorite", start: it.id, value: it.favorite ? 0 : 1 } : { cmd: "favorite", refs: [{kind: it.kind || "song", id: it.id}] }, (err) => {
             if (err) return setFlash(err)
             if (prototypeMode) inspect = Object.assign({}, it, { favorite: !it.favorite })
@@ -156,7 +187,7 @@ Item {
         stacks = nextStacks
         section = Math.max(0, navigation.findIndex(e => e.id === selected))
         if (providerChanged) {
-            st = { status: "starting" }; rating = {}; pending = null; pendingPlay = null
+            st = { status: "starting" }; rating = {}; favoriteState = {}; favoritePending = {}; pending = null; pendingPlay = null
             upNext = []; recent = []; artwork = ""; artKey = ""; nextFor = ""
             inspect = null; video = null; loginTried = false; resumed = false
         }
@@ -194,6 +225,8 @@ Item {
 
     property string artwork: ""     // the cover on the stage (stageArtwork)
     property string artKey: ""      // what it was worked out for
+    property var favoriteState: ({})
+    property var favoritePending: ({})
     property var rating: ({})
     property int ratingRev: 0
 
@@ -212,7 +245,8 @@ Item {
         const rows = []
         if (st.status === "logged-out")
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
-        rows.push({ act: "f", icon: "󰊓", label: "Visualizer" },
+        rows.push({ act: "ctrl+o", icon: "󰎈", label: "Switch Music Provider…" },
+                  { act: "f", icon: "󰊓", label: "Visualizer" },
                   { act: "F", icon: "󰊓", label: "Full-Screen Visualizer" },
                   { act: "g", icon: "󰆍", label: "Open in Terminal" },
                   { act: "y", icon: "󰌷", label: "Copy Song Link" },
@@ -231,7 +265,7 @@ Item {
                   { sep: true },
                   { act: "Q", icon: "󰅖", label: "Close Window" },
                   { act: "q", icon: "󰐥", label: "Quit brumm" })
-        return rows
+        return rows.filter(row => row.option !== "autoplay" || capabilities.autoplay)
     }
     function menuPickable(r) { return !!r && (r.act !== undefined || r.option !== undefined) }
 
@@ -551,13 +585,16 @@ Item {
     }
 
     function fetchRatings(v) {
+        if (!capabilities.ratings && !capabilities.preference) return
         const refs = []
+        const kinds = capabilities.preference ? capabilities.favoriteKinds || [] : capabilities.ratingKinds || []
         for (const r of v.rows) {
             if (refs.length >= 1000) break
             if (r.track) refs.push({ kind: "song", id: r.track.id })
-            else if (r.item && (capabilities.ratingKinds || []).includes(r.item.kind)) refs.push({ kind: r.item.kind, id: r.item.id })
+            else if (r.item && kinds.includes(r.item.kind)) refs.push({ kind: r.item.kind, id: r.item.id })
         }
         if (!refs.length) return
+        if (capabilities.preference) return readFavorites(refs)
         daemon.request({ cmd: "ratings", refs: refs }, (err, reply) => {
             if (err || !reply.ratings) return
             for (const id in reply.ratings) rating[id] = reply.ratings[id]
@@ -607,6 +644,7 @@ Item {
             state.pos = position(Date.now())
         }
         st = state
+        if (songChanged && state.id && capabilities.preference) readFavorites([{kind:"song", id:state.id}])
         if (providerChoiceNeeded) askProviders()
         stateAt = Date.now()
         const key = [state.id, state.preview ? state.preview.artwork : "", state.artwork].join("|")
@@ -1272,6 +1310,7 @@ Item {
     // the song playing, whatever the list has selected.
     function playingRow() { return st.id && !st.preview ? { track: { id: st.id, title: st.title, artist: st.artist, album: st.album } } : null }
     function ratePlaying(value) {
+        if (capabilities.preference && value === 1) return toggleFavorite({kind:"song", id:st.id}, st.title)
         if (!(capabilities.ratings && (value !== -1 || capabilities.dislike))) return
         if (!st.id || st.preview) return
         if (rating[st.id] === value) value = 0
@@ -1310,12 +1349,13 @@ Item {
     function rateable() {
         const r = cur().rows[cur().sel]
         if (r && r.track) return { ref: { kind: "song", id: r.track.id }, name: r.track.title }
-        if (r && r.item && (capabilities.ratingKinds || []).includes(r.item.kind)) return { ref: { kind: r.item.kind, id: r.item.id }, name: r.item.name }
+        if (r && r.item && ((capabilities.ratingKinds || []).includes(r.item.kind) || (capabilities.preference && (capabilities.favoriteKinds || []).includes(r.item.kind)))) return { ref: { kind: r.item.kind, id: r.item.id }, name: r.item.name }
         if (st.id && !st.preview) return { ref: { kind: "song", id: st.id }, name: st.title }
         return null
     }
 
     function rate(value) {
+        if (capabilities.preference && value === 1) { const it = rateable(); if (it) toggleFavorite(it.ref, it.name); return }
         if (!(capabilities.ratings && (value !== -1 || capabilities.dislike))) return
         const it = rateable()
         if (!it) return
@@ -1520,6 +1560,7 @@ Item {
     }
 
     function dispatch(k, ev) {
+        if (k === "ctrl+o") { openProviderPicker(); return }
         if (inspect || prototypeForm) { if (k === "esc") { inspect = null; prototypeForm = null }; return }
         if (video) { if (k === "esc" || k === "q") closeVideo(); return }
         if ((prototypeMode && k === "i") || k === "ctrl+i") return inspectAt(sel)
@@ -1558,6 +1599,7 @@ Item {
     }
 
     function key(k) {
+        if (k === "ctrl+o") { openProviderPicker(); return }
         if (st.auth && k === "esc") { daemon.send({cmd:"cancel-login"}); return }
         if (providerChoiceNeeded) return providerKey(k)
 

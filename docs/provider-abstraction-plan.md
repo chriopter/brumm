@@ -2,8 +2,9 @@
 
 Status: implementation roadmap, updated 2026-10-14. Phase 0 is complete and
 the Apple portion of phase 1 is implemented on branch `apple-provider-refactor`.
-Tidal support and provider switching are future phases; this document does not
-claim those are complete.
+On `tidal-provider`, shared switching and a Tidal implementation now exist;
+`providers.md` records fixture evidence and outstanding live checks. This roadmap
+retains the sequence and does not claim live subscription playback is verified.
 
 The accepted Tidal decisions, endpoint access tiers, remaining shared-contract
 work and implementation sequence are in

@@ -53,6 +53,8 @@ Covers::Covers(QObject *parent) : QObject(parent)
 static QImage cached(const QString &url, QSize size = {})
 {
     const QString path = cachePath(url);
+    if (QFileInfo(path).lastModified().secsTo(QDateTime::currentDateTime()) > 86400)
+        return {};
     QImageReader reader(path);
     if (!reader.canRead())
         return {};

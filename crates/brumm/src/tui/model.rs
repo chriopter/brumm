@@ -291,6 +291,12 @@ pub enum Msg {
         ok: bool,
     },
     Ratings(BTreeMap<String, i64>),
+    Favorites(BTreeMap<String, bool>),
+    FavoriteResult {
+        resource: Ref,
+        name: String,
+        result: Result<bool, String>,
+    },
     PickerLists(Result<Vec<Item>, String>),
     UpdateChecked(Result<Message, String>),
     Installed(Result<(), String>),
@@ -401,6 +407,8 @@ pub struct Model {
 
     /// Loves (1) and dislikes (-1) seen so far, by id.
     pub rating: HashMap<String, i64>,
+    pub favorites: HashMap<String, bool>,
+    pub favorite_pending: HashMap<String, bool>,
 
     pub pending: Option<PendingPlay>,
     pub want_play: Option<WantPlaying>,
@@ -499,6 +507,7 @@ pub struct Model {
     pub provider_choices: Vec<crate::provider::registry::ProviderInfo>,
     pub provider_index: usize,
     pub provider_asked: bool,
+    pub provider_picker_open: bool,
     pub login_tried: bool,
 
     // A spinning mouse wheel.
@@ -705,6 +714,8 @@ impl Model {
             query: String::new(),
             typed_seq: 0,
             rating: HashMap::new(),
+            favorites: HashMap::new(),
+            favorite_pending: HashMap::new(),
             pending: None,
             want_play: None,
             card_size: Size::default(),
@@ -774,6 +785,7 @@ impl Model {
             provider_choices: Vec::new(),
             provider_index: 0,
             provider_asked: false,
+            provider_picker_open: false,
             login_tried: false,
             wheel_at: None,
             wheel_drawn: None,
@@ -839,7 +851,9 @@ impl Model {
 
     /// Fires a command at the daemon; failures surface as a flash.
     pub fn send(&mut self, r: Request) {
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         self.task(async move { c.request(r).await.err().map(|e| Msg::Err(e.to_string())) });
     }
 
@@ -849,7 +863,9 @@ impl Model {
         r: Request,
         then: impl FnOnce(Result<Message, String>) -> Option<Msg> + Send + 'static,
     ) {
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         self.task(async move { then(c.request(r).await.map_err(|e| e.to_string())) });
     }
 
@@ -1408,6 +1424,47 @@ impl Model {
                     self.prefetch_covers(view);
                 }
             }
+            Msg::Favorites(values) => self.favorites.extend(values),
+            Msg::FavoriteResult {
+                resource,
+                name,
+                result,
+            } => {
+                let key = format!("{}:{}", resource.kind, resource.id);
+                self.favorite_pending.remove(&key);
+                match result {
+                    Ok(saved) => {
+                        self.favorites.insert(key, saved);
+                        for stack in &mut self.stacks {
+                            for view in stack {
+                                for row in &mut view.rows {
+                                    if let Some(track) = row.track.as_mut()
+                                        && resource.kind == "song"
+                                        && track.id == resource.id
+                                    {
+                                        Arc::make_mut(track).favorite = saved;
+                                    }
+                                    if let Some(item) = row.item.as_mut()
+                                        && item.kind == resource.kind
+                                        && item.id == resource.id
+                                    {
+                                        Arc::make_mut(item).favorite = saved;
+                                    }
+                                }
+                            }
+                        }
+                        self.set_flash(&format!(
+                            "{} {name}",
+                            if saved {
+                                "Favorited"
+                            } else {
+                                "Removed from My Collection:"
+                            }
+                        ));
+                    }
+                    Err(e) => self.set_flash(&e),
+                }
+            }
             Msg::Ratings(r) => {
                 for (id, v) in r {
                     self.rating.insert(id, v);
@@ -1570,6 +1627,9 @@ impl Model {
                 self.stacks.clear();
                 self.section = 0;
                 self.rating.clear();
+                self.favorites.clear();
+                self.favorite_pending.clear();
+                self.login_tried = false;
                 self.pending = None;
                 self.want_play = None;
                 self.state = State::default();
@@ -1598,6 +1658,19 @@ impl Model {
             self.keep_showing(&mut st);
             self.keep_playing(&mut st);
             let song_changed = st.player.id != self.state.player.id;
+            if song_changed && !st.player.id.is_empty() && self.capabilities.preference.is_some() {
+                self.ask(
+                    Request {
+                        cmd: "favorites".into(),
+                        refs: vec![Ref {
+                            kind: "song".into(),
+                            id: st.player.id.clone(),
+                        }],
+                        ..Default::default()
+                    },
+                    |r| r.ok().map(|m| Msg::Favorites(m.favorites)),
+                );
+            }
             self.state = st;
             self.state_at = Instant::now();
             if song_changed && self.section == self.sec("queue") && self.stack().len() == 1 {
@@ -1747,6 +1820,22 @@ impl Model {
                 return;
             }
             if let Some(kind) = it.route.strip_prefix("action:favorite:") {
+                if self.capabilities.preference.is_some() {
+                    let name = self
+                        .cur()
+                        .title
+                        .strip_suffix(" · details")
+                        .unwrap_or("item")
+                        .to_string();
+                    self.toggle_favorite(
+                        Ref {
+                            kind: kind.into(),
+                            id: it.id.clone(),
+                        },
+                        name,
+                    );
+                    return;
+                }
                 let refs = vec![Ref {
                     kind: kind.into(),
                     id: it.id.clone(),
@@ -1884,7 +1973,9 @@ impl Model {
         let Some(r) = v.rows.get(v.sel).cloned() else {
             return;
         };
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         let done = if next {
             "plays next"
         } else {
@@ -2223,12 +2314,23 @@ impl Model {
         !r.is_control() && r != ' ' && !r.is_numeric() && !"/?ofgqQ".contains(r)
     }
 
+    pub fn open_provider_picker(&mut self) {
+        self.opt_open = false;
+        self.provider_picker_open = true;
+        self.provider_asked = false;
+        self.auto_login();
+    }
+
     pub fn key_press(&mut self, msg: Key) {
+        if msg.name == "ctrl+o" {
+            self.open_provider_picker();
+            return;
+        }
         if self.state.auth.is_some() && msg.name == "esc" {
             self.send(Request::new(ipc::CMD_CANCEL_LOGIN));
             return;
         }
-        if self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
+        if self.provider_picker_open || self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
             self.provider_key(&msg.name);
             return;
         }
@@ -2280,7 +2382,7 @@ impl Model {
         match k {
             // Done listening: the music stops and brumm with it.
             "q" => {
-                let c = self.client.clone();
+                let c = self.client.as_ref().map(|c| c.for_session());
                 self.task(async move {
                     if let Some(c) = c {
                         let _ = c.request(Request::new(ipc::CMD_QUIT)).await;
@@ -2785,7 +2887,7 @@ impl Model {
                 })))
             });
         }
-        if self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
+        if self.provider_picker_open || self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
             return;
         }
 
@@ -2986,7 +3088,9 @@ impl Model {
             return;
         }
         ids.truncate(300);
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         self.task(async move {
             let _ = c
                 .request(Request {

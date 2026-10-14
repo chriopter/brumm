@@ -20,6 +20,7 @@ TestCase {
         property bool omarchy: false
         property var options: ({})
         property var asked: []
+        property var favoriteMembership: ({})
         signal state(var value)
         signal library()
         function send(request) { asked.push(request) }
@@ -27,6 +28,14 @@ TestCase {
             asked.push(request)
             if (request.cmd === "provider")
                 callback("", { provider: { protocolVersion: 1, navigation: appleNavigation, capabilities: appleCapabilities, choices: [{ id: "apple", name: "Apple Music", available: true }, { id: "tidal", name: "Tidal", available: false }], selected: request.query || "", needsChoice: !request.query } })
+            else if (request.cmd === "favorites") {
+                const states = {}
+                for (const ref of request.refs) states[ref.kind + ":" + ref.id] = favoriteMembership[ref.kind + ":" + ref.id] === true
+                callback("", {favorites:states})
+            } else if (request.cmd === "set-favorite") {
+                for (const ref of request.refs) favoriteMembership[ref.kind + ":" + ref.id] = request.saved
+                callback("", {})
+            }
             else if (request.cmd === "home")
                 callback("", { shelves: [{ title: "Recently played", route: "provider:recent", items: [{ kind: "album", id: "recent", name: "Recent", artwork: "cover" }] }] })
             else if (request.cmd === "explore")
@@ -135,6 +144,30 @@ TestCase {
         compare(store.st.title, undefined)
         compare(store.recent.length, 0)
         compare(store.upNext.length, 0)
+    }
+
+    function test_collectionPreferenceUsesDesiredStateAndOneAction() {
+        const caps = {favorites:true, favoriteKinds:["song","album","artist","playlist"], playlistWrite:true,
+            preference:{label:"Favorite",removeLabel:"Remove from My Collection",collectionEquivalent:true,removable:true}}
+        store.configureProvider({selected:"tidal",generation:4,protocolVersion:1,navigation:appleNavigation,capabilities:caps})
+        fakeDaemon.favoriteMembership = {}
+        fakeDaemon.asked = []
+        store.st = {status:"ready",id:"tidal-track",title:"Track"}
+        store.ratePlaying(1)
+        compare(store.favoriteMark("song","tidal-track"), true)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "set-favorite")[0].saved, true)
+        store.ratePlaying(1)
+        compare(store.favoriteMark("song","tidal-track"), false)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "set-favorite")[1].saved, false)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "rate" || r.cmd === "add").length, 0)
+    }
+
+    function test_providerPickerCanBeOpenedDuringPlayback() {
+        store.st = {status:"ready",playing:true}
+        store.openProviderPicker()
+        compare(store.providerChoiceNeeded,true)
+        store.providerKey("esc")
+        compare(store.providerPickerOpen,false)
     }
 
 }

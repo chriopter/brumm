@@ -229,7 +229,7 @@ fn daemon_answers_without_credentials_and_quits() {
 }
 
 #[test]
-fn first_run_provider_choice_is_saved_and_unavailable_services_are_rejected() {
+fn provider_selection_persists_and_switches_without_reusing_stale_requests() {
     let mut e = env("provider-choice");
     e.daemon = Some(
         brumm(&e.root)
@@ -246,9 +246,14 @@ fn first_run_provider_choice_is_saved_and_unavailable_services_are_rejected() {
     assert_eq!(before["provider"]["needsChoice"], true);
     assert_eq!(before["provider"]["selected"], "");
     assert_eq!(before["provider"]["choices"][0]["id"], "apple");
-    assert_eq!(before["provider"]["choices"][1]["available"], false);
-    let bad = c.ask(json!({"cmd":"provider","query":"tidal"}));
-    assert!(bad["error"].as_str().unwrap().contains("not supported"));
+    assert_eq!(before["provider"]["choices"][1]["available"], true);
+    let bad = c.ask(json!({"cmd":"provider","query":"unknown"}));
+    assert!(
+        bad["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown music provider")
+    );
     assert!(!e.root.join("config/brumm/config.json").exists());
     let chosen = c.ask(json!({"cmd":"provider","query":"apple"}));
     assert_eq!(chosen["provider"]["selected"], "apple");
@@ -259,6 +264,18 @@ fn first_run_provider_choice_is_saved_and_unavailable_services_are_rejected() {
     assert_eq!(saved["provider"], "apple");
     let after = c.ask(json!({"cmd":"provider"}));
     assert_eq!(after["provider"]["needsChoice"], false);
+    let apple_epoch = after["provider"]["generation"].as_i64().unwrap();
+    let tidal = c.ask(json!({"cmd":"provider","query":"tidal"}));
+    assert_eq!(tidal["provider"]["selected"], "tidal");
+    assert_eq!(tidal["provider"]["navigation"][5]["label"], "Tracks");
+    let tidal_epoch = tidal["provider"]["generation"].as_i64().unwrap();
+    assert!(tidal_epoch > apple_epoch);
+    let stale = c.ask(json!({"cmd":"set-favorite","generation":apple_epoch,"saved":true,"refs":[{"kind":"song","id":"123"}]}));
+    assert!(stale["error"].as_str().unwrap().contains("session"));
+    let restored = c.ask(json!({"cmd":"provider","query":"apple"}));
+    assert_eq!(restored["provider"]["selected"], "apple");
+    assert!(restored["provider"]["generation"].as_i64().unwrap() > tidal_epoch);
+    assert_eq!(restored["provider"]["navigation"][5]["label"], "Songs");
     c.ask(json!({"cmd":"quit"}));
     e.daemon.as_mut().unwrap().wait().unwrap();
 }
