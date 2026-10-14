@@ -37,6 +37,10 @@ impl Document {
     pub fn extend(&mut self, value: &Value) {
         self.resources.extend(Self::new(value).resources);
     }
+    pub fn found(&self, kind: &str, id: &str) -> Option<&Value> {
+        self.resources
+            .get(&(kind.to_owned(), id.to_owned()))
+    }
     pub fn related<'a>(&'a self, resource: &'a Value, name: &str) -> Vec<&'a Value> {
         Self::data(&resource["relationships"][name])
             .into_iter()
@@ -51,13 +55,13 @@ impl Document {
             .collect::<Vec<_>>()
             .join(", ")
     }
-    fn artwork(&self, resource: &Value) -> String {
+    pub fn artwork(&self, resource: &Value) -> String {
         for relation in ["coverArt", "profileArt"] {
             for artwork in self.related(resource, relation) {
                 if let Some(files) = artwork["attributes"]["files"].as_array()
                     && let Some(file) = files
                         .iter()
-                        .filter(|f| f["href"].as_str().is_some())
+                        .filter(|f| f["href"].as_str().is_some_and(|h| !h.ends_with(".mp4")))
                         .min_by_key(|f| (f["meta"]["width"].as_i64().unwrap_or(640) - 640).abs())
                 {
                     return text(file, "href");

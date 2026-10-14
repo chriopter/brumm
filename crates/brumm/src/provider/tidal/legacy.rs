@@ -1,5 +1,6 @@
 //! Device-client discovery pages. These compatibility endpoints are separate
 //! from the public v2 catalog and are validated before attaching credentials.
+use super::mapping::Document;
 use super::Client;
 use crate::{
     error::{Error, Result, err},
@@ -8,6 +9,7 @@ use crate::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Default)]
 struct Page {
@@ -182,11 +184,33 @@ fn promotion(v: &Value) -> Option<Item> {
         id: resource_id,
         name,
         artist: text(v, "shortSubHeader"),
-        artwork: image(&text(v, "imageId")),
         catalog: true,
         route: page_route,
         ..Default::default()
     })
+}
+fn v2_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "album" => Some("albums"),
+        "playlist" => Some("playlists"),
+        "artist" => Some("artists"),
+        _ => None,
+    }
+}
+fn fill_artwork(page: &mut ExplorePage, doc: &Document) {
+    for shelf in page.shelves.iter_mut() {
+        for item in shelf.items.iter_mut() {
+            if !item.artwork.is_empty() {
+                continue;
+            }
+            let Some(kind) = v2_kind(&item.kind) else {
+                continue;
+            };
+            if let Some(resource) = doc.found(kind, &item.id) {
+                item.artwork = doc.artwork(resource);
+            }
+        }
+    }
 }
 fn render(value: &Value, page: &Page) -> ExplorePage {
     let mut out = ExplorePage {
@@ -313,7 +337,37 @@ impl Client {
     async fn compatibility_page(&self, page: Page) -> Result<ExplorePage> {
         let url = page_url(&page.path, &self.country)?;
         let value = self.request_url(reqwest::Method::GET, url, None).await?;
-        Ok(render(&value, &page))
+        let mut out = render(&value, &page);
+        self.backfill_artwork(&mut out).await;
+        Ok(out)
+    }
+    async fn backfill_artwork(&self, page: &mut ExplorePage) {
+        let mut wanted: HashMap<&'static str, Vec<String>> = HashMap::new();
+        for shelf in page.shelves.iter_mut() {
+            for item in shelf.items.iter_mut() {
+                if !item.artwork.is_empty() {
+                    continue;
+                }
+                let Some(kind) = v2_kind(&item.kind) else {
+                    continue;
+                };
+                wanted.entry(kind).or_default().push(item.id.clone());
+            }
+        }
+        let mut doc = Document::new(&Value::Null);
+        for (kind, ids) in &wanted {
+            let include = if *kind == "artists" { "profileArt" } else { "coverArt" };
+            for batch in ids.chunks(20) {
+                let route = format!(
+                    "{kind}?filter[id]={}&include={include}",
+                    Self::id(&batch.join(","))
+                );
+                if let Ok(value) = self.get(&route).await {
+                    doc.extend(&value);
+                }
+            }
+        }
+        fill_artwork(page, &doc);
     }
     pub(super) async fn compatibility_route(&self, raw: &str) -> Result<ExplorePage> {
         if raw.len() > 16384 {
@@ -347,6 +401,37 @@ mod tests {
         ] {
             assert!(page_url(raw, "GB").is_err());
         }
+    }
+    #[test]
+    fn promotions_drop_dead_image_ids_and_take_v2_artwork() {
+        let v = json!({"rows":[{"modules":[{"type":"FEATURED_PROMOTIONS","title":"Featured","items":[
+            {"type":"ALBUM","artifactId":"165650734","header":"New album","imageId":"bf1ed8d5-0a3b-477c-9cff-e99c246abe78"},
+            {"type":"PLAYLIST","artifactId":"34c543c9-bb74-4dc4-8f91-6932cc71b88d","header":"Fresh finds"}
+        ]}]}]});
+        let mut page = render(&v, &Page::default());
+        assert!(page.shelves[0].items[0].artwork.is_empty());
+        let batch = json!({"data":[
+            {"type":"albums","id":"165650734","relationships":{"coverArt":{"data":[{"type":"artworks","id":"a1"}]}}},
+            {"type":"playlists","id":"34c543c9-bb74-4dc4-8f91-6932cc71b88d","relationships":{"coverArt":{"data":[{"type":"artworks","id":"a2"}]}}}
+        ],"included":[
+            {"type":"artworks","id":"a1","attributes":{"files":[
+                {"href":"https://resources.tidal.com/images/2e63/640.jpg","meta":{"width":1280}},
+                {"href":"https://resources.tidal.com/images/2e63/640x640.jpg","meta":{"width":640}}
+            ]}},
+            {"type":"artworks","id":"a2","attributes":{"files":[
+                {"href":"https://resources.tidal.com/videos/e7e2/640x640.mp4","meta":{"width":640}},
+                {"href":"https://resources.tidal.com/images/e7e2/480x480.jpg","meta":{"width":480}}
+            ]}}
+        ]});
+        fill_artwork(&mut page, &Document::new(&batch));
+        assert_eq!(
+            page.shelves[0].items[0].artwork,
+            "https://resources.tidal.com/images/2e63/640x640.jpg"
+        );
+        assert_eq!(
+            page.shelves[0].items[1].artwork,
+            "https://resources.tidal.com/images/e7e2/480x480.jpg"
+        );
     }
     #[test]
     fn music_lists_keep_duplicates_and_pagination() {
