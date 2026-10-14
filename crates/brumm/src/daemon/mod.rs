@@ -905,12 +905,12 @@ impl Daemon {
                 self.spawn_refresh();
                 return Ok(());
             }
-            "favorites" => {
+            ipc::CMD_FAVORITES => {
                 let api = self.client()?;
                 reply.favorites = self.auth_check(api.favorites(&r.refs).await).await?;
                 return Ok(());
             }
-            "set-favorite" => {
+            ipc::CMD_SET_FAVORITE => {
                 let saved = r
                     .saved
                     .ok_or_else(|| err("set-favorite: desired state is required"))?;

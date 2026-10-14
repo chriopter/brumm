@@ -36,6 +36,10 @@ pub const CMD_SEARCH: &str = "search";
 pub const CMD_HOME: &str = "home";
 /// `refs`: submit typed resources to the provider favorites.
 pub const CMD_FAVORITE: &str = "favorite";
+/// `refs` → favorites keyed by resource kind and ID; missing means unknown.
+pub const CMD_FAVORITES: &str = "favorites";
+/// `refs`, `saved`: set an explicit positive preference/collection state.
+pub const CMD_SET_FAVORITE: &str = "set-favorite";
 /// `list`: folder or playlist; `query`: name; `start`: parent folder.
 pub const CMD_CREATE: &str = "create";
 /// `query`: opaque provider navigation handle → explorer page.
@@ -87,7 +91,7 @@ pub const CMD_RELOAD: &str = "reload";
 /// `options` set (a partial set of Options fields) → options; pushed to
 /// subscribers when they change.
 pub const CMD_OPTIONS: &str = "options";
-/// Open the Apple Music sign-in in the browser; the player reloads once
+/// Start the selected provider's sign-in; the player reloads once
 /// signed in.
 pub const CMD_LOGIN: &str = "login";
 pub const CMD_CANCEL_LOGIN: &str = "cancel-login";
