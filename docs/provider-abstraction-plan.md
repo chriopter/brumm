@@ -1,6 +1,9 @@
 # Apple and Tidal provider abstraction plan
 
-Status: proposed architecture, before restarting implementation.
+Status: implementation roadmap, updated 2026-10-14. Phase 0 is complete and
+the Apple portion of phase 1 is implemented on branch `apple-provider-refactor`.
+Tidal support and provider switching are future phases; this document does not
+claim those are complete.
 
 Baseline: author commit `cde360165a239c3f6d9c19189b42f15f9cc49980`
 (“Separate Rust music providers and add first-run selection”).
@@ -19,9 +22,9 @@ Brumm supplies a consistent player and presentation. Providers supply their own
 service vocabulary, browsing organization, authentication, API implementation,
 and playback integration. Shared concepts do not require identical feature sets.
 
-Preserve the existing prototype as a reference before creating a clean branch
-from the baseline. This document does not initiate that restart or change runtime
-behavior. Other providers are outside this implementation's scope.
+The prototype was preserved on branch `tidal-support`; this implementation was
+restarted from the exact baseline on `apple-provider-refactor`. The current
+branch targets Apple first. Tidal remains in the roadmap as the second provider.
 
 ## 2. Existing foundation and missing boundaries
 
@@ -309,8 +312,11 @@ library under the new provider's name.
 - Refactor both frontends to render entries and use stable IDs.
 - Preserve old Apple config, navigation and IPC behavior during migration.
 
-Milestone: Apple works through the complete abstraction, with no service-specific
-browsing logic in the generic frontend navigation or dispatch layer.
+Milestone: Apple navigation, authentication, API composition and playback page
+are behind the provider contract. Both frontends consume provider navigation
+and capabilities; fixture and baseline comparisons cover browsing and player
+presentation. Live subscription playback remains unverified because no Apple
+Music subscription is available.
 
 ### Phase 2: switching and storage
 
