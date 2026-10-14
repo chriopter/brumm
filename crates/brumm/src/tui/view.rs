@@ -149,23 +149,24 @@ impl Model {
         for (y, l) in lines.iter().enumerate() {
             put(buf, 0, y as i64, l);
         }
-        let boxed = if self.state.status == crate::ipc::STATUS_CHOOSE_PROVIDER {
-            Some(self.provider_box())
-        } else if self.feature_form.is_some() {
-            Some(self.feature_box())
-        } else if self.fb.is_some() {
-            Some(self.feedback_box())
-        } else if self.upd.is_some() {
-            Some(self.update_box())
-        } else if self.bar_asking() {
-            Some(self.bar_box())
-        } else if self.pick.is_some() {
-            Some(self.picker_box())
-        } else if self.opt_open {
-            Some(self.options_box())
-        } else {
-            None
-        };
+        let boxed =
+            if self.state.status == crate::ipc::STATUS_CHOOSE_PROVIDER || self.provider_picking {
+                Some(self.provider_box())
+            } else if self.feature_form.is_some() {
+                Some(self.feature_box())
+            } else if self.fb.is_some() {
+                Some(self.feedback_box())
+            } else if self.upd.is_some() {
+                Some(self.update_box())
+            } else if self.bar_asking() {
+                Some(self.bar_box())
+            } else if self.pick.is_some() {
+                Some(self.picker_box())
+            } else if self.opt_open {
+                Some(self.options_box())
+            } else {
+                None
+            };
         if let Some(b) = boxed {
             self.overlay(buf, &b);
         }
@@ -296,6 +297,9 @@ impl Model {
             e("?", "keys", "?"),
             e("!", "feedback", "!"),
         ];
+        if self.lacks("preview") {
+            keys.retain(|k| k.1 != "preview");
+        }
         if self.show_tips() {
             // the rest is on the buttons: the footer has what is not
             keys = vec![
@@ -476,6 +480,9 @@ impl Model {
         let msg = |s: L| centered(s, inner, rows);
         if err.is_some() && nrows == 0 {
             lines.extend(msg(one(err.unwrap_or_default(), ERR)));
+        } else if let Some(what) = self.missing(&key) {
+            let s = format!("{} has no {what} for apps", self.service());
+            lines.extend(msg(one(s, DIM)));
         } else if !loaded && self.state.status == ipc::STATUS_LOGGED_OUT {
             lines.extend(msg(one("sign in to see your library", DIM)));
         } else if !loaded {
@@ -485,7 +492,7 @@ impl Model {
             )));
         } else if key == "search:" {
             lines.extend(msg(line(vec![
-                sp("search Apple Music: type and press ", DIM),
+                sp(format!("search {}: type and press ", self.service()), DIM),
                 sp("enter", KEY),
             ])));
         } else if nrows == 0 {
@@ -552,7 +559,7 @@ impl Model {
         let q = &self.query;
         if q.is_empty() && !self.searching {
             return line(vec![
-                sp(format!("{IC_SEARCH}  search Apple Music  "), DIM),
+                sp(format!("{IC_SEARCH}  search {}  ", self.service()), DIM),
                 sp("/", KEY),
             ]);
         }
@@ -737,7 +744,10 @@ impl Model {
         } else if st.status == ipc::STATUS_LOGGED_OUT {
             add(&mut top, one("ʕ•ᴥ•ʔ", HERE));
             add(&mut top, L::default());
-            add(&mut top, one("Sign in to Apple Music", BOLD));
+            add(
+                &mut top,
+                one(format!("Sign in to {}", self.service()), BOLD),
+            );
             add(
                 &mut top,
                 line(vec![
@@ -905,7 +915,7 @@ impl Model {
         lines
     }
 
-    fn help_lines(&self) -> Vec<StageLine> {
+    pub(super) fn help_lines(&self) -> Vec<StageLine> {
         let groups: [(&str, &[(&str, &str)]); 4] = [
             (
                 "browse",
@@ -916,7 +926,7 @@ impl Model {
                     ("← → tab 1–9", "sections"),
                     (
                         "/",
-                        "filter the list; tab searches all of Apple Music (or paste a link)",
+                        "filter the list; tab searches the whole service (or paste a link)",
                     ),
                     ("a A", "the song's album / artist (or click them)"),
                     ("c", "go to what's playing"),
@@ -971,6 +981,13 @@ impl Model {
             }
             out.push(StageLine::of(one(*name, BOLD)));
             for (k, d) in keys.iter() {
+                // What the service lacks has no key.
+                let (k, d) = match *k {
+                    "hold space  O" if self.lacks("preview") => continue,
+                    "R" if self.lacks("radio") => continue,
+                    "* d" if self.lacks("dislike") => (&"*", &"love"),
+                    _ => (k, d),
+                };
                 out.push(StageLine::of(line(vec![
                     sp(format!("{k:<13}"), KEY),
                     sp("  ", PLAIN),
@@ -1034,7 +1051,8 @@ impl Model {
             }
         };
         let f = if from.is_some() { f } else { 1.0 };
-        let playing = self.state.player.playing;
+        // Without audio to analyze it breathes, as when paused.
+        let playing = self.state.player.playing && !self.lacks("visualizer");
         self.viz.render_mix(
             from,
             self.viz_style,

@@ -237,7 +237,10 @@ fn first_run_provider_choice_is_saved_and_unavailable_services_are_rejected() {
     assert_eq!(before["provider"]["needsChoice"], true);
     assert_eq!(before["provider"]["selected"], "");
     assert_eq!(before["provider"]["choices"][0]["id"], "apple");
-    assert_eq!(before["provider"]["choices"][1]["available"], false);
+    assert_eq!(before["provider"]["choices"][1]["id"], "spotify");
+    assert_eq!(before["provider"]["choices"][1]["available"], true);
+    assert_eq!(before["provider"]["choices"][1]["lacks"][1], "radio");
+    assert_eq!(before["provider"]["choices"][2]["available"], false);
     let bad = c.ask(json!({"cmd":"provider","query":"tidal"}));
     assert!(bad["error"].as_str().unwrap().contains("not supported"));
     assert!(!e.root.join("config/brumm/config.json").exists());

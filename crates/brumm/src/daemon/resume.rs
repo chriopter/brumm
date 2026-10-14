@@ -32,16 +32,27 @@ pub struct Resume {
     pub autoplay: bool,
     #[serde(skip)]
     pub(super) saved_at: Option<Instant>,
+    /// The music service it belongs to; each keeps its own.
+    #[serde(skip)]
+    pub provider: String,
 }
 
-fn path() -> PathBuf {
-    config::cache_dir().join("resume.json")
+fn path(provider: &str) -> PathBuf {
+    config::service_cache("resume", provider)
 }
 
 impl Resume {
-    pub fn load() -> Option<Resume> {
-        let b = std::fs::read(path()).ok()?;
-        let r: Resume = serde_json::from_slice(&b).ok()?;
+    pub fn new(provider: &str) -> Resume {
+        Resume {
+            provider: provider.to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub fn load(provider: &str) -> Option<Resume> {
+        let b = std::fs::read(path(provider)).ok()?;
+        let mut r: Resume = serde_json::from_slice(&b).ok()?;
+        r.provider = provider.to_string();
         r.playable().then_some(r)
     }
 
@@ -51,7 +62,7 @@ impl Resume {
             return;
         };
         if std::fs::create_dir_all(config::cache_dir()).is_ok() {
-            let _ = config::write_private(&path(), &b);
+            let _ = config::write_private(&path(&self.provider), &b);
         }
     }
 
@@ -90,7 +101,9 @@ impl Resume {
     /// second it stopped.
     pub async fn play(&self, eng: &Engine) -> Result<()> {
         if !self.station.is_empty() {
-            return eng.play_station(&self.station, &self.source).await;
+            return eng
+                .play_station(&self.station, &self.source, &self.id, self.pos)
+                .await;
         }
         eng.play_ids(&self.ids, &self.id, &self.source, self.pos)
             .await
@@ -120,7 +133,7 @@ mod tests {
         let Some(_env) = testenv::isolated() else {
             return;
         };
-        assert!(Resume::load().is_none());
+        assert!(Resume::load("").is_none());
         let mut r = Resume {
             ids: vec!["a".into(), "b".into()],
             source: "lib:album:l.1".into(),
@@ -133,7 +146,7 @@ mod tests {
             dur: 200.0,
             ..Default::default()
         });
-        let back = Resume::load().expect("saved on a song change");
+        let back = Resume::load("").expect("saved on a song change");
         assert_eq!(
             (back.id.as_str(), back.pos, back.title.as_str()),
             ("b", 42.0, "B")
@@ -144,14 +157,27 @@ mod tests {
             preview: Some(Default::default()),
             ..Default::default()
         });
-        assert_eq!(Resume::load().unwrap().id, "b");
+        assert_eq!(Resume::load("").unwrap().id, "b");
         let shown = back.overlay(Player {
             ready: true,
             ..Default::default()
         });
         assert!(shown.ready && shown.title == "B" && shown.pos == 42.0);
+        // Each service resumes its own.
+        assert!(Resume::load("spotify").is_none());
+        let mut s = Resume {
+            ids: vec!["s".into()],
+            ..Resume::new("spotify")
+        };
+        s.track(&Player {
+            id: "s".into(),
+            title: "S".into(),
+            ..Default::default()
+        });
+        assert_eq!(Resume::load("spotify").unwrap().title, "S");
+        assert_eq!(Resume::load("apple").unwrap().title, "B");
         // Unplayable leftovers are not resumed.
-        std::fs::write(path(), r#"{"ids":[],"id":"x"}"#).unwrap();
-        assert!(Resume::load().is_none());
+        std::fs::write(path(""), r#"{"ids":[],"id":"x"}"#).unwrap();
+        assert!(Resume::load("").is_none());
     }
 }

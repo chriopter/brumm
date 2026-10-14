@@ -199,12 +199,13 @@ Item {
             store.rev
             const v = store.view
             if (!v) return ""
-            if (store.st.status === "logged-out") return "Not signed in to Apple Music.\nPress L to sign in."
+            if (store.st.status === "logged-out") return "Not signed in to " + store.service + ".\nPress L to sign in."
+            if (store.missing(v)) return store.service + " has no " + store.missing(v) + " for apps."
             if (v.rows.length) return ""
             if (v.loading || (!v.loaded && store.st.status === "starting")) return "Loading…"
             if (v.err) return v.err
-            if (v.all !== null && v.all !== undefined) return "Nothing matches.\nTab searches all of Apple Music."
-            if (v.key === "search:") return "Type to search Apple Music."
+            if (v.all !== null && v.all !== undefined) return "Nothing matches.\nTab searches all of " + store.service + "."
+            if (v.key === "search:") return "Type to search " + store.service + "."
             if (v.key === "queue:") return "Nothing queued."
             if (v.key.startsWith("search:")) return "Nothing found."
             return v.loaded ? "Nothing here yet." : ""

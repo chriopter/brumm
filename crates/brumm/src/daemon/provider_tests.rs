@@ -90,3 +90,73 @@ async fn provider_authorization_failure_updates_session_state() {
     );
     assert_eq!(d.lock().state.status, ipc::STATUS_LOGGED_OUT);
 }
+
+/// While a renewal of the page's token is under way, more refusals from the
+/// page say "renewing", not "signed out".
+#[tokio::test]
+async fn a_renewal_under_way_is_not_a_sign_out() {
+    let d = daemon(None);
+    {
+        let mut i = d.lock();
+        i.eng = Some(crate::engine::Engine::stand_in());
+        i.session = Some(Arc::new(crate::provider::spotify::Session::stale(
+            "http://127.0.0.1:9",
+            "old",
+        )));
+    }
+    assert!(d.renew_token(), "a renewal starts");
+    assert!(d.renew_token(), "and is still under way");
+    d.lock().renewing = false;
+    d.lock().renewed_at = Some(Instant::now() - Duration::from_secs(30));
+    assert!(
+        !d.renew_token(),
+        "refused again right after one: signed out"
+    );
+}
+
+#[test]
+fn switching_services_swaps_the_player_library_and_place() {
+    let Some(_env) = crate::config::testenv::isolated() else {
+        return;
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let d = daemon(None);
+        d.lock().provider = "apple".into();
+        d.lock().booted = true;
+        d.lib.set_items(ipc::LIST_PLAYLISTS, vec![Item::default()]);
+        d.lock().resume = Some(Resume {
+            ids: vec!["a".into()],
+            id: "a".into(),
+            title: "Apple song".into(),
+            ..Resume::new("apple")
+        });
+        let mut reply = Message::default();
+        d.select_provider("spotify", &mut reply).await.unwrap();
+        assert_eq!(reply.provider.unwrap().selected, "spotify");
+        {
+            let i = d.lock();
+            assert_eq!(i.provider, "spotify");
+            assert!(i.api.is_none() && !i.booted && i.resume.is_none());
+        }
+        assert!(
+            d.lib.items(ipc::LIST_PLAYLISTS).is_none(),
+            "Spotify's own cache"
+        );
+        // Back to Apple: its library and place are still there.
+        d.select_provider("apple", &mut Message::default())
+            .await
+            .unwrap();
+        assert_eq!(d.lib.items(ipc::LIST_PLAYLISTS).unwrap().len(), 1);
+        assert_eq!(d.lock().resume.as_ref().unwrap().title, "Apple song");
+        assert!(
+            d.select_provider("tidal", &mut Message::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(d.lock().provider, "apple");
+    });
+}

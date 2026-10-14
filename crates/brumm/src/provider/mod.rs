@@ -79,8 +79,11 @@ pub trait Api: Catalog + Library {
 }
 
 pub mod apple;
+pub mod spotify;
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+pub(crate) mod testserver;
 
 pub mod registry;

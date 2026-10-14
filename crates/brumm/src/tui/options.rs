@@ -116,9 +116,10 @@ pub const OPT_AUTOPLAY: usize = 1;
 pub const OPT_MOTION: usize = 2;
 pub const OPT_COVER: usize = 3;
 pub const OPT_KEYS: usize = 4;
-pub const OPT_BAR: usize = 5;
-pub const OPT_MUSIC_KEYS: usize = 6;
-pub const NUM_OPTIONS: usize = 7;
+pub const OPT_SERVICE: usize = 5;
+pub const OPT_BAR: usize = 6;
+pub const OPT_MUSIC_KEYS: usize = 7;
+pub const NUM_OPTIONS: usize = 8;
 
 const OPT_LABELS: [&str; NUM_OPTIONS] = [
     "Cover Colors",
@@ -126,6 +127,7 @@ const OPT_LABELS: [&str; NUM_OPTIONS] = [
     "Reduce Motion",
     "Cover Style",
     "Show Shortcuts",
+    "Music Service",
     "Show in Top Bar",
     "Music Keys",
 ];
@@ -135,6 +137,7 @@ const OPT_HINTS: [&str; NUM_OPTIONS] = [
     "No scrolling text, fewer wobbles.",
     "How album covers are drawn.",
     "Show keys on the buttons.",
+    "Where the music comes from: space to choose.",
     "The song in Omarchy's top bar.",
     "Super+Shift+M opens brumm, not Spotify.",
 ];
@@ -320,8 +323,13 @@ impl Model {
         }
     }
 
-    /// Flips a switch, or steps a choice by dir.
+    /// Flips a switch, or steps a choice by dir; the music service opens
+    /// its own picker.
     pub fn change_option(&mut self, i: usize, dir: i64) {
+        if i == OPT_SERVICE {
+            self.opt_open = false;
+            return self.pick_provider();
+        }
         match i {
             OPT_COVER => {
                 self.opts.o.cover = step(&COVER_STYLES, self.opts.chosen(), dir).to_string();
@@ -376,6 +384,7 @@ impl Model {
             },
         );
         values[OPT_COVER] = choices(&COVER_STYLES, self.opts.chosen());
+        values[OPT_SERVICE] = one(self.service().to_string(), PLAIN);
         for i in [OPT_AUTOPLAY, OPT_MOTION, OPT_KEYS, OPT_BAR, OPT_MUSIC_KEYS] {
             values[i] = check(self.option_on(i));
         }

@@ -39,7 +39,7 @@ elif [[ -x $installed ]]; then
   if [[ -n $token ]]; then
     echo "kept the developer token of $installed (valid until $(date -d "@$best" +%F))"
   else
-    echo "warning: $installed has no developer token; this build cannot play" >&2
+    echo "warning: $installed has no developer token; this build cannot play Apple Music" >&2
     echo "  reinstall a release, or run with BRUMM_TOKEN_FROM=/path/to/release/brumm" >&2
   fi
 fi
@@ -69,6 +69,6 @@ if systemctl --user is-active --quiet brumm.service; then
   systemctl --user restart brumm.service
 fi
 
-if ! grep -q '"user_token"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
+if ! grep -qE '"(user_token|spotify_refresh_token)"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
   echo "next: sign in with 'brumm login'"
 fi

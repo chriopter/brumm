@@ -9,22 +9,47 @@ Item {
     property var providers: []
     property int providerIndex: 0
     property bool providerRequested: false
+    property string providerSelected: ""
     readonly property bool providerChoiceNeeded: st.status === "choose-provider"
+    // The picker opened from the menu, to change the music service.
+    property bool providerPicking: false
+    readonly property bool providerShown: providerChoiceNeeded || providerPicking
+    // The music service, as the daemon names it, and what it lacks
+    // (crates/brumm/src/provider/registry.rs): those keys do nothing.
+    readonly property string service: st.service || "Apple Music"
+    function lacks(what) { return !!st.lacks && st.lacks.includes(what) }
+    function lacking(what, name) {
+        if (!lacks(what)) return false
+        setFlash(service + " has no " + name + " for apps")
+        return true
+    }
     function askProviders() {
         if (providerRequested) return
         providerRequested = true
         daemon.request({ cmd: "provider" }, (err, reply) => {
             if (err) { providerRequested = false; return setFlash(err) }
             providers = reply.provider ? reply.provider.choices : []
-            providerIndex = Math.max(0, providers.findIndex(p => p.available))
+            providerSelected = reply.provider ? reply.provider.selected : ""
+            const here = providers.findIndex(p => p.available && p.id === providerSelected)
+            providerIndex = here >= 0 && providerPicking ? here : Math.max(0, providers.findIndex(p => p.available))
         })
+    }
+    function pickProvider() {
+        providerPicking = true
+        providerRequested = false
+        askProviders()
     }
     function chooseProvider(id) {
         const provider = providers.find(p => p.id === id)
         if (!provider || !provider.available) return
-        daemon.request({ cmd: "provider", query: id }, (err) => { if (err) setFlash(err) })
+        if (providerPicking && id === providerSelected) { providerPicking = false; return }
+        daemon.request({ cmd: "provider", query: id }, (err) => {
+            if (err) return setFlash(err)
+            if (providerPicking) { providerPicking = false; setFlash("switching to " + provider.name + "…") }
+        })
     }
     function providerKey(k) {
+        if (providerPicking && ["esc", "q", "Q", "o", "ctrl+c"].includes(k)) { providerPicking = false; return } // closes, as every box
         if (k === "Q" || k === "q" || k === "ctrl+c") { Qt.quit(); return }
         if (k === "enter") { const p = providers[providerIndex]; if (p) chooseProvider(p.id); return }
         if (!["up", "down", "tab", "k", "j"].includes(k)) return
@@ -160,10 +185,11 @@ Item {
     readonly property var menuRows: {
         const rows = []
         if (st.status === "logged-out")
-            rows.push({ act: "L", icon: "󰍂", label: "Sign In to Apple Music…" }, { sep: true })
+            rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + service + "…" }, { sep: true })
         rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F" },
                   { act: "g", icon: "󰆍", label: "TUI" },
                   { act: "y", icon: "󰌷", label: "Copy Link" },
+                  { act: "service", keys: "", icon: "󰎆", label: "Music Service: " + service + "…" },
                   { sep: true }, { fold: true, heading: "Options" })
         if (menuOptions) {
             rows.push({ option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
@@ -397,8 +423,15 @@ Item {
 
     // ── loading ─────────────────────────────────────────────────────────
 
+    // missing names the section a view is, when the service lacks it.
+    function missing(v) {
+        if (v.key === "explore:" && lacks("explore")) return "Explore"
+        if (v.key === "radio:" && lacks("radio")) return "Radio"
+        return ""
+    }
+
     function load(v) {
-        if (v.loading || st.status === "logged-out") return
+        if (v.loading || st.status === "logged-out" || missing(v)) return
         let req
         if (v.item && v.item.route && !prototypeMode) req = { cmd: "explore", query: v.item.route }
         else if (v.item) req = { cmd: "open", item: v.item }
@@ -1168,7 +1201,7 @@ Item {
     }
 
     function hold() {
-        if (!spaceDown) return
+        if (!spaceDown || lacks("preview")) return // release toggles
         const r = cur().rows[cur().sel]
         if (!r || !r.track) return
         previewing = true
@@ -1192,6 +1225,7 @@ Item {
             previewing = false
             return daemon.send({ cmd: "preview" })
         }
+        if (lacking("preview", "previews")) return
         const r = cur().rows[cur().sel]
         if (!r || !r.track) return
         previewing = true
@@ -1208,6 +1242,8 @@ Item {
 
     function playStation() {
         const r = cur().rows[cur().sel]
+        if (r && r.item && r.item.kind === "station") return startStation({ cmd: "station", item: r.item })
+        if (lacking("radio", "radio")) return
         if (r && r.track) return startStation({ cmd: "station", start: r.track.id })
         if (r && r.item && (r.item.kind === "station" || r.item.kind === "artist")) return startStation({ cmd: "station", item: r.item })
         if (st.id) return startStation({ cmd: "station", start: st.id })
@@ -1285,8 +1321,10 @@ Item {
     }
 
     function rate(value) {
+        if (value === -1 && lacking("dislike", "dislikes")) return
         const it = rateable()
         if (!it) return
+        if (it.ref.kind !== "song" && lacks("love-items")) return setFlash(service + " loves songs only; press i to add it to your library")
         if (rating[it.ref.id] === value) value = 0
         if (value === 0) delete rating[it.ref.id]
         else rating[it.ref.id] = value
@@ -1440,7 +1478,7 @@ Item {
     }
 
     function signIn() {
-        setFlash("opening the Apple Music sign-in in your browser…")
+        setFlash("opening the " + service + " sign-in in your browser…")
         daemon.send({ cmd: "login" })
     }
 
@@ -1525,7 +1563,7 @@ Item {
     }
 
     function key(k) {
-        if (providerChoiceNeeded) return providerKey(k)
+        if (providerShown) return providerKey(k)
 
         if (typesSearch(k)) {
             searching = true
@@ -1543,6 +1581,7 @@ Item {
             Qt.quit() // close the window; the music plays on
             return
         case "L": return signIn()
+        case "service": return pickProvider() // the menu's row
         case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8": case "9":
             return switchTo(parseInt(k) - 1)
         case "tab": return switchTo((section === secQueue ? secHome : (section + 1) % secQueue))

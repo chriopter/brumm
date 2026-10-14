@@ -64,7 +64,7 @@ if [[ -r /dev/tty && -w /dev/tty ]]; then
     case ${answer,,} in "" | y | yes | j | ja) "$brumm" keys on || true ;; esac
   fi
   cd ~ && rm -rf "$work" # exec skips the EXIT trap
-  if grep -q '"user_token"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
+  if grep -qE '"(user_token|spotify_refresh_token)"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
     exec "$brumm" </dev/tty >/dev/tty 2>&1
   fi
   exec "$brumm" login </dev/tty >/dev/tty 2>&1

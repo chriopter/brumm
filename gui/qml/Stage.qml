@@ -42,7 +42,7 @@ Item {
             lineHeight: 1.3
             font { family: ui.sans; pixelSize: ui.px(15) }
             text: {
-                if (store.st.status === "logged-out") return "Not signed in to Apple Music.\nPress L to sign in in your browser."
+                if (store.st.status === "logged-out") return "Not signed in to " + store.service + ".\nPress L to sign in in your browser."
                 if (store.st.status === "error") return store.st.message || "brumm could not start its player."
                 if (store.st.status === "starting") return store.st.message || "Starting the player…"
                 return "Nothing plays.\nPick a song and press enter."

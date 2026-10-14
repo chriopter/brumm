@@ -58,6 +58,19 @@ pub fn cache_dir() -> PathBuf {
     xdg("XDG_CACHE_HOME", ".cache").join("brumm")
 }
 
+/// The files each music service caches apart: its library and where it
+/// stopped.
+pub const SERVICE_CACHES: &[&str] = &["library", "resume"];
+
+/// One of a music service's cache files. Apple Music's keep the names they
+/// had before there were other services.
+pub fn service_cache(name: &str, provider: &str) -> PathBuf {
+    match provider {
+        "" | "apple" => cache_dir().join(format!("{name}.json")),
+        p => cache_dir().join(format!("{name}-{p}.json")),
+    }
+}
+
 /// The daemon's control socket.
 pub fn socket() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {
@@ -87,7 +100,8 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// The user's Apple Music session, and a developer token of their own.
+/// The user's music sessions: Apple Music's token (and a developer token
+/// of their own), and Spotify's app and refresh token.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     /// The saved service; old Apple sessions remain compatible.
@@ -97,6 +111,16 @@ pub struct Config {
     pub developer_token: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_token: String,
+    /// The user's own Spotify app: Spotify lets one app serve only a few
+    /// accounts, so brumm ships none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spotify_client_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spotify_refresh_token: String,
+    /// The signed-in Spotify account, so a different one starts with an
+    /// empty cache.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spotify_user: String,
 }
 
 fn config_path() -> PathBuf {
@@ -113,6 +137,26 @@ impl Config {
     }
     pub fn needs_provider_choice(&self) -> bool {
         self.effective_provider().is_empty()
+    }
+
+    /// The active service's name, as the players say it.
+    pub fn service_name(&self) -> &'static str {
+        crate::provider::registry::name(self.effective_provider())
+    }
+
+    /// Whether the active service has a session to start with; an error
+    /// when this build cannot sign in to it at all.
+    pub fn signed_in(&self) -> Result<bool> {
+        match self.effective_provider() {
+            "apple" if self.developer().is_empty() => {
+                Err(err("no Apple Music developer token in this build"))
+            }
+            "apple" => Ok(!self.user_token.is_empty()),
+            "spotify" => {
+                Ok(!self.spotify_client_id.is_empty() && !self.spotify_refresh_token.is_empty())
+            }
+            _ => Ok(false),
+        }
     }
 
     /// The config; a missing file is an empty config, not an error.

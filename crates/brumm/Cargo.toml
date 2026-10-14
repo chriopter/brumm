@@ -1,7 +1,7 @@
 [package]
 name = "brumm"
 version = "0.0.0"
-description = "Apple Music for Omarchy & Linux: the daemon and the terminal player"
+description = "Apple Music & Spotify for Omarchy & Linux: the daemon and the terminal player"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

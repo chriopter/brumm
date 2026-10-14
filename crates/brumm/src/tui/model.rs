@@ -499,6 +499,10 @@ pub struct Model {
     pub provider_choices: Vec<crate::provider::registry::ProviderInfo>,
     pub provider_index: usize,
     pub provider_asked: bool,
+    /// The music service picker is open from the options.
+    pub provider_picking: bool,
+    /// A service was picked there; its answer closes the picker.
+    pub provider_chosen: bool,
     pub login_tried: bool,
 
     // A spinning mouse wheel.
@@ -684,6 +688,8 @@ impl Model {
             provider_choices: Vec::new(),
             provider_index: 0,
             provider_asked: false,
+            provider_picking: false,
+            provider_chosen: false,
             login_tried: false,
             wheel_at: None,
             wheel_drawn: None,
@@ -963,9 +969,11 @@ impl Model {
     /// Fills a view from the daemon, whose cache usually answers at once.
     pub fn load(&mut self, id: u64) {
         let logged_out = self.state.status == ipc::STATUS_LOGGED_OUT;
+        let key = self.view_by_id(id).map(|v| v.key.clone());
+        let missing = key.is_some_and(|k| self.missing(&k).is_some());
         let Some(v) = self.view_by_id(id) else { return };
-        if v.loading || logged_out {
-            return;
+        if v.loading || logged_out || missing {
+            return; // a section the service lacks says so instead
         }
         let req = if let Some(it) = &v.item {
             Request {
@@ -1211,15 +1219,23 @@ impl Model {
         match msg {
             Msg::ProviderChoices(reply) => match reply {
                 Ok(info) => {
+                    if std::mem::take(&mut self.provider_chosen) {
+                        self.provider_picking = false;
+                        return;
+                    }
                     self.provider_choices = info.choices;
                     self.provider_index = self
                         .provider_choices
                         .iter()
-                        .position(|p| p.available)
+                        .position(|p| {
+                            p.available && (!self.provider_picking || p.id == info.selected)
+                        })
+                        .or_else(|| self.provider_choices.iter().position(|p| p.available))
                         .unwrap_or(0);
                 }
                 Err(e) => {
                     self.provider_asked = false;
+                    self.provider_chosen = false;
                     self.set_flash(&e);
                 }
             },
@@ -1444,7 +1460,8 @@ impl Model {
             }
             Msg::Feedback(r) => self.feedback_done(r),
             Msg::FeatureSaved => {
-                self.set_flash("Created in Apple Music");
+                let msg = format!("Created in {}", self.service());
+                self.set_flash(&msg);
                 let id = self.cur().id;
                 if let Some(v) = self.view_by_id(id) {
                     v.loading = false;
@@ -1490,6 +1507,9 @@ impl Model {
     pub fn event(&mut self, msg: Message) {
         if let Some(mut st) = msg.state {
             let was_logged_out = self.state.status == ipc::STATUS_LOGGED_OUT;
+            if st.service != self.state.service {
+                self.login_tried = false; // another service: its sign-in opens by itself too
+            }
             self.keep_showing(&mut st);
             self.keep_playing(&mut st);
             let song_changed = st.player.id != self.state.player.id;
@@ -1857,8 +1877,8 @@ impl Model {
     }
 
     fn hold(&mut self, seq: u64) {
-        if !self.space_down || seq != self.space_seq {
-            return;
+        if !self.space_down || seq != self.space_seq || self.lacks("preview") {
+            return; // nothing to preview: release will toggle
         }
         let v = self.cur();
         let Some(t) = v.rows.get(v.sel).and_then(|r| r.track.clone()) else {
@@ -1879,6 +1899,9 @@ impl Model {
         if self.previewing {
             self.previewing = false;
             return self.send(Request::new(ipc::CMD_PREVIEW));
+        }
+        if self.lacking("preview", "previews") {
+            return;
         }
         let v = self.cur();
         let Some(t) = v.rows.get(v.sel).and_then(|r| r.track.clone()) else {
@@ -2126,7 +2149,7 @@ impl Model {
     }
 
     pub fn key_press(&mut self, msg: Key) {
-        if self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
+        if self.state.status == ipc::STATUS_CHOOSE_PROVIDER || self.provider_picking {
             self.provider_key(&msg.name);
             return;
         }
@@ -2693,7 +2716,10 @@ impl Model {
             return;
         }
         self.login_tried = true;
-        self.set_flash("opening the Apple Music sign-in in your browser…");
+        self.set_flash(&format!(
+            "opening the {} sign-in in your browser…",
+            self.service()
+        ));
         self.sign_in();
     }
 

@@ -201,11 +201,11 @@ Item {
                                 }
                             }
                         }
-                        Text { // its key, a note about the row; a fold's way
+                        Text { // its key, a note about the row; a fold's way; keys: "" says none
                             id: key
-                            visible: row.modelData.act !== undefined || row.fold
+                            visible: (row.modelData.act !== undefined && row.modelData.keys !== "") || row.fold
                             anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                            text: row.fold ? (store.menuOptions ? "▾" : "▸") : (row.modelData.keys || row.modelData.act || "")
+                            text: row.fold ? (store.menuOptions ? "▾" : "▸") : (row.modelData.keys !== undefined ? row.modelData.keys : (row.modelData.act || ""))
                             color: row.picked ? ui.fg : ui.dim
                             font { family: ui.sans; pixelSize: ui.px(row.fold ? 16 : 12); weight: Font.DemiBold }
                         }

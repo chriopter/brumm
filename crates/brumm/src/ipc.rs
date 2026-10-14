@@ -240,6 +240,13 @@ pub struct State {
     /// Names a newer release when one is available.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub update: String,
+    /// The music service's name: Apple Music, Spotify.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub service: String,
+    /// What the players hide: the service offers no way to do it
+    /// (registry::ProviderInfo::lacks).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lacks: Vec<String>,
     #[serde(flatten)]
     pub player: Player,
 }

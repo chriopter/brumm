@@ -38,7 +38,8 @@ pub(super) fn place(set: Option<&Value>, reply: &mut Message) {
 }
 
 impl Daemon {
-    /// Persist only a provider whose adapter is actually available.
+    /// Persist only a provider whose adapter is actually available. A new
+    /// one replaces the running service: its player, library and resume.
     pub(super) async fn select_provider(
         self: &Arc<Self>,
         id: &str,
@@ -48,9 +49,12 @@ impl Daemon {
         let mut cfg = crate::config::Config::load()?;
         if !id.is_empty() {
             crate::provider::registry::validate(id)?;
+            let was = cfg.effective_provider().to_string();
             cfg.provider = id.into();
             cfg.save()?;
-            self.spawn_boot();
+            if was != id || self.lock().provider != id {
+                self.switch_service(id).await;
+            }
         }
         reply.provider = Some(crate::provider::registry::selection(&cfg));
         Ok(())

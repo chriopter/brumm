@@ -23,7 +23,10 @@ Item {
     readonly property string sub: {
         if (track) return r.albumView && store.view.item.artist === track.artist ? "" : track.artist
         if (!item) return ""
-        const kind = { album: "Album", playlist: "Playlist", artist: "Artist", station: "Station", term: "Search", shelf: "" }[item.kind] || ""
+        // A service without radio has no stations: its are playlists played
+        // as a whole (Spotify's followed ones), playlists to the user.
+        const kind = item.kind === "station" && store.lacks("radio") ? "Playlist"
+            : { album: "Album", playlist: "Playlist", artist: "Artist", station: "Station", term: "Search", shelf: "" }[item.kind] || ""
         return [kind, item.artist].filter(x => x).join(" · ")
     }
 

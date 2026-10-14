@@ -1,6 +1,7 @@
-//! Plays Apple Music through MusicKit JS in a headless Chrome: the page is
-//! served on a loopback port at a secret path (a secure context, which EME
-//! needs), and driven over the DevTools pipe.
+//! Plays music in a headless Chrome: Apple Music through MusicKit JS,
+//! Spotify through its Web Playback SDK. The page is served on a loopback
+//! port at a secret path (a secure context, which EME needs), and driven
+//! over the DevTools pipe. Both pages answer the same brumm.* calls.
 
 mod cdp;
 
@@ -24,7 +25,22 @@ use crate::ipc::Player;
 use crate::music::Track;
 use crate::proc;
 
+/// Apple Music's playback page.
 pub const PAGE: &str = include_str!("player.html");
+/// Spotify's playback page.
+pub const SPOTIFY_PAGE: &str = include_str!("spotify.html");
+
+/// Which playback page to run, with what it needs to sign in.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Page {
+    Apple {
+        developer_token: String,
+        user_token: String,
+    },
+    Spotify {
+        access_token: String,
+    },
+}
 
 /// How long Chrome may take to come up.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -123,10 +139,20 @@ pub fn private_temp_dir(root: &Path, prefix: &str) -> std::io::Result<PathBuf> {
 }
 
 /// The page with its configuration.
-fn page_html(developer_token: &str, user_token: &str, version: &str) -> String {
-    let cfg =
-        json!({"developerToken": developer_token, "userToken": user_token, "version": version});
-    PAGE.replace("__BRUMM_CFG__", &script_json(&cfg))
+fn page_html(page: &Page, version: &str) -> String {
+    match page {
+        Page::Apple {
+            developer_token,
+            user_token,
+        } => {
+            let cfg = json!({"developerToken": developer_token, "userToken": user_token, "version": version});
+            PAGE.replace("__BRUMM_CFG__", &script_json(&cfg))
+        }
+        Page::Spotify { access_token } => {
+            let cfg = json!({"accessToken": access_token, "version": version});
+            SPOTIFY_PAGE.replace("__BRUMM_CFG__", &script_json(&cfg))
+        }
+    }
 }
 
 /// Serves html at path to requests addressed to host, nothing else.
@@ -163,14 +189,10 @@ async fn serve_page(ln: TcpListener, host: String, path: String, html: Arc<Strin
 impl Engine {
     /// Launches Chrome on the playback page. Chrome dies with the daemon
     /// (PR_SET_PDEATHSIG), so a killed daemon leaves no orphaned browser.
-    pub async fn start(
-        developer_token: &str,
-        user_token: &str,
-        version: &str,
-    ) -> Result<Arc<Engine>> {
-        let html = Arc::new(page_html(developer_token, user_token, version));
+    pub async fn start(page: &Page, version: &str) -> Result<Arc<Engine>> {
+        let html = Arc::new(page_html(page, version));
         let ln = TcpListener::bind("127.0.0.1:0").await?;
-        // The page carries the user's Apple Music token. It is served only
+        // The page carries the user's music token. It is served only
         // at an unguessable path and only to requests addressed to this
         // loopback port, so other local users cannot read it.
         let page_path = format!("/{}", random_hex(16));
@@ -480,10 +502,24 @@ impl Engine {
         .await
     }
 
-    /// Plays a radio station: endless, chosen by Apple.
-    pub async fn play_station(&self, id: &str, source: &str) -> Result<()> {
-        self.call(&format!("brumm.playStation({}, {})", js(id), js(source)))
-            .await
+    /// Plays a station: Apple's are endless radio; Spotify's are playlists
+    /// played as a whole, which can start at start_id, start_at seconds in
+    /// (Apple's page ignores both).
+    pub async fn play_station(
+        &self,
+        id: &str,
+        source: &str,
+        start_id: &str,
+        start_at: f64,
+    ) -> Result<()> {
+        self.call(&format!(
+            "brumm.playStation({}, {}, {}, {})",
+            js(id),
+            js(source),
+            js(start_id),
+            num(start_at)
+        ))
+        .await
     }
 
     /// Looks songs up in the page ahead of a play, so starting one of them
@@ -492,17 +528,32 @@ impl Engine {
         self.call(&format!("brumm.warm({})", ids_js(ids))).await
     }
 
+    /// Tells the page what songs look like, for the queue it shows: Spotify
+    /// lets apps look songs up only one by one.
+    pub async fn describe(&self, tracks: &[Track]) -> Result<()> {
+        if tracks.is_empty() {
+            return Ok(());
+        }
+        self.call(&format!("brumm.describe({})", script_json(&json!(tracks))))
+            .await
+    }
+
     /// Lets similar music play on when the queue runs out.
     pub async fn set_autoplay(&self, on: bool) -> Result<()> {
         self.call(&format!("brumm.autoplay({on})")).await
     }
 
+    /// The current song and up to n after it. A page that first looks up
+    /// songs nobody described answers with a promise.
     pub async fn queue(&self, n: i64) -> Result<Queue> {
         let v = self
-            .eval(&format!(
-                r#"window.brumm && brumm.queue ? brumm.queue({n}) : "{{}}""#
-            ))
-            .await?;
+            .eval_wait(
+                &format!(r#"window.brumm && brumm.queue ? brumm.queue({n}) : "{{}}""#),
+                Duration::from_secs(6),
+                true,
+            )
+            .await
+            .map_err(|e| err(e.to_string()))?;
         Ok(serde_json::from_str(v.as_str().unwrap_or("{}"))?)
     }
 
@@ -591,8 +642,8 @@ impl Drop for Engine {
 mod tests {
     use super::*;
 
-    /// Every brumm.<name>(…) the engine calls exists on the playback page:
-    /// a missing one fails silently in Chrome.
+    /// Every brumm.<name>(…) the engine calls exists on both playback
+    /// pages: a missing one fails silently in Chrome.
     #[test]
     fn page_defines_every_call() {
         let src = include_str!("mod.rs");
@@ -611,17 +662,19 @@ mod tests {
             "found only {} calls; the scan is off",
             called.len()
         );
-        for name in called {
-            let defined = PAGE.lines().any(|l| {
-                let t = l.trim_start();
-                t.starts_with(&format!("{name}(")) || t.starts_with(&format!("async {name}("))
-            });
-            assert!(defined, "player.html does not define brumm.{name}");
+        for (file, page) in [("player.html", PAGE), ("spotify.html", SPOTIFY_PAGE)] {
+            for name in &called {
+                let defined = page.lines().any(|l| {
+                    let t = l.trim_start();
+                    t.starts_with(&format!("{name}(")) || t.starts_with(&format!("async {name}("))
+                });
+                assert!(defined, "{file} does not define brumm.{name}");
+            }
+            assert!(
+                page.contains("__BRUMM_CFG__"),
+                "{file} lost its config placeholder"
+            );
         }
-        assert!(
-            PAGE.contains("__BRUMM_CFG__"),
-            "player.html lost its config placeholder"
-        );
     }
 
     /// The queue's songs carry every field the player reads from them:
@@ -638,14 +691,36 @@ mod tests {
                 "queue leaves out {f}"
             );
         }
+        // Spotify's page builds its entries in one place.
+        let i = SPOTIFY_PAGE.find("function entry(").unwrap();
+        let body = &SPOTIFY_PAGE[i..i + SPOTIFY_PAGE[i..].find("\n}").unwrap()];
+        for f in [
+            "id", "title", "artist", "album", "duration", "artwork", "number",
+        ] {
+            assert!(
+                body.contains(&format!(" {f}:")) || body.contains(&format!("{{ {f}:")),
+                "the Spotify queue leaves out {f}"
+            );
+        }
     }
 
     #[test]
     fn config_cannot_break_out_of_the_script() {
-        let html = page_html("dev</script><script>alert(1)", "user\u{2028}", "v1&");
+        let apple = Page::Apple {
+            developer_token: "dev</script><script>alert(1)".into(),
+            user_token: "user\u{2028}".into(),
+        };
+        let html = page_html(&apple, "v1&");
         assert!(!html.contains("</script><script>alert"));
         let escaped = format!("\"developerToken\":\"dev{}u003c/script", '\\');
         assert!(html.contains(&escaped), "{html}");
+        assert!(!html.contains("__BRUMM_CFG__"));
+        let spotify = Page::Spotify {
+            access_token: "tok</script><script>alert(1)".into(),
+        };
+        let html = page_html(&spotify, "v1");
+        assert!(!html.contains("</script><script>alert"));
+        assert!(html.contains("sdk.scdn.co/spotify-player.js"));
         assert!(!html.contains("__BRUMM_CFG__"));
     }
 

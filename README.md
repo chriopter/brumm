@@ -2,9 +2,10 @@
 
 <img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
 
-**Apple Music for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
+**Apple Music & Spotify for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
 - 🎵 Library, catalog, search as you type
+- 🎧 Apple Music or Spotify: <kbd>o</kbd> → Music Service, or `brumm provider`
 - 🏠 Home: recent, heavy rotation, picks
 - 🧭 Explore: charts, genres, videos, countries
 - ❤️ Favorites, Replay and playlist folders
@@ -59,10 +60,14 @@ Visuals
 | <kbd>Q</kbd> / <kbd>q</kbd> | close, keep playing / quit |
 
 Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
+Not possible with Spotify's API for apps: radio, Explore, previews, dislikes,
+the songs of playlists you do not own (they play as a whole), the visualizer
+hearing the music.
 
 ## More
 
-- 🔑 Needs an Apple Music subscription; the installer signs you in and starts brumm
+- 🔑 Needs Apple Music, or Spotify Premium; the installer asks which, signs you in and starts brumm
+- 🟢 Spotify plays through an app of your own (Spotify lets one app serve only a few people): at sign-in, brumm shows how to make one at [developer.spotify.com](https://developer.spotify.com/dashboard) with the redirect URI `http://127.0.0.1:7777/spotify/callback`
 - ▶️ Later: `brumm`, the launcher, or the bar widget — whichever face you used last
 - 🔄 Updates: <kbd>U</kbd> when offered, or `brumm update`
 - 🔏 Signed releases (Ed25519) and GitHub-attested builds — check the installer first:
@@ -90,18 +95,19 @@ bin/viz-thumbs  # picture each visualizer style for the list of styles
 bin/bench       # what the players cost
 ```
 
-One background service is the core — music, queue, library, options, sign-in, where you were. The players only draw, and come and go while the music plays on:
+One background service is the core — music, queue, library, options, sign-in, where you were, for each music service. The players only draw, and come and go while the music plays on:
 
 ```text
 +--------------------------------------------------------+
 | brumm daemon  |  Rust / Tokio                          |
 | systemd background service                             |
 |                                                        |
-| Apple Music API / library / queue / sign-in / options  |
+| Apple Music & Spotify APIs / library / queue / sign-in |
 +--+-----------------------------------------------------+
    |
    +-- playback --> Chrome / Widevine
    |                MusicKit JS / Web Audio
+   |                Spotify Web Playback SDK
    |
    +-- MPRIS -----> Omarchy bar widget
    |

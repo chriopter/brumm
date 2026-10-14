@@ -213,6 +213,9 @@ impl Model {
                     ),
                     DIM,
                 ));
+            } else if p.lists.is_empty() && self.state.service == "Spotify" {
+                lines.push(one("  Spotify lets apps add only to your own", DIM));
+                lines.push(one("  playlists, like a new one here", DIM));
             } else if p.lists.is_empty() {
                 lines.push(one("  Apple lets apps add only to playlists", DIM));
                 lines.push(one("  made with an app — like a new one here", DIM));

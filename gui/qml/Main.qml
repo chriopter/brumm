@@ -211,7 +211,7 @@ Window {
         return (v.item && v.item.kind === "artist") ||
             (store.section === store.secExplore && !store.rows.some(r => !!r.track))
     }
-    readonly property bool popup: store.help || !!store.pick || !!store.upd || store.barAsk || !!store.fb || !!store.inspect || !!store.prototypeForm || !!store.video
+    readonly property bool popup: store.help || store.providerShown || !!store.pick || !!store.upd || store.barAsk || !!store.fb || !!store.inspect || !!store.prototypeForm || !!store.video
 
     Item {
         id: body
@@ -302,33 +302,6 @@ Window {
         Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
     }
 
-    Dialog {
-        id: providerDialog
-        x: (win.width - width) / 2
-        y: (win.height - height) / 2
-        width: Math.min(ui.px(420), win.width - ui.px(24))
-        title: "Choose your music provider"
-        modal: true
-        visible: store.providerChoiceNeeded
-        closePolicy: Popup.NoAutoClose
-        background: Rectangle { color: ui.deep; radius: ui.px(12); border.color: ui.edge }
-        header: Label { text: providerDialog.title; color: ui.bright; padding: ui.px(16); font.pixelSize: ui.px(20) }
-        contentItem: Column {
-            spacing: ui.px(12)
-            Label { width: parent.width; text: "Choose the service you use for music."; wrapMode: Text.WordWrap; color: ui.fg }
-            Repeater {
-                model: store.providers
-                delegate: Button {
-                    width: providerDialog.availableWidth
-                    text: modelData.name + (modelData.available ? "" : " (coming soon)")
-                    enabled: modelData.available
-                    onClicked: store.chooseProvider(modelData.id)
-                }
-            }
-            Label { visible: store.providers.length === 0; text: "Loading providers…"; color: ui.dim }
-        }
-    }
-
     property int contextIndex: -1
     property var contextRow: null
     property var contextView: null
@@ -358,8 +331,8 @@ Window {
         ContextAction { text: rowMenu.row && rowMenu.row.track ? "Play" : "Open"; onTriggered: win.rowAction(index => store.activateAt(index)) }
         ContextAction { text: "Add to Playlist…"; visible: rowMenu.music; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.openPicker()) }
         ContextAction { text: "Add to Library"; visible: !!(rowMenu.music && rowMenu.row && rowMenu.entry && (rowMenu.row.track ? !rowMenu.row.track.id.startsWith("i.") : rowMenu.entry.catalog)); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.addToLibrary()) }
-        ContextAction { text: "Start Radio"; visible: !!rowMenu.row && (!!rowMenu.row.track || (rowMenu.entry && ["artist", "station"].includes(rowMenu.entry.kind))); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.playStation()) }
-        ContextAction { text: "Suggest Less"; visible: rowMenu.music; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.rate(-1)) }
+        ContextAction { text: "Start Radio"; visible: !!rowMenu.row && !store.lacks("radio") && (!!rowMenu.row.track || (rowMenu.entry && ["artist", "station"].includes(rowMenu.entry.kind))); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.playStation()) }
+        ContextAction { text: "Suggest Less"; visible: rowMenu.music && !store.lacks("dislike"); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.rate(-1)) }
         MenuSeparator {}
         ContextAction { text: "Details"; onTriggered: win.rowAction(index => store.inspectAt(index)) }
         padding: ui.px(6)
@@ -444,6 +417,7 @@ Window {
     HelpBox { visible: store.help }
     BarAskBox { visible: store.barAsk }
     PickerBox { visible: !!store.pick }
+    ProviderBox { visible: store.providerShown }
     UpdateBox { visible: !!store.upd }
     FeedbackBox { visible: !!store.fb }
     Text {

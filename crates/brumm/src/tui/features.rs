@@ -18,8 +18,57 @@ pub struct FeatureForm {
 }
 
 impl Model {
+    /// The music service, as the daemon names it.
+    pub fn service(&self) -> &str {
+        match self.state.service.as_str() {
+            "" => "Apple Music",
+            s => s,
+        }
+    }
+
+    /// Whether the service lacks what (registry::ProviderInfo::lacks).
+    pub fn lacks(&self, what: &str) -> bool {
+        self.state.lacks.iter().any(|l| l == what)
+    }
+
+    /// Says so when the service lacks what, by the name players know it;
+    /// true then, and the caller does nothing.
+    pub fn lacking(&mut self, what: &str, name: &str) -> bool {
+        if !self.lacks(what) {
+            return false;
+        }
+        let msg = format!("{} has no {name} for apps", self.service());
+        self.set_flash(&msg);
+        true
+    }
+
+    /// The section a view's key names, when the service lacks it.
+    pub fn missing(&self, key: &str) -> Option<&'static str> {
+        match key {
+            "explore:" if self.lacks("explore") => Some("Explore"),
+            "radio:" if self.lacks("radio") => Some("Radio"),
+            _ => None,
+        }
+    }
+
+    /// Opens the music service picker over the player.
+    pub fn pick_provider(&mut self) {
+        self.provider_picking = true;
+        self.provider_chosen = false;
+        self.ask(Request::new(ipc::CMD_PROVIDER), |reply| {
+            Some(Msg::ProviderChoices(reply.and_then(|m| {
+                m.provider.ok_or_else(|| "missing provider choices".into())
+            })))
+        });
+    }
+
     pub fn provider_key(&mut self, key: &str) {
         match key {
+            // Opened from the options, it closes like every other box; only
+            // the first start's choice quits on q.
+            "esc" | "q" | "Q" | "o" | "ctrl+c" if self.provider_picking => {
+                self.provider_picking = false
+            }
             "q" | "Q" | "ctrl+c" => self.cmds.push(super::model::Cmd::Quit),
             "up" | "down" | "tab" | "k" | "j" => {
                 let n = self.provider_choices.len();
@@ -39,7 +88,12 @@ impl Model {
                     .provider_choices
                     .get(self.provider_index)
                     .filter(|p| p.available)
+                    .cloned()
                 {
+                    if self.provider_picking {
+                        self.provider_chosen = true;
+                        self.set_flash(&format!("switching to {}…", p.name));
+                    }
                     self.ask(
                         Request {
                             cmd: ipc::CMD_PROVIDER.into(),
@@ -60,14 +114,21 @@ impl Model {
     }
     pub fn provider_box(&self) -> Vec<L> {
         let wd = 54.min(self.width - 2 * MARGIN - 4).max(8);
+        let fw = (wd - 3) as usize;
         let mut lines = vec![one(" Choose your music service", PLAIN)];
         for (i, p) in self.provider_choices.iter().enumerate() {
+            let note = if !p.available {
+                " (coming soon)"
+            } else if self.provider_picking && p.name == self.service() {
+                " (in use)"
+            } else {
+                ""
+            };
             lines.push(one(
                 format!(
-                    " {} {}{}",
+                    " {} {}{note}",
                     if i == self.provider_index { ">" } else { " " },
                     p.name,
-                    if p.available { "" } else { " (coming soon)" }
                 ),
                 if p.available { HERE } else { DIM },
             ));
@@ -75,8 +136,17 @@ impl Model {
         if self.provider_choices.is_empty() {
             lines.push(one(" Loading providers…", DIM));
         }
-        lines.push(one(" enter continue · q close", DIM));
+        lines.push(one(
+            if self.provider_picking {
+                " enter switch · esc close"
+            } else {
+                " enter continue · q close"
+            },
+            DIM,
+        ));
         let h = lines.len() as i64 + 2;
+        // Padded to the box, so its right edge stands straight.
+        let lines = lines.iter().map(|l| fit(l, fw)).collect();
         box_lines("Music provider", false, L::default(), lines, wd, h)
     }
 

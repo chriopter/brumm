@@ -1,10 +1,15 @@
-//! Signs the user in to Apple Music in their own browser and stores the
-//! resulting Music User Token.
+//! Signs the user in to their music service in their own browser and
+//! stores the session.
 //!
-//! MusicKit's authorize() needs a visible window for Apple's OAuth popup
-//! (in headless Chrome it hangs on an invisible one), so the login runs on
-//! a loopback page opened in the default browser, which posts the token
-//! back.
+//! Apple Music: MusicKit's authorize() needs a visible window for Apple's
+//! OAuth popup (in headless Chrome it hangs on an invisible one), so the
+//! login runs on a loopback page opened in the default browser, which
+//! posts the Music User Token back.
+//!
+//! Spotify: OAuth with PKCE (spotify.rs), with the user's own app; the
+//! loopback page asks for its Client ID and Spotify redirects back to it.
+
+mod spotify;
 
 use std::time::Duration;
 
@@ -91,10 +96,31 @@ async fn answer(
     }
 }
 
-/// Opens the login page and waits until a token arrives (five minutes at
-/// most). The token is saved to the config.
+/// Opens the active service's login page and waits until the sign-in
+/// completes. The session is saved to the config.
 pub async fn run(status: impl Fn(&str)) -> Result<()> {
-    let mut cfg = Config::load()?;
+    let cfg = Config::load()?;
+    match cfg.effective_provider() {
+        "spotify" => spotify::run(cfg, &status).await,
+        _ => apple(cfg, &status).await,
+    }
+}
+
+/// Opens url in the default browser, or says where to go.
+fn open(url: &str, status: &impl Fn(&str)) {
+    if std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_err()
+    {
+        status(&format!("open {url} to sign in"));
+    }
+}
+
+/// Apple Music: waits until a token arrives (five minutes at most).
+async fn apple(mut cfg: Config, status: &impl Fn(&str)) -> Result<()> {
     if cfg.developer().is_empty() {
         return Err(err("no Apple Music developer token in this build"));
     }
@@ -126,15 +152,7 @@ pub async fn run(status: impl Fn(&str)) -> Result<()> {
     };
     let url = format!("{origin}/{secret}/");
     status("opening Apple Music sign-in in your browser…");
-    if std::process::Command::new("xdg-open")
-        .arg(&url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .is_err()
-    {
-        status(&format!("open {url} to sign in"));
-    }
+    open(&url, status);
     let got = tokio::time::timeout(Duration::from_secs(5 * 60), rx.recv()).await;
     server.abort();
     match got {

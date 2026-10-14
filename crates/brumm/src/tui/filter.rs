@@ -147,7 +147,7 @@ impl Model {
             l.spans.extend([
                 sp("  ", DIM),
                 sp("tab", KEY),
-                sp(" all of Apple Music  ", DIM),
+                sp(format!(" all of {}  ", self.service()), DIM),
                 sp("esc", KEY),
                 sp(" clear", DIM),
             ]);

@@ -2,13 +2,14 @@
 //! MPRIS server for media keys and the bar, and a unix socket the players
 //! talk to. Music keeps playing when the players are closed.
 
-mod apple;
 mod feedback;
 mod frontends;
+mod known;
 mod library;
 mod playback;
 mod resume;
 mod selfupdate;
+mod service;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,16 +21,16 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, Semaphore};
 
-use self::apple::new_api;
+use self::service::new_service;
 use crate::config::{self, Config, Options};
 use crate::engine::{self, CdpError, Engine};
 use crate::error::{Error, Result, err};
 use crate::ipc::{self, Message, Player, Request, State};
 use crate::music::{
     ExplorePage, Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF, KIND_STATION, KIND_TERM,
-    Shelf,
+    Shelf, Track,
 };
-use crate::provider::Api;
+use crate::provider::{Api, spotify};
 use crate::{chrome, launch, mpris};
 
 use library::Library;
@@ -107,9 +108,24 @@ struct CachedPage {
 struct Inner {
     eng: Option<Arc<Engine>>,
     api: Option<Arc<dyn Api>>,
+    /// Spotify's tokens, which the page needs fresh every hour.
+    session: Option<Arc<spotify::Session>>,
+    /// When the page last got a renewed token for a refused one, and
+    /// whether one is being fetched.
+    renewed_at: Option<Instant>,
+    renewing: bool,
+    /// The signed-in Spotify account whose library and place are loaded.
+    account: String,
+    /// The music service's id: whose caches are loaded.
+    provider: String,
+    /// The music service, as the players say it, and what they hide.
+    service: String,
+    lacks: Vec<String>,
     state: State,
     conns: HashMap<u64, ConnInfo>,
     booting: bool,
+    /// The service changed during a boot: boot again, with the new one.
+    boot_again: bool,
     refreshing: bool,
     /// Another refresh was asked for during one.
     refresh_next: bool,
@@ -143,6 +159,8 @@ pub struct Daemon {
     version: String,
     mpris: OnceLock<mpris::Server>,
     lib: Library,
+    /// Songs handed to players, for pages that cannot look them up.
+    known: known::Known,
     inner: Mutex<Inner>,
     /// True once the daemon is to stop.
     quit: tokio::sync::watch::Sender<bool>,
@@ -173,7 +191,15 @@ fn same(a: &Option<Arc<Engine>>, b: &Arc<Engine>) -> bool {
 pub async fn run(version: &str) -> Result<()> {
     let ln = listen().await?;
     engine::sweep_profiles(); // left behind by crashes
-    let d = Arc::new(Daemon::new(version, Library::load(), Resume::load()));
+    let provider = Config::load()
+        .map(|c| c.effective_provider().to_string())
+        .unwrap_or_default();
+    let d = Arc::new(Daemon::new(
+        version,
+        Library::load(&provider),
+        Resume::load(&provider),
+    ));
+    d.lock().provider = provider;
     match mpris::Server::start(Arc::downgrade(&d)).await {
         Ok(m) => {
             let _ = d.mpris.set(m);
@@ -266,6 +292,7 @@ impl Daemon {
             version: version.to_string(),
             mpris: OnceLock::new(),
             lib,
+            known: Default::default(),
             inner: Mutex::new(Inner {
                 state: State {
                     status: ipc::STATUS_STARTING.into(),
@@ -318,12 +345,25 @@ impl Daemon {
         {
             let mut i = self.lock();
             if i.booting {
-                return;
+                return; // the boot under way does it
             }
             i.booting = true;
+            i.boot_again = false;
         }
-        self.clone().boot_once().await;
-        self.lock().booting = false;
+        loop {
+            self.clone().boot_once().await;
+            let mut i = self.lock();
+            if !std::mem::take(&mut i.boot_again) {
+                i.booting = false;
+                return;
+            }
+        }
+    }
+
+    /// Whether cfg's service is still the one to run: a switch during a
+    /// boot leaves that boot stale.
+    fn runs(&self, cfg: &Config) -> bool {
+        self.lock().provider == cfg.effective_provider()
     }
 
     async fn boot_once(self: Arc<Self>) {
@@ -336,27 +376,33 @@ impl Daemon {
                 .set_status(ipc::STATUS_CHOOSE_PROVIDER, "Choose your music provider")
                 .await;
         }
-        let api = match new_api(&cfg) {
-            Ok(api) => api,
+        self.set_service(&cfg);
+        match cfg.signed_in() {
+            Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
+            Ok(false) => {
+                return self
+                    .set_status(ipc::STATUS_LOGGED_OUT, "not signed in")
+                    .await;
+            }
+            Ok(true) => {}
+        }
+        let svc = match new_service(&cfg) {
+            Ok(svc) => svc,
             Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
         };
-        if cfg.developer().is_empty() {
-            return self
-                .set_status(
-                    ipc::STATUS_ERROR,
-                    "no Apple Music developer token in this build",
-                )
-                .await;
-        }
-        if cfg.user_token.is_empty() {
-            return self
-                .set_status(ipc::STATUS_LOGGED_OUT, "not signed in")
-                .await;
-        }
         let first = {
             let mut i = self.lock();
-            i.api = Some(api);
-            if let Some(exp) = cfg.expires() {
+            if i.provider != cfg.effective_provider() {
+                return;
+            }
+            i.api = Some(svc.api.clone());
+            i.session = svc.session.clone();
+            i.account.clone_from(&cfg.spotify_user);
+            i.expires = None;
+            i.expires_in = 0;
+            if cfg.effective_provider() == "apple"
+                && let Some(exp) = cfg.expires()
+            {
                 i.expires = Some(exp);
                 let days = (exp - chrono::Utc::now().timestamp()) / 86400;
                 if days < 45 {
@@ -382,10 +428,22 @@ impl Daemon {
         }
         self.set_status(ipc::STATUS_STARTING, "starting player")
             .await;
-        let eng = match Engine::start(cfg.developer(), &cfg.user_token, &self.version).await {
+        let page = match svc.page(&cfg).await {
+            Ok(p) => p,
+            Err(Error::Unauthorized) => {
+                return self
+                    .set_status(ipc::STATUS_LOGGED_OUT, "music session expired")
+                    .await;
+            }
+            Err(e) => return self.failed(e).await,
+        };
+        let eng = match Engine::start(&page, &self.version).await {
             Ok(e) => e,
             Err(e) => return self.failed(e).await,
         };
+        if !self.runs(&cfg) {
+            return eng.close().await;
+        }
         let old = {
             let mut i = self.lock();
             let old = i.eng.replace(eng.clone());
@@ -397,7 +455,121 @@ impl Daemon {
             tokio::spawn(async move { old.close().await });
         }
         let _ = eng.set_autoplay(!Options::load().no_autoplay).await;
+        if let Some(s) = svc.session {
+            self.spawn_token_push(&eng, s);
+        }
         self.spawn_watch(eng);
+    }
+
+    /// Names the service for the players, and what they hide for it.
+    fn set_service(&self, cfg: &Config) {
+        let (service, lacks) = (
+            cfg.service_name().to_string(),
+            crate::provider::registry::lacks(cfg.effective_provider()),
+        );
+        let mut i = self.lock();
+        i.state.service.clone_from(&service);
+        i.state.lacks.clone_from(&lacks);
+        i.service = service;
+        i.lacks = lacks;
+    }
+
+    /// Keeps the Spotify page's access token fresh: a new one shortly
+    /// before the old one ends. It looks every minute, on the wall clock
+    /// (a suspended laptop's sleep counts), and ends with its engine or
+    /// session; it does not keep a closed engine alive.
+    fn spawn_token_push(self: &Arc<Self>, eng: &Arc<Engine>, s: Arc<spotify::Session>) {
+        let d = Arc::downgrade(self);
+        let weak = Arc::downgrade(eng);
+        tokio::spawn(async move {
+            loop {
+                let wait = s.remaining().await;
+                tokio::time::sleep(wait.clamp(Duration::from_secs(30), Duration::from_secs(60)))
+                    .await;
+                let (Some(d), Some(eng)) = (d.upgrade(), weak.upgrade()) else {
+                    return;
+                };
+                let current = {
+                    let i = d.lock();
+                    same(&i.eng, &eng) && i.session.as_ref().is_some_and(|c| Arc::ptr_eq(c, &s))
+                };
+                if !current {
+                    return;
+                }
+                if !s.remaining().await.is_zero() {
+                    continue;
+                }
+                match s.token().await {
+                    Ok(t) => {
+                        let _ = eng.set_user_token(&t).await;
+                    }
+                    Err(Error::Unauthorized) => {
+                        d.set_status(ipc::STATUS_LOGGED_OUT, "music session expired")
+                            .await;
+                        return;
+                    }
+                    Err(e) => eprintln!("spotify token: {e}"), // offline: try again shortly
+                }
+            }
+        });
+    }
+
+    /// The page refused its token: Spotify's get a renewed one. Says
+    /// whether a renewal is under way (or just done, while the page takes
+    /// it); a page still refused after that is signed out. A failed
+    /// renewal says so itself.
+    fn renew_token(self: &Arc<Self>) -> bool {
+        let (s, eng) = {
+            let mut i = self.lock();
+            let (Some(s), Some(eng)) = (i.session.clone(), i.eng.clone()) else {
+                return false;
+            };
+            if i.renewing
+                || i.renewed_at
+                    .is_some_and(|t| t.elapsed() < Duration::from_secs(10))
+            {
+                return true;
+            }
+            if i.renewed_at
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+            {
+                return false;
+            }
+            i.renewing = true;
+            (s, eng)
+        };
+        let d = self.clone();
+        tokio::spawn(async move {
+            let r = s.refresh_now().await;
+            if let Ok(t) = &r {
+                let _ = eng.set_user_token(t).await;
+            }
+            {
+                let mut i = d.lock();
+                i.renewing = false;
+                i.renewed_at = Some(Instant::now());
+            }
+            match r {
+                Err(Error::Unauthorized) => {
+                    d.set_status(ipc::STATUS_LOGGED_OUT, "music session expired")
+                        .await;
+                }
+                Err(e) => eprintln!("spotify token: {e}"),
+                Ok(_) => {}
+            }
+        });
+        true
+    }
+
+    /// Tells a Spotify page what the songs it is about to queue look like.
+    async fn describe(&self, eng: &Engine, ids: &[String], start: &str, source: &str) {
+        if self.lock().session.is_none() {
+            return;
+        }
+        let at = ids.iter().position(|id| id == start).unwrap_or(0);
+        let listed = self.lib.tracks(source).unwrap_or_default();
+        let tracks = self.known.of(ids, at, &listed);
+        let _ = eng.describe(&tracks).await;
     }
 
     /// Shows why the player did not start and schedules another try,
@@ -583,8 +755,9 @@ impl Daemon {
             return IDLE_WAKE;
         };
         let (bands, wave, fps) = self.wants();
-        if !self.playing() || (bands == 0 && wave == 0) {
-            return IDLE_WAKE;
+        let deaf = self.lock().lacks.iter().any(|l| l == "visualizer");
+        if !self.playing() || (bands == 0 && wave == 0) || deaf {
+            return IDLE_WAKE; // a page with no audio to analyze is not asked
         }
         if bands > 0
             && let Ok(spec) = eng.spectrum(bands).await
@@ -614,14 +787,20 @@ impl Daemon {
     }
 
     async fn apply(self: &Arc<Self>, mut es: Player) {
-        let (status, msg) = if es.needs_auth {
+        let (status, msg) = if es.needs_auth && self.renew_token() {
+            (
+                ipc::STATUS_STARTING,
+                "renewing the music session".to_string(),
+            )
+        } else if es.needs_auth {
             (ipc::STATUS_LOGGED_OUT, "music session expired".to_string())
         } else if !es.err.is_empty() {
             (ipc::STATUS_ERROR, es.err.clone())
         } else if es.ready {
             (ipc::STATUS_READY, String::new())
         } else {
-            (ipc::STATUS_STARTING, "loading Apple Music".to_string())
+            let service = self.lock().service.clone();
+            (ipc::STATUS_STARTING, format!("loading {service}"))
         };
         let (next, changed, started) = {
             let mut i = self.lock();
@@ -634,6 +813,7 @@ impl Daemon {
                 let d = self.clone();
                 tokio::spawn(async move {
                     if let Some(eng) = d.engine() {
+                        d.describe(&eng, &r.ids, &r.id, &r.source).await;
                         let _ = r.play(&eng).await;
                     }
                 });
@@ -650,6 +830,8 @@ impl Daemon {
                 message: msg,
                 expires_in: i.expires_in,
                 update: i.update.clone(),
+                service: i.service.clone(),
+                lacks: i.lacks.clone(),
                 player: es.clone(),
             };
             let changed = next != i.state;
@@ -757,6 +939,9 @@ impl Daemon {
                 };
                 if let Err(e) = d.handle(id, &req, &mut reply).await {
                     reply.error = e.to_string();
+                }
+                if d.lock().session.is_some() {
+                    d.known.note_reply(&reply); // only Spotify's page needs them
                 }
                 out.send(&ipc::encode(&reply)).await;
                 drop(permit);
@@ -926,11 +1111,13 @@ impl Daemon {
             ipc::CMD_PLAY => {
                 {
                     let mut i = self.lock();
-                    let res = i.resume.get_or_insert_with(Resume::default);
+                    let provider = i.provider.clone();
+                    let res = i.resume.get_or_insert_with(|| Resume::new(&provider));
                     res.ids = r.ids.clone();
                     res.source = r.source.clone();
                     res.station.clear();
                 }
+                self.describe(&eng, &r.ids, &r.start, &r.source).await;
                 eng.play_ids(&r.ids, &r.start, &r.source, 0.0).await
             }
             ipc::CMD_TOGGLE => self.toggle_playback(&eng).await,
@@ -952,11 +1139,17 @@ impl Daemon {
                 Ok(())
             }
             ipc::CMD_JUMP => eng.jump(r.value as i64).await,
-            ipc::CMD_ENQUEUE => eng.enqueue(&r.ids, r.value != 0.0).await,
+            ipc::CMD_ENQUEUE => {
+                self.describe(&eng, &r.ids, "", &r.source).await;
+                eng.enqueue(&r.ids, r.value != 0.0).await
+            }
             ipc::CMD_SHUFFLE => eng.set_shuffle(r.value != 0.0).await,
             ipc::CMD_REPEAT => eng.set_repeat(r.value as i64).await,
             ipc::CMD_AUTOPLAY => eng.set_autoplay(r.value != 0.0).await,
-            ipc::CMD_WARM => eng.warm(&r.ids).await,
+            ipc::CMD_WARM => {
+                self.describe(&eng, &r.ids, "", &r.source).await;
+                eng.warm(&r.ids).await
+            }
             other => Err(err(format!("unknown command {other:?}"))),
         }
     }
@@ -973,7 +1166,7 @@ impl Daemon {
                             ids: r.ids.clone(),
                             source: r.source.clone(),
                             id: r.start.clone(),
-                            ..Default::default()
+                            ..Resume::new(&i.provider)
                         });
                     }
                 }
@@ -1050,11 +1243,36 @@ impl Daemon {
             None => {}
         }
         if name == ipc::LIST_SONGS {
-            self.lib.set_tracks(name, reply.tracks.clone());
+            self.cache_tracks(api, name, reply.tracks.clone());
         } else {
-            self.lib.set_items(name, reply.items.clone());
+            self.cache_items(api, name, reply.items.clone());
         }
         Ok(())
+    }
+
+    /// Caches a list while api is the current service's: a switch at any
+    /// moment cannot let it into another service's cache.
+    fn cache_items(&self, api: &dyn Api, key: &str, v: Vec<Item>) {
+        let generation = self.lib.generation(); // before the check: see Library
+        if self.serves(api) {
+            self.lib.set_items_if(generation, key, v);
+        }
+    }
+
+    /// cache_items, for songs.
+    fn cache_tracks(&self, api: &dyn Api, key: &str, v: Vec<Track>) {
+        let generation = self.lib.generation();
+        if self.serves(api) {
+            self.lib.set_tracks_if(generation, key, v);
+        }
+    }
+
+    /// Whether api is the current service's.
+    fn serves(&self, api: &dyn Api) -> bool {
+        self.lock()
+            .api
+            .as_ref()
+            .is_some_and(|a| std::ptr::addr_eq(Arc::as_ptr(a), api as *const dyn Api))
     }
 
     /// What is inside an item: tracks, or an artist's page.
@@ -1080,7 +1298,7 @@ impl Daemon {
             Some(e) => return self.auth_check(Err(e)).await,
             None => {}
         }
-        self.lib.set_tracks(&key, reply.tracks.clone());
+        self.cache_tracks(api.as_ref(), &key, reply.tracks.clone());
         Ok(())
     }
 
@@ -1133,7 +1351,8 @@ impl Daemon {
         let source = format!("station:{}", st.id);
         {
             let mut i = self.lock();
-            let res = i.resume.get_or_insert_with(Resume::default);
+            let provider = i.provider.clone();
+            let res = i.resume.get_or_insert_with(|| Resume::new(&provider));
             res.station = st.id.clone();
             res.ids.clear();
             res.source = source.clone();
@@ -1142,7 +1361,7 @@ impl Daemon {
             i.active = Some(Instant::now());
         }
         if let Some(eng) = self.engine() {
-            return eng.play_station(&st.id, &source).await;
+            return eng.play_station(&st.id, &source, "", 0.0).await;
         }
         if self.wake(true).await {
             return Ok(());
@@ -1186,34 +1405,110 @@ impl Daemon {
         r
     }
 
-    /// Picks up a fresh login: hot-swaps the token into a running page, or
-    /// starts the player if it never ran.
+    /// Changes to another music service: the old one's player closes, its
+    /// place is saved, and the new one's library and place load before
+    /// it starts.
+    pub(super) async fn switch_service(self: &Arc<Self>, provider: &str) {
+        let old = {
+            let mut i = self.lock();
+            if let Some(r) = i.resume.as_mut() {
+                r.save();
+            }
+            i.provider = provider.to_string();
+            i.resume = Resume::load(provider);
+            i.api = None;
+            i.session = None;
+            i.renewed_at = None;
+            i.pages.clear();
+            i.booted = false;
+            i.boot_again = true; // a boot under way is the old service's
+            i.retry_at = None;
+            i.asleep = false;
+            i.expires = None;
+            i.expires_in = 0;
+            i.account.clear();
+            i.state.player = Player::default();
+            i.eng.take()
+        };
+        self.cancel_play_check();
+        if let Err(e) = self.lib.save() {
+            eprintln!("library cache: {e}");
+        }
+        self.lib.switch(provider);
+        if let Some(e) = old {
+            tokio::spawn(async move { e.close().await });
+        }
+        self.set_status(ipc::STATUS_STARTING, "switching the music service")
+            .await;
+        self.library_changed().await;
+        self.spawn_boot();
+    }
+
+    /// Picks up a fresh login: hot-swaps Apple's token into a running
+    /// page, or starts the player anew: always for Spotify, whose page is
+    /// a device of the account it first signed in with.
     async fn reload(self: Arc<Self>) {
         let cfg = match Config::load() {
-            Ok(c) if !c.user_token.is_empty() => c,
+            Ok(c) if c.signed_in() == Ok(true) => c,
             _ => return,
         };
-        let api = match new_api(&cfg) {
-            Ok(api) => api,
+        let provider = cfg.effective_provider().to_string();
+        if self.lock().provider != provider {
+            return self.switch_service(&provider).await;
+        }
+        let other_account = {
+            let mut i = self.lock();
+            let other = provider == "spotify" && i.account != cfg.spotify_user;
+            if other {
+                // Another account: nothing of the old one's stays, and its
+                // API writes no more (see cache_items).
+                i.api = None;
+                i.resume = None;
+                i.pages.clear();
+            }
+            i.account.clone_from(&cfg.spotify_user);
+            other
+        };
+        if other_account {
+            self.lib.clear();
+            if let Err(e) = self.lib.save() {
+                eprintln!("library cache: {e}");
+            }
+            let _ = std::fs::remove_file(config::service_cache("resume", &provider));
+        }
+        let svc = match new_service(&cfg) {
+            Ok(svc) => svc,
             Err(e) => {
                 self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
                 return;
             }
         };
+        self.set_service(&cfg);
         let eng = {
             let mut i = self.lock();
-            i.api = Some(api);
-            i.eng.clone()
+            i.api = Some(svc.api.clone());
+            i.session = svc.session.clone();
+            i.renewed_at = None;
+            if svc.session.is_some() {
+                i.eng.take()
+            } else {
+                i.eng.clone()
+            }
         };
-        if let Some(eng) = eng
-            && eng.set_user_token(&cfg.user_token).await.is_ok()
-        {
-            self.spawn_refresh();
-            return;
+        if let Some(eng) = eng {
+            if svc.session.is_some() {
+                tokio::spawn(async move { eng.close().await });
+            } else if let Ok(t) = svc.token(&cfg).await
+                && eng.set_user_token(&t).await.is_ok()
+            {
+                self.spawn_refresh();
+                return;
+            }
         }
         {
             let mut i = self.lock();
             i.booted = false; // a new sign-in: load the library again
+            i.boot_again = true; // a boot under way has the old session
             i.retry_at = None;
         }
         self.boot().await;
@@ -1258,19 +1553,30 @@ impl Daemon {
                 return;
             }
         }
+        if !self.serves(api) {
+            return;
+        }
         self.library_changed().await;
         for p in self.lib.items(ipc::LIST_PLAYLISTS).unwrap_or_default() {
+            if p.kind != KIND_PLAYLIST {
+                continue; // a station plays as a whole
+            }
+            if !self.serves(api) {
+                return;
+            }
             match api.tracks(&p).await {
                 (_, Some(Error::Partial)) => continue, // keep the cached full list rather than a cut one
                 (_, Some(Error::Unauthorized)) => {
                     self.auth_check::<()>(Err(Error::Unauthorized)).await.ok();
                     return;
                 }
-                (t, None) => self.lib.set_tracks(&p.key(), t),
+                (t, None) => self.cache_tracks(api, &p.key(), t),
                 _ => {}
             }
         }
-        self.library_changed().await;
+        if self.serves(api) {
+            self.library_changed().await;
+        }
     }
 
     async fn library_changed(&self) {
@@ -1296,7 +1602,10 @@ impl Daemon {
             }
         };
         match eng.state().await {
-            Ok(es) if es.title.is_empty() => r.play(eng).await.is_ok(),
+            Ok(es) if es.title.is_empty() => {
+                self.describe(eng, &r.ids, &r.id, &r.source).await;
+                r.play(eng).await.is_ok()
+            }
             _ => false, // something is loaded: a plain toggle resumes it
         }
     }

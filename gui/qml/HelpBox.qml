@@ -9,7 +9,7 @@ Box {
     // same groups and order; only the window's own keys differ.
     readonly property var groups: [
         ["Browse", [["↑↓  j k", "move"], ["enter  l  →", "open · play"], ["esc  h", "back"], ["←  then ↑↓", "the sections"],
-                    ["tab  1 – 8", "next section · a section"], ["home  G", "top · bottom"], ["/", "filter; tab: all of Apple Music"],
+                    ["tab  1 – 8", "next section · a section"], ["home  G", "top · bottom"], ["/", "filter; tab: all of " + store.service],
                     ["a  A", "the song's album · artist"], ["c", "go to what plays"]]],
         ["Play", [["space", "play · pause"], ["hold space  O", "preview the song"], ["n  p", "next · back (p restarts after 3 s)"],
                   ["R", "radio from the song or artist"], ["z  Z", "add to queue · play next"], ["⇧←  ⇧→", "seek 10 s"],
@@ -32,7 +32,9 @@ Box {
                 width: ui.px(330)
                 Text { text: modelData[0]; color: ui.bright; font { family: ui.sans; pixelSize: ui.px(13); weight: Font.DemiBold } }
                 Repeater {
-                    model: modelData[1]
+                    // What the service lacks has no key.
+                    model: modelData[1].filter(k => !(k[0] === "hold space  O" && store.lacks("preview")) && !(k[0] === "R" && store.lacks("radio")))
+                                       .map(k => k[0] === "*  d" && store.lacks("dislike") ? ["*", "love"] : k)
                     Row {
                         required property var modelData
                         Text { width: ui.px(110); text: modelData[0]; color: ui.here; font { family: ui.sans; pixelSize: ui.px(12); weight: Font.DemiBold } }

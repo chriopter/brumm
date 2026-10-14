@@ -165,6 +165,11 @@ func main() {
 	st := State{Status: StatusReady, Player: Player{Ready: true, Playing: playing, Title: "Instant Crush", Artist: "Daft Punk",
 		Album: "Random Access Memories", Artwork: art(0), Pos: 97, Dur: 337, Index: 4, Length: 13, ID: "i.0.4",
 		Source: "lib:album:a0", Volume: 0.8, Repeat: 2}}
+	// FAKE_SPOTIFY=1: the players show Spotify and hide what it lacks.
+	if os.Getenv("FAKE_SPOTIFY") != "" {
+		st.Service = "Spotify"
+		st.Lacks = []string{"explore", "radio", "preview", "dislike", "favorites", "folders", "videos", "visualizer", "love-items"}
+	}
 	var mu sync.Mutex
 	var opts Options
 	var place json.RawMessage
@@ -330,6 +335,19 @@ func main() {
 					}
 				case CmdRatings:
 					m.Ratings = map[string]int{"i.0.7": 1}
+				case CmdProvider: // the services, as the registry lists them
+					selected := "apple"
+					if os.Getenv("FAKE_SPOTIFY") != "" {
+						selected = "spotify"
+					}
+					if r.Query != "" {
+						selected = r.Query
+					}
+					m.Provider, _ = json.Marshal(map[string]any{"selected": selected, "needsChoice": false, "choices": []map[string]any{
+						{"id": "apple", "name": "Apple Music", "available": true},
+						{"id": "spotify", "name": "Spotify", "available": true, "lacks": st.Lacks},
+						{"id": "tidal", "name": "Tidal", "available": false},
+					}})
 				case CmdPlace: // where a player left off, as the daemon keeps it
 					mu.Lock()
 					if len(r.Place) > 0 {

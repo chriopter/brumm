@@ -1,4 +1,4 @@
-//! brumm is an Apple Music player for Omarchy.
+//! brumm is an Apple Music and Spotify player for Omarchy.
 //!
 //! ```text
 //! brumm          open the player as picked in its options: tui (default) or gui
@@ -6,7 +6,8 @@
 //! brumm --gui    open the player as a window
 //! brumm open     open the player as picked, in a window or a new terminal (the launcher's entry)
 //! brumm daemon   run the background daemon (usually via systemd)
-//! brumm login    sign in to Apple Music in the browser, then open the player
+//! brumm login    sign in to the music service in the browser, then open the player
+//! brumm provider [apple|spotify]  show the music services, or switch to one
 //! brumm update   install the newest release now and offer to restart into it
 //! brumm keys on|off  SUPER+SHIFT+M (and +ALT) open brumm, or Omarchy's music apps
 //! brumm setup D  install from an unpacked release D (used by install.sh)
@@ -72,6 +73,7 @@ fn main() {
         }
         "daemon" => runtime(4).block_on(daemon::run(VERSION)),
         "login" => login(),
+        "provider" => provider(arg(2)),
         "setup" => {
             let from = arg(2).unwrap_or(".");
             update::install(Path::new(from))
@@ -106,7 +108,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: brumm [--tui | --gui | open [tui|gui] | keys on|off | daemon | login | update | setup DIR | version]"
+                "usage: brumm [--tui | --gui | open [tui|gui] | keys on|off | provider [apple|spotify] | daemon | login | update | setup DIR | version]"
             );
             std::process::exit(2);
         }
@@ -118,8 +120,13 @@ fn main() {
 }
 
 /// Signs in, tells a running daemon, and at a terminal goes straight to
-/// the music.
+/// the music. A first sign-in at a terminal asks for the service first.
 fn login() -> Result<()> {
+    let mut cfg = config::Config::load()?;
+    if cfg.needs_provider_choice() && terminal() {
+        cfg.provider = ask_provider()?;
+        cfg.save()?;
+    }
     let rt = runtime(2);
     rt.block_on(login::run(|s| println!("{s}")))?;
     println!("signed in");
@@ -131,6 +138,87 @@ fn login() -> Result<()> {
     });
     if terminal() {
         return tui::run(&rt);
+    }
+    Ok(())
+}
+
+/// Asks at the terminal which music service to use; enter takes the first.
+fn ask_provider() -> Result<String> {
+    let choices: Vec<_> = provider::registry::choices()
+        .into_iter()
+        .filter(|p| p.available)
+        .collect();
+    println!("Which music service do you use?");
+    for (i, p) in choices.iter().enumerate() {
+        println!("  {}  {}", i + 1, p.name);
+    }
+    loop {
+        print!("[1-{}] ", choices.len());
+        std::io::stdout().flush()?;
+        let mut answer = String::new();
+        if std::io::stdin().lock().read_line(&mut answer)? == 0 {
+            return Err(err("no service chosen"));
+        }
+        let answer = answer.trim();
+        let i = if answer.is_empty() {
+            Some(0)
+        } else {
+            answer.parse::<usize>().ok().and_then(|n| n.checked_sub(1))
+        };
+        if let Some(p) = i.and_then(|i| choices.get(i)) {
+            return Ok(p.id.clone());
+        }
+    }
+}
+
+/// Lists the music services, or switches to one: a running daemon switches
+/// at once; otherwise the next start uses it.
+fn provider(id: Option<&str>) -> Result<()> {
+    use provider::registry;
+    let Some(id) = id else {
+        let sel = registry::selection(&config::Config::load()?);
+        for p in sel.choices {
+            println!(
+                "{} {:<8} {}{}",
+                if p.id == sel.selected { "*" } else { " " },
+                p.id,
+                p.name,
+                if p.available { "" } else { " (coming soon)" }
+            );
+        }
+        return Ok(());
+    };
+    registry::validate(id).map_err(|e| match e {
+        error::Error::Unsupported => err(format!("{} is not available yet", registry::name(id))),
+        e => e,
+    })?;
+    let rt = runtime(1);
+    let told = rt.block_on(async {
+        let (c, _) = ipc::Client::dial().await.ok()?;
+        let r = c
+            .request(ipc::Request {
+                cmd: ipc::CMD_PROVIDER.into(),
+                query: id.into(),
+                ..Default::default()
+            })
+            .await;
+        c.close().await;
+        Some(r)
+    });
+    match told {
+        Some(r) => {
+            r?;
+        }
+        None => {
+            let mut cfg = config::Config::load()?;
+            cfg.provider = id.into();
+            cfg.save()?;
+        }
+    }
+    let cfg = config::Config::load()?;
+    println!("brumm plays from {}", cfg.service_name());
+    if cfg.signed_in() == Ok(false) {
+        println!("sign in with: brumm login");
     }
     Ok(())
 }

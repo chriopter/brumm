@@ -26,7 +26,7 @@ Item {
     // The listener moves on once a frame while the visualizer shows.
     FrameAnimation {
         running: fs.moving
-        onTriggered: vizAudio.tick(frameTime, !!store.st.playing)
+        onTriggered: vizAudio.tick(frameTime, !!store.st.playing && !store.lacks("visualizer")) // no audio: it breathes
     }
 
     // Two slots take turns: the new style fades in over the old one.

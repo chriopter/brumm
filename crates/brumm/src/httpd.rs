@@ -12,6 +12,8 @@ pub struct Request {
     pub method: String,
     /// The path, without the query.
     pub path: String,
+    /// What follows the path's "?", undecoded.
+    pub query: String,
     /// By lowercase name.
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
@@ -46,7 +48,8 @@ pub async fn read_request(s: &mut TcpStream, max_body: usize) -> Option<Request>
     let mut lines = head.split("\r\n");
     let mut first = lines.next()?.split(' ');
     let (method, target) = (first.next()?.to_string(), first.next()?);
-    let path = target.split('?').next().unwrap_or("").to_string();
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let (path, query) = (path.to_string(), query.to_string());
     let mut headers = HashMap::new();
     for l in lines {
         if let Some((k, v)) = l.split_once(':') {
@@ -77,6 +80,7 @@ pub async fn read_request(s: &mut TcpStream, max_body: usize) -> Option<Request>
     Some(Request {
         method,
         path,
+        query,
         headers,
         body,
     })
@@ -87,6 +91,7 @@ pub async fn respond(s: &mut TcpStream, status: u16, headers: &[(&str, &str)], b
     let reason = match status {
         200 => "OK",
         204 => "No Content",
+        302 => "Found",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",

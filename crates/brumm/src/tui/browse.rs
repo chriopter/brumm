@@ -180,9 +180,19 @@ impl Model {
 
     /// Toggles a love (LOVE) or a dislike (DISLIKE).
     pub fn rate(&mut self, value: i64) {
+        if value == DISLIKE && self.lacking("dislike", "dislikes") {
+            return;
+        }
         let Some((r, name)) = self.rateable() else {
             return;
         };
+        if r.kind != "song" && self.lacks("love-items") {
+            let msg = format!(
+                "{} loves songs only; press i to add it to your library",
+                self.service()
+            );
+            return self.set_flash(&msg);
+        }
         let value = if self.rating.get(&r.id).copied().unwrap_or(0) == value {
             0
         } else {
@@ -256,6 +266,14 @@ impl Model {
     /// selected song or artist, or from the song playing.
     pub fn play_station(&mut self) {
         let mut req = Request::new(ipc::CMD_STATION);
+        let v = self.cur();
+        let row = v.rows.get(v.sel);
+        let station = row
+            .and_then(|r| r.item.as_ref())
+            .is_some_and(|it| it.kind == KIND_STATION);
+        if !station && self.lacking("radio", "radio") {
+            return; // a station there is plays; none is made
+        }
         let v = self.cur();
         let row = v.rows.get(v.sel);
         if let Some(t) = row.and_then(|r| r.track.as_ref()) {
