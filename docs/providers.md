@@ -4,7 +4,8 @@ Brumm keeps the existing Rust core, Unix socket, Qt frontend, terminal
 frontend, and shared player. Provider implementations are built in and run
 inside the daemon. Apple Music and Tidal use the provider
 contract end to end. Tidal is selectable on this development branch; live
-account and full-track playback validation are still pending.
+live sign-in, browsing and full-track playback state pass. Audible output
+is still unverified.
 
 ## Boundaries in this branch
 
@@ -122,14 +123,39 @@ fictional provider data and does not require personal credentials.
 
 ### Current implementation evidence (2026-10-14)
 
-- 169 Rust core unit tests, 5 shared-library tests and 3 daemon integration tests pass.
-- 12 QML checks and 7 SDK adapter checks pass.
+- 170 Rust core unit tests, 5 shared-library tests and 3 daemon integration tests pass.
+- 12 QML checks and 10 SDK adapter checks pass.
 - Rust formatting, Clippy with warnings denied, Qt build and diff whitespace checks pass.
 - A fictional Tidal desktop fixture renders the approved navigation and unified heart.
-- A live device authorization request returns a valid public linking prompt.
-- Live completed login, current API access, full-track entitlement and audible
-  playback are not yet verified for this implementation. Apple paid playback
-  also remains unverified. These are release checks, not fixture test claims.
+- Live device login completes and survives restarts and Apple → Tidal switching.
+- Live albums, owned/favorited playlists, artists, tracks, search and all three
+  personal mix endpoints return content. Favorite membership reads pass for all
+  four resource kinds. Tidal's API-root-relative cursor links omit `/v2`; the
+  adapter normalizes them while retaining the fixed origin and opaque cursor.
+- Native HOME_STATIC/HOME_EDITORIAL requests require `clientVersion` in addition
+  to device/system/subject. Corrected requests return HTTP 500 for this client;
+  Home uses its personal mix fallback and Explore explains unavailability.
+- The live SDK reports FULL presentation, HIGH quality, AAC at 44.1 kHz, and
+  320.403-second duration. Position advances past 32 seconds without an error.
+  Seeking near the end automatically transitions to the next track. Duplicate
+  queue entries, manual next, pause and resume pass live checks in silent omabox.
+- The media CDN returns HTTP 403 for the loopback browser Origin, while the same
+  signed byte request without Origin succeeds with HTTP 206. The SDK now uses a
+  provider-owned native byte transport for the verified
+  `sp-ad-fa.audio.tidal.com` HTTPS origin. Other hosts retain normal browser
+  networking. The SDK still owns manifests, decoding, DRM and queue events.
+- The transport is account-bound, accepts only same-origin SDK requests, forwards
+  only a validated single byte Range, follows no redirects, sends no cookies or
+  OAuth tokens, and buffers at most 32 MiB per response with four concurrent
+  deliveries. Responses are no-store; closing the engine cancels active requests.
+  No signed media URLs are persisted or sent to frontends. New CDN hosts and
+  larger quality tiers need separate verification before expanding this allowlist.
+- Audible playback remains unverified because omabox has no audio output.
+- Live favorite/playlist mutations were not performed on the user's account;
+  deterministic fixtures cover them. Apple paid playback remains unverified.
+- Live testing exposed and fixed a nested heartbeat payload that had hidden SDK
+  readiness. The adapter now emits the shared flat player/revision document;
+  an SDK test guards both immediate and heartbeat responses.
 
 For a fictional Tidal preview, run `tmp/fakedaemon` with
 `BRUMM_FIXTURE_PROVIDER=tidal` inside omabox, then launch the Qt frontend in the

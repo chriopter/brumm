@@ -184,9 +184,17 @@ impl Client {
             if link.is_empty() {
                 return (result, None);
             }
+            // Tidal emits API-root-relative links without the deployed /v2 prefix.
+            // Keep the fixed API origin/version while following its opaque cursor.
+            let link =
+                if link.starts_with('/') && !link.starts_with("//") && !link.starts_with("/v2/") {
+                    format!("/v2{link}")
+                } else {
+                    link.to_owned()
+                };
             next = match self
                 .url(&next)
-                .and_then(|url| url.join(link).map_err(|_| err("invalid Tidal pagination")))
+                .and_then(|url| url.join(&link).map_err(|_| err("invalid Tidal pagination")))
             {
                 Ok(url) => url.to_string(),
                 Err(_) => return (result, Some(Error::Partial)),
@@ -783,7 +791,7 @@ mod tests {
         let (client, task) = fixture(vec![
             (
                 200,
-                json!({"data":[song.clone(),song.clone()],"links":{"next":"?page[cursor]=second"}}),
+                json!({"data":[song.clone(),song.clone()],"links":{"next":"/playlists/p/relationships/items?include=items&page[cursor]=second"}}),
             ),
             (500, json!({"errors":[]})),
         ])

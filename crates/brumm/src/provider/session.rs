@@ -117,7 +117,23 @@ pub struct PlaybackAsset {
 
 /// Private SDK operations. Providers implement a finite route set and capture
 /// their own account; these responses never go to the frontend socket.
+pub struct PlaybackMedia {
+    pub status: u16,
+    pub content_type: String,
+    pub content_range: Option<String>,
+    pub body: Vec<u8>,
+}
+
 pub trait PlaybackBridge: Send + Sync {
+    /// Optional native delivery of SDK media. Implementations validate a finite
+    /// service allowlist and never forward browser credentials or arbitrary URLs.
+    fn media<'a>(
+        &'a self,
+        _target: &'a str,
+        _range: Option<&'a str>,
+    ) -> Reply<'a, Result<PlaybackMedia>> {
+        Box::pin(async { Err(crate::error::Error::Unsupported) })
+    }
     fn request<'a>(
         &'a self,
         route: &'a str,

@@ -202,6 +202,43 @@ async fn serve_page(
                 return;
             }
             if let Some(bridge) = resources.bridge {
+                if r.method == "GET"
+                    && let Some(target) = route.strip_prefix("media/")
+                {
+                    let same_origin = r
+                        .headers
+                        .get("origin")
+                        .is_none_or(|origin| origin == &format!("http://{host}"))
+                        && r.headers.get("sec-fetch-site").map(String::as_str)
+                            == Some("same-origin");
+                    if !same_origin {
+                        httpd::respond(&mut s, 403, &headers[1..], b"forbidden").await;
+                        return;
+                    }
+                    match bridge
+                        .media(target, r.headers.get("range").map(String::as_str))
+                        .await
+                    {
+                        Ok(media) => {
+                            let mut response_headers = vec![
+                                ("Content-Type", media.content_type.as_str()),
+                                headers[1],
+                                headers[2],
+                                ("Accept-Ranges", "bytes"),
+                            ];
+                            if let Some(range) = &media.content_range {
+                                response_headers.push(("Content-Range", range));
+                            }
+                            httpd::respond(&mut s, media.status, &response_headers, &media.body)
+                                .await;
+                        }
+                        Err(_) => {
+                            httpd::respond(&mut s, 502, &headers[1..], b"media delivery failed")
+                                .await
+                        }
+                    }
+                    return;
+                }
                 if r.method != "POST"
                     || r.headers.get("origin") != Some(&format!("http://{host}"))
                     || r.headers
@@ -783,6 +820,22 @@ mod tests {
         dropped: Arc<tokio::sync::Notify>,
     }
     impl crate::provider::session::PlaybackBridge for BridgeFixture {
+        fn media<'a>(
+            &'a self,
+            target: &'a str,
+            range: Option<&'a str>,
+        ) -> crate::provider::Reply<'a, Result<crate::provider::session::PlaybackMedia>> {
+            Box::pin(async move {
+                assert_eq!(target, "fixture");
+                assert_eq!(range, Some("bytes=0-1"));
+                Ok(crate::provider::session::PlaybackMedia {
+                    status: 206,
+                    content_type: "audio/mp4".into(),
+                    content_range: Some("bytes 0-1/100".into()),
+                    body: b"ab".to_vec(),
+                })
+            })
+        }
         fn request<'a>(
             &'a self,
             route: &'a str,
@@ -830,6 +883,22 @@ mod tests {
         let post = |origin: String, route: String| {
             let host = host.clone();
             async move {
+                for (site, origin, expected) in [
+                    ("cross-site", "", 403),
+                    ("same-origin", "Origin: https://evil.example\r\n", 403),
+                    ("same-origin", "", 206),
+                ] {
+                    let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
+                    stream.write_all(format!("GET /private/media/fixture HTTP/1.1\r\nHost: {host}\r\nSec-Fetch-Site: {site}\r\n{origin}Range: bytes=0-1\r\n\r\n").as_bytes()).await.unwrap();
+                    let mut response = String::new();
+                    stream.read_to_string(&mut response).await.unwrap();
+                    assert!(response.starts_with(&format!("HTTP/1.1 {expected}")));
+                    if expected == 206 {
+                        assert!(response.contains("Content-Range: bytes 0-1/100"));
+                        assert!(response.contains("no-store"));
+                        assert!(response.ends_with("ab"));
+                    }
+                }
                 let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
                 stream.write_all(format!("POST /private/{route} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}").as_bytes()).await.unwrap();
                 let mut response = String::new();

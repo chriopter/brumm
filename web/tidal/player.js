@@ -6,8 +6,14 @@ const B = window.brumm = { ready:false, err:'', needsAuth:false, source:'', rev:
 let waiter, flush;
 function touch() { B.rev++; if (waiter && !flush) flush = setTimeout(() => {flush=0; waiter?.();},30); }
 function fail(error) {
+  // A failed SDK load can pause an outstanding play promise. Keep its original cause.
+  if (error?.name === 'AbortError' && B.err) return;
   const messages={PEContentNotAvailableForSubscription:'This track is unavailable for your Tidal subscription.',PEContentNotAvailableInLocation:'This track is unavailable in your region.',PEMonthlyStreamQuotaExceeded:'Your Tidal streaming limit has been reached.',PENetwork:'Tidal could not connect. Check your network and retry.',PENotAllowed:'Tidal did not allow playback for this account or application.',PERetryable:'Tidal playback was interrupted. Try again.'};
   B.err=messages[error?.errorId] || error?.message || 'Tidal playback failed. Try again.';
+  if (error?.errorId && /^[A-Za-z0-9_]+$/.test(error.errorId)) {
+    const code = /^[A-Za-z0-9_]+$/.test(error.errorCode||'') ? '/'+error.errorCode : '';
+    B.err += ' ('+error.errorId+code+')';
+  }
   if (/401|unauthorized|authorization/i.test(B.err)) B.needsAuth=true;
   touch();
 }
@@ -120,7 +126,7 @@ B.state = () => {
   const track=queue[index] || {}, ctx=Player.getPlaybackContext(), state=Player.getPlaybackState();
   const active=Player.getMediaProduct();
   const current=active?.referenceId===generation+':'+index;
-  return JSON.stringify({ready:B.ready,err:B.err,needsAuth:B.needsAuth,playing:current && (state==='PLAYING'||state==='STALLED'),
+  return JSON.stringify({rev:B.rev,ready:B.ready,err:B.err,needsAuth:B.needsAuth,playing:current && (state==='PLAYING'||state==='STALLED'),
     title:track.title||'',artist:track.artist||'',album:track.album||'',artwork:track.artwork||'',id:track.id||'',source:B.source,
     pos:current ? Player.getAssetPosition()||0:0,dur:current ? ctx?.actualDuration||track.duration||0:track.duration||0,index,length:queue.length,
     volume,shuffle,repeat,preview:preview ? {title:track.title,artist:track.artist,artwork:track.artwork}:null,
@@ -128,8 +134,8 @@ B.state = () => {
     bitDepth:current ? ctx?.bitDepth||0:0,presentation:current ? ctx?.actualAssetPresentation||'':''});
 };
 B.wait = (rev,ms) => {
-  if (B.rev!==rev) return Promise.resolve(JSON.stringify({state:JSON.parse(B.state()),rev:B.rev}));
-  return new Promise(resolve=>{const finish=()=>{clearTimeout(timer);if(waiter===finish)waiter=null;resolve(JSON.stringify({state:JSON.parse(B.state()),rev:B.rev}));};const timer=setTimeout(finish,ms);waiter=finish;});
+  if (B.rev!==rev) return Promise.resolve(B.state());
+  return new Promise(resolve=>{const finish=()=>{clearTimeout(timer);if(waiter===finish)waiter=null;resolve(B.state());};const timer=setTimeout(finish,ms);waiter=finish;});
 };
 const visualizers = new WeakMap();
 function analyzer() {

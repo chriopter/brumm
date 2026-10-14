@@ -6,6 +6,8 @@ use crate::{
 };
 use serde_json::Value;
 
+const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 const MIXES: [(&str, &str, &str); 3] = [
     ("daily", "userDailyMixes", "My Mix"),
     ("discovery", "userDiscoveryMixes", "Daily Discovery"),
@@ -130,7 +132,7 @@ impl Client {
 
     async fn module(&self, id: &str, title: &str) -> Result<Shelf> {
         let include = "items,items.albums:artists,items.albums:coverArt,items.artists:profileArt,items.playlists:coverArt,items.tracks:artists,items.tracks:albums,items.tracks:albums.coverArt";
-        let value = self.get(&format!("dynamicModules/{}/relationships/items?include={include}&countryCode={}&locale=en-US&deviceType=DESKTOP&systemType=DESKTOP&refreshSeed={}", Self::id(id), self.country, self.refresh_seed)).await?;
+        let value = self.get(&format!("dynamicModules/{}/relationships/items?include={include}&countryCode={}&locale=en-US&deviceType=DESKTOP&systemType=DESKTOP&clientVersion={CLIENT_VERSION}&refreshSeed={}", Self::id(id), self.country, self.refresh_seed)).await?;
         Ok(shelf(
             &value,
             &self.account,
@@ -140,7 +142,7 @@ impl Client {
     }
 
     async fn native_page(&self, page_type: &str, title: &str) -> Result<ExplorePage> {
-        let value = self.get(&format!("dynamicPages?filter[pageType]={page_type}&filter[subject]=users:{}&include=modules&countryCode={}&locale=en-US&deviceType=DESKTOP&systemType=DESKTOP&refreshSeed={}", Self::id(&self.account), self.country, self.refresh_seed)).await?;
+        let value = self.get(&format!("dynamicPages?filter[pageType]={page_type}&filter[subject]=users:{}&include=modules&countryCode={}&locale=en-US&deviceType=DESKTOP&systemType=DESKTOP&clientVersion={CLIENT_VERSION}&refreshSeed={}", Self::id(&self.account), self.country, self.refresh_seed)).await?;
         let doc = Document::new(&value);
         let mut page = ExplorePage {
             title: title.into(),
@@ -199,7 +201,7 @@ impl Client {
                 }
                 if let Some(id) = route.strip_prefix("tidal:module:") {
                     let id = url::form_urlencoded::parse(format!("id={id}").as_bytes()).next().map(|(_,v)| v.into_owned()).ok_or(Error::Unsupported)?;
-                    return self.full_collection(&format!("dynamicModules/{}/relationships/items?include=items,items.albums:artists,items.albums:coverArt,items.artists:profileArt,items.playlists:coverArt,items.tracks:artists,items.tracks:albums,items.tracks:albums.coverArt&refreshSeed={}", Self::id(&id), self.refresh_seed), "").await;
+                    return self.full_collection(&format!("dynamicModules/{}/relationships/items?include=items,items.albums:artists,items.albums:coverArt,items.artists:profileArt,items.playlists:coverArt,items.tracks:artists,items.tracks:albums,items.tracks:albums.coverArt&deviceType=DESKTOP&systemType=DESKTOP&clientVersion={CLIENT_VERSION}&refreshSeed={}", Self::id(&id), self.refresh_seed), "").await;
                 }
                 Err(Error::Unsupported)
             }

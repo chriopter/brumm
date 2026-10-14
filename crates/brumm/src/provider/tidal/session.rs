@@ -105,14 +105,22 @@ impl Definition for Tidal {
                 args: vec![],
             }),
             resources: PlaybackResources {
-                assets: vec![PlaybackAsset {
-                    name: "sdk.js",
-                    content_type: "text/javascript; charset=utf-8",
-                    body: include_bytes!("player.js"),
-                }],
+                assets: vec![
+                    PlaybackAsset {
+                        name: "transport.js",
+                        content_type: "text/javascript; charset=utf-8",
+                        body: include_bytes!("transport.js"),
+                    },
+                    PlaybackAsset {
+                        name: "sdk.js",
+                        content_type: "text/javascript; charset=utf-8",
+                        body: include_bytes!("player.js"),
+                    },
+                ],
                 bridge: Some(Arc::new(Bridge {
                     client: Client::new(&cfg.tidal)?,
                     account: cfg.tidal.user_id.clone(),
+                    media_limit: Arc::new(tokio::sync::Semaphore::new(4)),
                 })),
             },
         })
@@ -125,8 +133,101 @@ impl Definition for Tidal {
 struct Bridge {
     client: Client,
     account: String,
+    media_limit: Arc<tokio::sync::Semaphore>,
+}
+fn media_url(target: &str) -> Result<url::Url> {
+    use base64::Engine;
+    if target.len() > 16384 {
+        return Err(Error::Unsupported);
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(target)
+        .map_err(|_| Error::Unsupported)?;
+    let raw = std::str::from_utf8(&bytes).map_err(|_| Error::Unsupported)?;
+    let url = url::Url::parse(raw).map_err(|_| Error::Unsupported)?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("sp-ad-fa.audio.tidal.com")
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::Unsupported);
+    }
+    Ok(url)
 }
 impl PlaybackBridge for Bridge {
+    fn media<'a>(
+        &'a self,
+        target: &'a str,
+        range: Option<&'a str>,
+    ) -> Reply<'a, Result<PlaybackMedia>> {
+        Box::pin(async move {
+            let url = media_url(target)?;
+            let _permit = self
+                .media_limit
+                .acquire()
+                .await
+                .map_err(|_| Error::Unsupported)?;
+            let owns_session = || -> Result<()> {
+                let cfg = Config::load()?;
+                if cfg.effective_provider() != "tidal" || cfg.tidal.user_id != self.account {
+                    return Err(Error::Unauthorized);
+                }
+                Ok(())
+            };
+            owns_session()?;
+            let mut request = self.client.http.get(url);
+            if let Some(range) = range {
+                if !range.starts_with("bytes=")
+                    || range.len() > 80
+                    || !range[6..].chars().all(|c| c.is_ascii_digit() || c == '-')
+                {
+                    return Err(Error::Unsupported);
+                }
+                request = request.header("Range", range);
+            }
+            // The SDK owns the signed URL, manifest, decoding, DRM and queue.
+            // This native transport forwards no Origin, cookie or OAuth token.
+            let mut response = request.send().await?;
+            if !matches!(response.status().as_u16(), 200 | 206) {
+                return Err(err("Tidal media delivery failed"));
+            }
+            let status = response.status().as_u16();
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_owned();
+            let content_range = response
+                .headers()
+                .get("content-range")
+                .and_then(|h| h.to_str().ok())
+                .map(str::to_owned);
+            const MAX_MEDIA: usize = 32 << 20;
+            if response
+                .content_length()
+                .is_some_and(|n| n > MAX_MEDIA as u64)
+            {
+                return Err(err("Tidal media response exceeded its limit"));
+            }
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                if body.len() + chunk.len() > MAX_MEDIA {
+                    return Err(err("Tidal media response exceeded its limit"));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            owns_session()?;
+            Ok(PlaybackMedia {
+                status,
+                content_type,
+                content_range,
+                body,
+            })
+        })
+    }
     fn request<'a>(&'a self, route: &'a str, body: Value) -> Reply<'a, Result<Value>> {
         Box::pin(async move {
             match route {
@@ -160,6 +261,29 @@ impl PlaybackBridge for Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_media_transport_is_restricted_to_the_verified_https_cdn() {
+        use base64::Engine;
+        let encode = |raw: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+        assert!(
+            media_url(&encode(
+                "https://sp-ad-fa.audio.tidal.com/media.m4a?token=fictional"
+            ))
+            .is_ok()
+        );
+        for raw in [
+            "http://sp-ad-fa.audio.tidal.com/a",
+            "https://sp-ad-fa.audio.tidal.com:8443/a",
+            "https://sp-ad-fa.audio.tidal.com.evil.example/a",
+            "https://127.0.0.1/a",
+            "https://example.com/a",
+            "https://user@sp-ad-fa.audio.tidal.com/a",
+            "https://sp-ad-fa.audio.tidal.com/a#fragment",
+        ] {
+            assert!(media_url(&encode(raw)).is_err(), "accepted {raw}");
+        }
+        assert!(media_url("not base64!").is_err());
+    }
     #[test]
     fn definition_owns_tidal_navigation_and_keeps_credentials_private() {
         let mut cfg = Config {

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-const source = (await readFile(new URL('./player.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
+const transport = await readFile(new URL('./transport.js',import.meta.url),'utf8');
+const source = transport + (await readFile(new URL('./player.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
 const tick = () => new Promise(resolve=>setImmediate(resolve));
 async function fixture() {
   const events=new EventTarget();let active=null,position=0,state='IDLE',next;
@@ -17,9 +18,9 @@ async function fixture() {
     const body=JSON.parse(request.body);
     return {ok:true,async json(){return url.endsWith('/credentials') ? {token:'fixture',clientId:'fixture',userId:'fixture'} : body.ids.map(id=>({id,title:'Track '+id,duration:240}));}};
   }
-  new Function('Player','Events','window','location','fetch','navigator',source)(Player,{async init(){}},window,{pathname:'/private'},fetch,{userAgent:'Chrome/1.0'});
+  new Function('Player','Events','window','location','fetch','navigator',source+';window.mediaUrl=mediaUrl;')(Player,{async init(){}},window,{pathname:'/private',href:'http://127.0.0.1/private'},fetch,{userAgent:'Chrome/1.0'});
   await tick();
-  return {B:window.brumm,Player,previewOnly(){presentation="PREVIEW";},rejectLossless(){rejectLossless=true;},get quality(){return quality;},get loadedQuality(){return loadedQuality;},get next(){return next;},hold(){let release;gate=new Promise(resolve=>release=resolve);return release;}};
+  return {B:window.brumm,mediaUrl:window.mediaUrl,Player,previewOnly(){presentation="PREVIEW";},rejectLossless(){rejectLossless=true;},get quality(){return quality;},get loadedQuality(){return loadedQuality;},get next(){return next;},hold(){let release;gate=new Promise(resolve=>release=resolve);return release;}};
 }
 test('duplicate tracks retain queue positions and actual audio quality',async()=>{
   const f=await fixture();await f.B.playIds(['1','2','1'],'1','album');
@@ -60,4 +61,34 @@ test('preview-only entitlement is reported and cannot masquerade as full playbac
   const state=JSON.parse(f.B.state());assert.equal(state.presentation,'PREVIEW');
   assert.equal(state.playing,false);assert.match(state.err,/only a preview/);
   await f.B.toggle();assert.equal(JSON.parse(f.B.state()).playing,false);
+});
+test('daemon heartbeat returns flat player fields and revision',async()=>{
+  const f=await fixture();
+  const initial=JSON.parse(await f.B.wait(-1,20));
+  assert.equal(initial.ready,true);assert.equal(typeof initial.rev,'number');assert.equal(initial.state,undefined);
+  await f.B.playIds(['1'],'1','album');
+  const next=JSON.parse(await f.B.wait(initial.rev,20));
+  assert.equal(next.id,'1');assert.equal(next.playing,true);assert.equal(next.presentation,'FULL');assert.ok(next.rev>initial.rev);
+  const idle=JSON.parse(await f.B.wait(next.rev,5));assert.equal(idle.id,'1');assert.ok(idle.rev>=next.rev);
+});
+
+test('native transport rewrites only the verified SDK media CDN',async()=>{
+  const f=await fixture();
+  const original='https://sp-ad-fa.audio.tidal.com/media.m4a?token=fictional';
+  const mapped=f.mediaUrl(original);assert.ok(mapped.startsWith('/private/media/'));
+  assert.equal(Buffer.from(mapped.split('/media/')[1],'base64url').toString(),original);
+  for(const raw of ['https://example.com/a','http://sp-ad-fa.audio.tidal.com/a','https://sp-ad-fa.audio.tidal.com.evil.example/a','https://sp-ad-fa.audio.tidal.com:8443/a','https://user@sp-ad-fa.audio.tidal.com/a','/private/credentials'])assert.equal(f.mediaUrl(raw),raw);
+});
+
+test('native transport hooks fetch and XHR before SDK evaluation',async()=>{
+  const requests=[];
+  class XHR {open(...args){requests.push(args);}}
+  const window={fetch:async(...args)=>{requests.push(args);return {ok:true};}};
+  const location={href:'http://127.0.0.1/private',pathname:'/private'};
+  new Function('window','location','XMLHttpRequest',transport)(window,location,XHR);
+  const media='https://sp-ad-fa.audio.tidal.com/media?token=fictional';
+  new XHR().open('GET',media,true);assert.ok(requests.pop()[1].startsWith('/private/media/'));
+  new XHR().open('POST',media,true);assert.equal(requests.pop()[1],media);
+  await window.fetch(media);assert.ok(requests.pop()[0].startsWith('/private/media/'));
+  const external='https://example.com/test';await window.fetch(external);assert.equal(requests.pop()[0],external);
 });

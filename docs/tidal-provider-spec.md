@@ -3,8 +3,10 @@
 Status: implementation checkpoint, 2026-10-14. Branch `tidal-provider` starts
 from Apple snapshot `eb6a79b`. The shared lifecycle and Tidal adapter are
 implemented, with Tidal enabled for development. See `providers.md` for current
-validation evidence. Completed live login, current endpoint access and full-track
-playback remain pending; development availability is not release readiness.
+validation evidence. Live login, collection/search reads, personal mixes and saved-session switching
+now pass. Full-track SDK state, sustained position, seek and queue transitions
+also pass after adding a scoped native media transport. Audible output remains
+unverified. See the evidence and release limitations in `providers.md`.
 
 ## Decisions
 
@@ -199,7 +201,12 @@ handler for SDK credentials and metadata if the adapter requires that bridge.
 The handler captures a specific session and supports finite operations; it must
 not forward arbitrary URLs or select whichever provider is active on each call.
 Keep loopback Host/path validation, bound request sizes, no-store responses and
-cross-origin rejection. Private tokens never travel over the frontend socket.
+cross-origin rejection. Live CDN origin restrictions also require a native byte
+transport underneath the SDK. Load its hook before SDK evaluation; permit only
+the verified HTTPS media CDN and same-origin SDK callers. Validate byte ranges,
+disable redirects, forward no browser credentials/OAuth tokens, bound response
+sizes/concurrency, and cancel delivery when the owning engine closes. This is a
+transport for the existing SDK, which retains manifests, decoding and DRM. Private tokens never travel over the frontend socket.
 
 Verify actual full-track presentation and duration, not just a successful load or
 PLAYING event. A preview-only response must be identified as a preview and must
