@@ -12,7 +12,6 @@
 //! brumm setup D  install from an unpacked release D (used by install.sh)
 //! ```
 
-mod apple;
 mod art;
 mod chrome;
 mod config;
@@ -25,7 +24,9 @@ mod ipc;
 mod launch;
 mod login;
 mod mpris;
+mod music;
 mod proc;
+mod provider;
 mod tui;
 mod update;
 

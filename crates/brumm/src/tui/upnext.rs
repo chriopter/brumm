@@ -11,9 +11,9 @@ use std::collections::HashSet;
 use super::model::{Model, Msg};
 use super::text::*;
 use super::view::{Hit, IC_ALBUM, StageLine, clock};
-use crate::apple::Track;
 use crate::art::Size;
 use crate::ipc::{self, Request};
+use crate::music::Track;
 
 /// Covers in the row at most.
 pub const NEXT_MAX: usize = 5;

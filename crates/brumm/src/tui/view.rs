@@ -9,9 +9,9 @@ use super::geometry::{FootHit, Geometry, Rect};
 use super::model::{Model, NUM_SECTIONS, SEC_QUEUE, SEC_SEARCH, SECTION_NAMES};
 use super::text::*;
 use super::viz;
-use crate::apple::{KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION, KIND_TERM};
 use crate::art::Size;
 use crate::ipc;
+use crate::music::{KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_STATION, KIND_TERM};
 
 // Nerd Font glyphs (Material Design), one cell each.
 pub const IC_PREV: &str = "󰒮";
@@ -145,7 +145,9 @@ impl Model {
         for (y, l) in lines.iter().enumerate() {
             put(buf, 0, y as i64, l);
         }
-        let boxed = if self.feature_form.is_some() {
+        let boxed = if self.state.status == crate::ipc::STATUS_CHOOSE_PROVIDER {
+            Some(self.provider_box())
+        } else if self.feature_form.is_some() {
             Some(self.feature_box())
         } else if self.fb.is_some() {
             Some(self.feedback_box())

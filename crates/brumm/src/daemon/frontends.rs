@@ -7,9 +7,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Map, Value};
 
 use super::Daemon;
-use crate::apple;
 use crate::config::Options;
-use crate::error::{Result, err};
+use crate::error::Result;
 use crate::ipc::Message;
 use crate::{login, update};
 
@@ -18,6 +17,9 @@ static OPTIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Where a player last was; it lives only as long as the daemon.
 static PLACE: Mutex<Option<Value>> = Mutex::new(None);
+
+/// One provider selection at a time.
+static PROVIDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// One sign-in page at a time.
 static LOGIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -36,6 +38,24 @@ pub(super) fn place(set: Option<&Value>, reply: &mut Message) {
 }
 
 impl Daemon {
+    /// Persist only a provider whose adapter is actually available.
+    pub(super) async fn select_provider(
+        self: &Arc<Self>,
+        id: &str,
+        reply: &mut Message,
+    ) -> Result<()> {
+        let _one = PROVIDER.lock().await;
+        let mut cfg = crate::config::Config::load()?;
+        if !id.is_empty() {
+            crate::provider::registry::validate(id)?;
+            cfg.provider = id.into();
+            cfg.save()?;
+            self.spawn_boot();
+        }
+        reply.provider = Some(crate::provider::registry::selection(&cfg));
+        Ok(())
+    }
+
     /// The saved options, after changing those named in set. A change is
     /// announced to every subscribed player.
     pub(super) async fn options(
@@ -97,15 +117,10 @@ impl Daemon {
         });
     }
 
-    /// What a music.apple.com link names; a song's link names its album,
-    /// with the song picked out.
+    /// Asks the active provider what a share link names.
     pub(super) async fn resolve(&self, link: &str, reply: &mut Message) -> Result<()> {
-        let (mut it, song) =
-            apple::parse_link(link).ok_or_else(|| err("not a music.apple.com link"))?;
-        if it.id.is_empty() {
-            let api = self.client()?;
-            it = self.auth_check(api.album_of(&song).await).await?;
-        }
+        let api = self.client()?;
+        let (it, song) = self.auth_check(api.resolve(link).await).await?;
         reply.items = vec![it];
         if !song.is_empty() {
             reply.ids = vec![song];

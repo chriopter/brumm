@@ -7,8 +7,8 @@ use super::browse::{addable, songs_of};
 use super::model::{Key, Model, Msg, Row};
 use super::text::*;
 use super::view::{IC_PLAYLIST, MARGIN, SPINNER, box_lines, scroll};
-use crate::apple::{Item, Track};
 use crate::ipc::{self, Request};
+use crate::music::{Item, Track};
 
 /// Rows the list of playlists shows at once.
 const PICKER_ROWS: usize = 10;

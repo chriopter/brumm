@@ -218,3 +218,38 @@ fn daemon_answers_without_credentials_and_quits() {
     }
     assert!(!sock.exists(), "the socket was left behind");
 }
+
+#[test]
+fn first_run_provider_choice_is_saved_and_unavailable_services_are_rejected() {
+    let mut e = env("provider-choice");
+    e.daemon = Some(
+        brumm(&e.root)
+            .arg("daemon")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let sock = e.root.join("run/brumm.sock");
+    wait_for(&sock);
+    let mut c = Conn::open(&sock);
+    let before = c.ask(json!({"cmd":"provider"}));
+    assert_eq!(before["provider"]["needsChoice"], true);
+    assert_eq!(before["provider"]["selected"], "");
+    assert_eq!(before["provider"]["choices"][0]["id"], "apple");
+    assert_eq!(before["provider"]["choices"][1]["available"], false);
+    let bad = c.ask(json!({"cmd":"provider","query":"tidal"}));
+    assert!(bad["error"].as_str().unwrap().contains("not supported"));
+    assert!(!e.root.join("config/brumm/config.json").exists());
+    let chosen = c.ask(json!({"cmd":"provider","query":"apple"}));
+    assert_eq!(chosen["provider"]["selected"], "apple");
+    assert_eq!(chosen["provider"]["needsChoice"], false);
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(e.root.join("config/brumm/config.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["provider"], "apple");
+    let after = c.ask(json!({"cmd":"provider"}));
+    assert_eq!(after["provider"]["needsChoice"], false);
+    c.ask(json!({"cmd":"quit"}));
+    e.daemon.as_mut().unwrap().wait().unwrap();
+}

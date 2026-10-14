@@ -23,10 +23,10 @@ use super::text::L;
 use super::update::UpdatePopup;
 use super::upnext::{NextKey, NextList, NextSong, NextStrip, NextUp};
 use super::viz::{self, Visualizer};
-use crate::apple::{self, Item, KIND_STATION, KIND_TERM, KIND_VIDEO, Ref, Shelf, Track};
 use crate::art::Size;
 use crate::ipc::{self, Client, Message, Request, State};
 use crate::launch;
+use crate::music::{self, Item, KIND_STATION, KIND_TERM, KIND_VIDEO, Ref, Shelf, Track};
 
 /// How many spectrum bands the player asks the daemon for, and at what
 /// rate: the small meters need less than the fullscreen visualizer.
@@ -126,7 +126,7 @@ impl Row {
 #[derive(Clone, Debug, Default)]
 pub struct ExploreLoad {
     pub id: u64,
-    pub page: apple::ExplorePage,
+    pub page: music::ExplorePage,
     pub groups: [Vec<Shelf>; 3],
 }
 
@@ -296,6 +296,7 @@ pub enum Msg {
         err: Option<String>,
     },
     Feedback(Result<String, String>),
+    ProviderChoices(Result<crate::provider::registry::Selection, String>),
     FeatureSaved,
     ExploreGroup {
         view: u64,
@@ -487,6 +488,9 @@ pub struct Model {
     pub has_kitty: bool,
 
     /// The sign-in page opened on its own once.
+    pub provider_choices: Vec<crate::provider::registry::ProviderInfo>,
+    pub provider_index: usize,
+    pub provider_asked: bool,
     pub login_tried: bool,
 
     // A spinning mouse wheel.
@@ -664,6 +668,9 @@ impl Model {
             kitty_next: 0,
             kitty_clock: 0,
             has_kitty: crate::art::kitty_supported(),
+            provider_choices: Vec::new(),
+            provider_index: 0,
+            provider_asked: false,
             login_tried: false,
             wheel_at: None,
             wheel_drawn: None,
@@ -693,7 +700,7 @@ impl Model {
         let home = m.view("Home", "home:", None);
         m.stacks[SEC_HOME] = vec![home];
         let explore = Item {
-            kind: apple::KIND_SHELF.into(),
+            kind: music::KIND_SHELF.into(),
             id: "discover".into(),
             name: "Explore".into(),
             route: "app:discover".into(),
@@ -703,7 +710,7 @@ impl Model {
         let explore = m.view("Explore", "explore:", Some(explore));
         m.stacks[SEC_EXPLORE] = vec![explore];
         let radio = Item {
-            kind: apple::KIND_SHELF.into(),
+            kind: music::KIND_SHELF.into(),
             id: "radio".into(),
             name: "Radio".into(),
             catalog: true,
@@ -1188,6 +1195,20 @@ impl Model {
 
     fn update_inner(&mut self, msg: Msg) {
         match msg {
+            Msg::ProviderChoices(reply) => match reply {
+                Ok(info) => {
+                    self.provider_choices = info.choices;
+                    self.provider_index = self
+                        .provider_choices
+                        .iter()
+                        .position(|p| p.available)
+                        .unwrap_or(0);
+                }
+                Err(e) => {
+                    self.provider_asked = false;
+                    self.set_flash(&e);
+                }
+            },
             Msg::Focus(true) => {
                 self.blurred = false;
                 self.subscribe();
@@ -1346,7 +1367,7 @@ impl Model {
                     self.typed();
                     return;
                 }
-                // A pasted music.apple.com link opens right away.
+                // A pasted provider link opens right away.
                 self.query = t;
                 self.run_search(true);
             }
@@ -1601,29 +1622,18 @@ impl Model {
                     },
                     |r| match r {
                         Err(e) => Some(Msg::Err(e)),
-                        Ok(_) => Some(Msg::Flash(
-                            "Favorite request accepted by Apple Music".into(),
-                        )),
+                        Ok(_) => Some(Msg::Flash("Favorite request accepted".into())),
                     },
                 );
                 return;
             }
             if it.route.starts_with("action:") {
-                let mut parent = String::new();
-                if let Some(vi) = &self.cur().item {
-                    if vi.route == "app:folders" {
-                        parent = "p.playlistsroot".into();
-                    } else if let Some((_, tail)) = vi.route.split_once("/playlist-folders/") {
-                        parent = tail
-                            .split('/')
-                            .next()
-                            .unwrap_or("")
-                            .split('?')
-                            .next()
-                            .unwrap_or("")
-                            .to_string();
-                    }
-                }
+                let parent = self
+                    .cur()
+                    .item
+                    .as_ref()
+                    .map(|it| it.route.clone())
+                    .unwrap_or_default();
                 self.feature_form = Some(FeatureForm {
                     item: it,
                     input: String::new(),
@@ -1764,7 +1774,7 @@ impl Model {
         });
     }
 
-    /// Puts the song's music.apple.com link on the clipboard.
+    /// Puts the song's shareable link on the clipboard.
     pub fn copy_link(&mut self) {
         let Some(id) = self.selected_track() else {
             return;
@@ -2066,6 +2076,11 @@ impl Model {
     }
 
     pub fn key_press(&mut self, msg: Key) {
+        if self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
+            self.provider_key(&msg.name);
+            return;
+        }
+
         if self.feature_form.is_some() {
             return self.feature_key(&msg);
         }
@@ -2203,8 +2218,8 @@ impl Model {
             "a" => self.lookup(ipc::CMD_ALBUM), // the selected song's, else the playing one's
             "A" => self.lookup(ipc::CMD_ARTIST),
             "z" | "Z" => self.enqueue(k == "Z"),
-            "*" => self.rate(apple::LOVE),
-            "d" => self.rate(apple::DISLIKE),
+            "*" => self.rate(music::LOVE),
+            "d" => self.rate(music::DISLIKE),
             "R" => self.play_station(),
             "P" => self.open_picker(),
             "y" => self.copy_link(),
@@ -2326,33 +2341,33 @@ impl Model {
         self.after(Duration::from_millis(350), Msg::Typed(self.typed_seq));
     }
 
-    /// Searches for the query — or opens it, if it is a music.apple.com
-    /// link. final is true for enter or a paste.
+    /// Searches for words or asks the provider to resolve a share link.
     pub fn run_search(&mut self, final_: bool) {
         let q = self.query.trim().to_string();
         self.section = SEC_SEARCH;
-        if let Some((it, song)) = apple::parse_link(&q) {
+        if url::Url::parse(&q)
+            .is_ok_and(|u| matches!(u.scheme(), "https" | "http") && u.host_str().is_some())
+        {
             if !final_ {
                 return;
             }
             self.searching = false;
             self.stacks[SEC_SEARCH].truncate(1);
-            if it.id.is_empty() {
-                // a song link: open its album
-                self.ask(
-                    Request {
-                        cmd: ipc::CMD_ALBUM.into(),
-                        start: song.clone(),
-                        ..Default::default()
-                    },
-                    move |r| match r {
-                        Ok(m) if !m.items.is_empty() => Some(Msg::Open(m.items[0].clone(), song)),
-                        _ => Some(Msg::Err("could not open that link".into())),
-                    },
-                );
-                return;
-            }
-            self.after(Duration::ZERO, Msg::Open(it, song));
+            self.ask(
+                Request {
+                    cmd: ipc::CMD_RESOLVE.into(),
+                    query: q,
+                    ..Default::default()
+                },
+                move |reply| match reply {
+                    Ok(m) if !m.items.is_empty() => Some(Msg::Open(
+                        m.items[0].clone(),
+                        m.ids.first().cloned().unwrap_or_default(),
+                    )),
+                    Ok(_) => Some(Msg::Err("could not open that link".into())),
+                    Err(e) => Some(Msg::Err(e)),
+                },
+            );
             return;
         }
         if q.chars().count() < 2 {
@@ -2610,6 +2625,18 @@ impl Model {
     /// Opens the sign-in page by itself the first time brumm finds it is
     /// signed out, so nobody has to hunt for the key.
     pub fn auto_login(&mut self) {
+        if self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
+            if !self.provider_asked && self.client.is_some() {
+                self.provider_asked = true;
+                self.ask(Request::new(ipc::CMD_PROVIDER), |reply| {
+                    Some(Msg::ProviderChoices(reply.and_then(|m| {
+                        m.provider.ok_or_else(|| "missing provider choices".into())
+                    })))
+                });
+            }
+            return;
+        }
+
         if self.login_tried || self.state.status != ipc::STATUS_LOGGED_OUT || self.client.is_none()
         {
             return;
@@ -2627,7 +2654,7 @@ impl Model {
         let (kind, id, name) = if let Some(t) = row.and_then(|r| r.track.as_ref()) {
             ("songs".to_string(), t.id.clone(), t.title.clone())
         } else if let Some(it) = row.and_then(|r| r.item.as_ref()) {
-            if it.kind == apple::KIND_ARTIST {
+            if it.kind == music::KIND_ARTIST {
                 return self.set_flash("artists cannot be added; add one of their albums");
             }
             if !it.catalog {
