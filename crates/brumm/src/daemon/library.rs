@@ -23,8 +23,8 @@ struct Data {
     tracks: HashMap<String, Vec<Track>>,
 }
 
-#[derive(Default)]
 pub struct Library {
+    path: PathBuf,
     data: Mutex<Data>,
 }
 
@@ -32,24 +32,40 @@ fn path() -> PathBuf {
     config::session_cache_dir().join("library.json")
 }
 
-impl Library {
-    pub fn reload(&self) {
-        *self.data.lock().unwrap() = Self::load().data.into_inner().unwrap();
+impl Default for Library {
+    fn default() -> Self {
+        Self {
+            path: path(),
+            data: Mutex::new(Data::default()),
+        }
     }
+}
+
+impl Library {
     pub fn load() -> Library {
-        let data = std::fs::read(path())
+        Self::load_at(config::session_cache_dir())
+    }
+
+    pub fn load_at(dir: PathBuf) -> Library {
+        let path = dir.join("library.json");
+        let data = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         Library {
+            path,
             data: Mutex::new(data),
         }
     }
 
+    pub fn directory(&self) -> PathBuf {
+        self.path.parent().expect("cache directory").to_path_buf()
+    }
+
     pub fn save(&self) -> Result<()> {
         let b = serde_json::to_vec(&*self.data.lock().unwrap())?;
-        std::fs::create_dir_all(config::session_cache_dir())?;
-        config::write_private(&path(), &b)?;
+        std::fs::create_dir_all(self.path.parent().expect("cache directory"))?;
+        config::write_private(&self.path, &b)?;
         Ok(())
     }
 
@@ -75,6 +91,37 @@ mod tests {
     use super::*;
     use crate::config::testenv;
     use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn saving_an_old_library_keeps_its_original_account_path() {
+        let Some(_env) = testenv::isolated() else {
+            return;
+        };
+        let mut cfg = config::Config {
+            provider: "apple".into(),
+            user_token: "old-token".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        let old_dir = config::session_cache_dir();
+        let old = Library::load();
+        old.set_items(
+            "playlists",
+            vec![Item {
+                id: "old-playlist".into(),
+                ..Default::default()
+            }],
+        );
+        cfg.user_token = "new-token".into();
+        cfg.save().unwrap();
+        old.save().unwrap();
+        assert!(!path().exists());
+        assert!(Library::load().items("playlists").is_none());
+        assert_eq!(
+            Library::load_at(old_dir).items("playlists").unwrap()[0].id,
+            "old-playlist"
+        );
+    }
 
     #[test]
     fn cache_persists_privately() {

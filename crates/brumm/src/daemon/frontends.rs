@@ -169,7 +169,7 @@ impl Daemon {
     /// Asks the active provider what a share link names.
     pub(super) async fn resolve(&self, link: &str, reply: &mut Message) -> Result<()> {
         let api = self.client()?;
-        let (it, song) = self.auth_check(api.resolve(link).await).await?;
+        let (it, song) = self.auth_check(&api, api.resolve(link).await).await?;
         reply.items = vec![it];
         if !song.is_empty() {
             reply.ids = vec![song];

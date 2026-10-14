@@ -275,6 +275,13 @@ pub enum Msg {
     },
     Album(Result<(Item, String), String>),
     Err(String),
+    StageCover {
+        url: String,
+        style: String,
+        size: Size,
+        dim: bool,
+        lines: Vec<L>,
+    },
     Tick(u64),
     Wheel,
     Refresh(i64),
@@ -418,6 +425,7 @@ pub struct Model {
     pub cover_url: String,
     pub cover: Option<Arc<RgbaImage>>,
     pub cover_dim: Option<Arc<RgbaImage>>,
+    pub stage_busy: bool,
     pub rendered: HashMap<(Size, bool), Vec<L>>,
     pub covers: HashMap<String, Arc<RgbaImage>>,
     pub cover_lru: Vec<String>,
@@ -520,6 +528,9 @@ pub struct Model {
     /// The style fading out.
     pub viz_prev: Option<usize>,
     pub viz_at: Instant,
+    /// When the mouse last moved: with viz_bare the line under the
+    /// visualizer goes while it rests.
+    pub mouse_at: Instant,
     pub viz: Visualizer,
     pub viz_spec: Vec<f64>,
     pub wave: Vec<f64>,
@@ -534,7 +545,8 @@ pub const VIZ_FADE: Duration = Duration::from_millis(1500);
 /// A free-spinning wheel sends hundreds of notches a second. A notch only
 /// moves the selection; the screen catches up at most once per WHEEL_EVERY,
 /// and covers load once the wheel rests for WHEEL_REST.
-const WHEEL_EVERY: Duration = Duration::from_millis(25);
+const WHEEL_EVERY: Duration =
+    Duration::from_nanos(1_000_000_000 / super::options::MAX_DRAW_FPS as u64);
 const WHEEL_REST: Duration = Duration::from_millis(150);
 
 /// Where the program's own setting lives: the split of the list.
@@ -714,6 +726,7 @@ impl Model {
             cover_url: String::new(),
             cover: None,
             cover_dim: None,
+            stage_busy: false,
             rendered: HashMap::new(),
             covers: HashMap::new(),
             cover_lru: Vec::new(),
@@ -785,6 +798,7 @@ impl Model {
             viz_style: VIZ_OPENING,
             viz_prev: None,
             viz_at: Instant::now(),
+            mouse_at: Instant::now(),
             viz: Visualizer::default(),
             viz_spec: Vec::new(),
             wave: Vec::new(),
@@ -1331,6 +1345,21 @@ impl Model {
             Msg::Refresh(r) => self.refresh = r,
             Msg::Bar(on) => self.bar_read(on),
             Msg::BarSet { on, err } => self.bar_set(on, err),
+            Msg::StageCover {
+                url,
+                style,
+                size,
+                dim,
+                lines,
+            } => {
+                self.stage_busy = false;
+                if url == self.cover_url && style == self.opts.cover(self.has_kitty) {
+                    if self.rendered.len() > 8 {
+                        self.rendered.clear();
+                    }
+                    self.rendered.insert((size, dim), lines);
+                }
+            }
             Msg::Thumb { key, lines } => {
                 self.thumb_busy = false;
                 if self.thumbs.len() > 150 {
@@ -1980,7 +2009,11 @@ impl Model {
         self.full = !self.full;
         self.viz_list = false;
         if self.full {
-            self.viz_style = VIZ_OPENING;
+            // it opens on the style shown last, in either player
+            self.viz_style = viz::NAMES
+                .iter()
+                .position(|n| *n == self.opts.o.viz)
+                .unwrap_or(VIZ_OPENING);
             self.viz_prev = None;
             self.viz_at = Instant::now();
         }
@@ -2026,6 +2059,7 @@ impl Model {
                 self.viz_from = self.viz_style;
             }
             "a" => self.toggle_viz_cycle(),
+            "x" => self.toggle_viz_bare(),
             "F" => {
                 self.opts.o.viz_fps = step(&super::options::DRAW_RATES, self.opts.o.viz_fps, 1);
                 self.save_options();
@@ -2060,6 +2094,20 @@ impl Model {
         }
     }
 
+    /// Switches whether the line under the visualizer goes while the
+    /// mouse rests, and remembers it.
+    fn toggle_viz_bare(&mut self) {
+        self.opts.o.viz_bare = !self.opts.o.viz_bare;
+        self.save_options();
+        self.mouse_at = Instant::now();
+        let msg = if self.opts.o.viz_bare {
+            "controls hide while the mouse rests"
+        } else {
+            "controls stay"
+        };
+        self.set_flash(msg);
+    }
+
     /// Switches the minutely change of style, and remembers it.
     fn toggle_viz_cycle(&mut self) {
         self.opts.o.no_viz_cycle = !self.opts.o.no_viz_cycle;
@@ -2077,6 +2125,8 @@ impl Model {
         self.viz_prev = Some(self.viz_style);
         self.viz_style = style;
         self.viz_at = Instant::now();
+        self.opts.o.viz = viz::NAMES[style % viz::NAMES.len()].into();
+        self.save_options();
     }
 
     /// Shows the list the current song was started from with the song
@@ -2606,6 +2656,7 @@ impl Model {
                 self.click(ms);
             }
             MouseKind::Moved => {
+                self.mouse_at = Instant::now();
                 if self.full && self.viz_list {
                     let i = ms.y - self.geo.opt_row0;
                     if self.geo.options.has(ms.x, ms.y) && i >= 0 && (i as usize) < viz::NAMES.len()

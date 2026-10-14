@@ -13,7 +13,7 @@
 - 🎤 Artists: top songs, releases, similar ones
 - ♥ Love, dislike, library, playlists
 - 🖼 Covers: pixel art, smooth, or real
-- 🌈 Twelve visualizers that hear the kick
+- 🌈 Thirteen visualizers that hear the kick
 - ⌨️ <kbd>?</kbd> for keys, mouse works everywhere
 - 🔋 Nearly idle while paused
 - 🐧 Theme colors, media keys, bar widget
@@ -52,7 +52,7 @@ Visuals
 | <kbd>/</kbd> | filter here · <kbd>tab</kbd> search everywhere |
 | <kbd>R</kbd> | radio from song or artist |
 | <kbd>*</kbd> <kbd>d</kbd> <kbd>i</kbd> <kbd>P</kbd> | love · dislike · library · playlist |
-| <kbd>f</kbd> | visualizer: <kbd>tab</kbd> <kbd>v</kbd> <kbd>a</kbd> <kbd>F</kbd> |
+| <kbd>f</kbd> | visualizer: <kbd>tab</kbd> <kbd>v</kbd> <kbd>a</kbd> <kbd>x</kbd> <kbd>F</kbd> |
 | <kbd>g</kbd> | switch between terminal and window |
 | <kbd>o</kbd> | options |
 | <kbd>U</kbd> | look for an update |
@@ -83,10 +83,11 @@ Qt 6 and a C++ compiler. Go is used for development fixtures and signing
 tools.
 
 ```sh
-bin/setup     # build and install from this checkout (the window too, with Qt 6)
-bin/dev       # the daemon in the foreground; bin/dev ui / gui for a player
-bin/gui-shot  # screenshot the window against a stand-in daemon
-bin/bench     # what the players cost
+bin/setup       # build and install from this checkout (the window too, with Qt 6)
+bin/dev         # the daemon in the foreground; bin/dev ui / gui for a player
+bin/gui-shot    # screenshot the window against a stand-in daemon
+bin/viz-thumbs  # picture each visualizer style for the list of styles
+bin/bench       # what the players cost
 ```
 
 One background service is the core — music, queue, library, options, sign-in, where you were. The players only draw, and come and go while the music plays on:

@@ -6,7 +6,7 @@ use std::time::Instant;
 use ratatui::buffer::Buffer;
 
 use super::geometry::{FootHit, Geometry, Rect};
-use super::model::Model;
+use super::model::{Cmd, Model, Msg};
 use super::text::*;
 use super::viz;
 use crate::art::Size;
@@ -130,6 +130,10 @@ impl Model {
 
     /// Draws the whole screen into buf.
     pub fn draw(&mut self, buf: &mut Buffer) {
+        // Ratatui queries the terminal immediately before drawing. A queued
+        // Resize message may already be obsolete by then.
+        self.width = i64::from(buf.area.width);
+        self.height = i64::from(buf.area.height);
         self.drawn = true;
         if self.full && self.width >= 20 && self.height >= 6 {
             // The browser is not on screen: nothing of it is drawn or wanted.
@@ -887,6 +891,25 @@ impl Model {
         } else {
             cover
         };
+        if style == super::options::COVER_PIXEL {
+            if !self.stage_busy {
+                self.stage_busy = true;
+                let url = self.cover_url.clone();
+                let work = img.clone();
+                self.cmds.push(Cmd::Blocking(Box::new(move || {
+                    Some(Msg::StageCover {
+                        url,
+                        lines: super::cover::draw_cover(&style, &work, size),
+                        style,
+                        size,
+                        dim,
+                    })
+                })));
+            }
+            // Keep layout and input responsive while palette fitting runs.
+            // This cheap preview has exactly the new frame's dimensions.
+            return super::cover::draw_cover(super::options::COVER_SMOOTH, &img, size);
+        }
         let lines = super::cover::draw_cover(&style, &img, size);
         if self.rendered.len() > 8 {
             self.rendered.clear();
@@ -1011,7 +1034,11 @@ impl Model {
         // full-height bars mean loud, not merely audible.
         self.viz_spec.clear();
         self.viz_spec.extend(self.spec.iter().map(|v| v * v * v));
-        let h = (self.height - 1).max(0) as usize;
+        // viz_bare: the line goes while the mouse rests, the picture takes it
+        let bare = self.opts.o.viz_bare
+            && !self.viz_list
+            && self.mouse_at.elapsed() > std::time::Duration::from_millis(2500);
+        let h = (self.height - if bare { 0 } else { 1 }).max(0) as usize;
         // A new style dissolves in over the old one, block by block.
         let f = self.viz_at.elapsed().as_secs_f64() / super::model::VIZ_FADE.as_secs_f64();
         let from = match self.viz_prev {
@@ -1034,6 +1061,10 @@ impl Model {
             playing,
         );
         self.viz.blit(buf, 0, 0);
+        if bare {
+            self.geo = Geometry::default(); // nothing on screen to click
+            return;
+        }
         let status = self.viz_status_line(h as i64);
         put(buf, 0, h as i64, &status);
     }
@@ -1069,6 +1100,18 @@ impl Model {
             ),
             ("v".into(), one("styles", DIM), "v".into()),
             ("a".into(), line(vec![sp("auto ", DIM), auto]), "a".into()),
+            (
+                "x".into(),
+                one(
+                    if self.opts.o.viz_bare {
+                        "controls hide"
+                    } else {
+                        "controls stay"
+                    },
+                    DIM,
+                ),
+                "x".into(),
+            ),
             ("F".into(), one(fps, DIM), "F".into()),
             ("f".into(), one("close", DIM), "f".into()),
         ];

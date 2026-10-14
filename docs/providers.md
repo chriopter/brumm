@@ -65,7 +65,10 @@ and resume files migrate once into the first namespace and remain in place for
 rollback. The current Apple account key is a digest of the Music User Token,
 not a stable Apple account identifier; signing in again with a rotated token can
 create a fresh cache namespace. Stable account identity and a full provider
-switch lifecycle belong to the next phase.
+switch lifecycle belong to the next phase. Each API session retains its own
+library and fixed cache path; a fresh login replaces the active session and
+rejects late API replies and authorization errors from the previous one.
+Persisted queues also retain the cache path assigned when created or loaded.
 
 ## Next steps
 

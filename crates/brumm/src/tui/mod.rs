@@ -48,7 +48,10 @@ use ratatui::crossterm::event::{
     KeyboardEnhancementFlags, MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
 };
-use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
+use ratatui::crossterm::terminal::{
+    self, BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen,
+    LeaveAlternateScreen, SetTitle,
+};
 use ratatui::crossterm::{cursor, execute};
 
 use crate::error::Result;
@@ -163,7 +166,13 @@ fn run_loop(
         let now = Instant::now();
         let draw_at = last_draw.map_or(now, |l| l + min_frame);
         if dirty && now >= draw_at {
-            term.draw(|f| m.draw(f.buffer_mut()))?;
+            // Publish each resize as a complete frame, so the terminal
+            // never displays half of the old layout and half of the new.
+            execute!(term.backend_mut(), BeginSynchronizedUpdate)?;
+            let frame = term.draw(|f| m.draw(f.buffer_mut())).map(|_| ());
+            let end = execute!(term.backend_mut(), EndSynchronizedUpdate);
+            frame?;
+            end?;
             last_draw = Some(now);
             dirty = false;
             continue; // drawing may have asked for covers

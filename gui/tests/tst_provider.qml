@@ -26,7 +26,7 @@ TestCase {
         function request(request, callback) {
             asked.push(request)
             if (request.cmd === "provider")
-                callback("", { provider: { protocolVersion: 1, navigation: appleNavigation, capabilities: appleCapabilities, choices: [{ id: "apple", name: "Apple Music", available: true }, { id: "tidal", name: "Tidal", available: false }], selected: request.query || "", needsChoice: !request.query } })
+                callback("", { provider: { protocolVersion: 1, navigation: request.query ? appleNavigation : store.utilityNavigation(), capabilities: request.query ? appleCapabilities : {}, choices: [{ id: "apple", name: "Apple Music", available: true }, { id: "tidal", name: "Tidal", available: false }], selected: request.query || "", needsChoice: !request.query } })
             else if (request.cmd === "home")
                 callback("", { shelves: [{ title: "Recently played", route: "provider:recent", items: [{ kind: "album", id: "recent", name: "Recent", artwork: "cover" }] }] })
             else if (request.cmd === "explore")
@@ -39,6 +39,19 @@ TestCase {
     }
 
     Brumm.Store { id: store }
+
+    function initTestCase() {
+        // Exercise the untouched Store before init configures an Apple session.
+        verify(Array.isArray(store.stacks[0]))
+        store.st = { status: "choose-provider" }
+        store.askProviders()
+        compare(store.selectedProvider, "")
+        compare(store.providers.length, 2)
+        compare(store.cur().key, "search:")
+        store.providerKey("enter")
+        compare(store.selectedProvider, "apple")
+        compare(store.cur().key, "home:")
+    }
 
     function init() { fakeDaemon.asked = []; store.st = { status: "starting" }; store.providerRequested = false; store.configureProvider({ selected: "apple", protocolVersion: 1, navigation: appleNavigation, capabilities: appleCapabilities }) }
 

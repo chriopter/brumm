@@ -13,13 +13,14 @@ HEADERS += $$files(src/*.h)
 SOURCES += $$files(src/*.cpp)
 
 # Everything under qml/ and shaders/ is built in, gathered when qmake runs:
-# the QML as :/qml/..., the shaders compiled by Qt's qsb (qt6-shadertools)
-# as :/shaders/NAME.qsb. A new file needs no listing, only a new qmake.
+# the QML and its pictures (the visualizer's previews) as :/qml/..., the
+# shaders compiled by Qt's qsb (qt6-shadertools) as :/shaders/NAME.qsb.
+# A new file needs no listing, only a new qmake.
 QSB = $$[QT_HOST_BINS]/qsb
 !exists($$QSB): QSB = $$[QT_HOST_LIBEXECS]/qsb
 !exists($$QSB): error("the window's shaders need qsb: install qt6-shadertools")
 QRC = "<RCC><qresource prefix=\"/\">"
-for(f, $$list($$files($$PWD/qml/*.qml, true))) {
+for(f, $$list($$files($$PWD/qml/*.qml, true) $$files($$PWD/qml/*.jpg, true))) {
     QRC += "<file alias=\"qml/$$relative_path($$f, $$PWD/qml)\">$$f</file>"
 }
 QRC += "</qresource><qresource prefix=\"/shaders\">"

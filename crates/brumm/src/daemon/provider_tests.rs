@@ -3,7 +3,14 @@ use crate::provider::tests::Fixture;
 
 fn daemon(failure: Option<Error>) -> Arc<Daemon> {
     let d = Arc::new(Daemon::new("dev", Library::default(), None));
-    d.lock().api = Some(Arc::new(Fixture { failure }));
+    let session = Arc::new(ProviderSession {
+        api: Arc::new(Fixture {
+            failure,
+            ..Default::default()
+        }),
+        lib: d.library(),
+    });
+    d.lock().api = Some(session);
     d
 }
 
@@ -57,11 +64,11 @@ async fn incomplete_lists_and_tracks_are_displayed_but_not_cached() {
     let d = daemon(Some(Error::Partial));
     let api = d.client().unwrap();
     let mut reply = Message::default();
-    d.fetch_list(api.as_ref(), ipc::LIST_PLAYLISTS, &mut reply)
+    d.fetch_list(&api, ipc::LIST_PLAYLISTS, &mut reply)
         .await
         .unwrap();
     assert_eq!(reply.items.len(), 1);
-    assert!(d.lib.items(ipc::LIST_PLAYLISTS).is_none());
+    assert!(d.library().items(ipc::LIST_PLAYLISTS).is_none());
     let item = Item {
         kind: KIND_ALBUM.into(),
         id: "fixture-album".into(),
@@ -69,7 +76,7 @@ async fn incomplete_lists_and_tracks_are_displayed_but_not_cached() {
     };
     d.open(&item, &mut reply).await.unwrap();
     assert_eq!(reply.tracks.len(), 1);
-    assert!(d.lib.tracks(&item.key()).is_none());
+    assert!(d.library().tracks(&item.key()).is_none());
 }
 
 #[tokio::test]
@@ -89,4 +96,47 @@ async fn provider_authorization_failure_updates_session_state() {
         Err(Error::Unauthorized)
     );
     assert_eq!(d.lock().state.status, ipc::STATUS_LOGGED_OUT);
+}
+
+#[tokio::test]
+async fn a_reply_from_before_login_cannot_populate_the_new_library() {
+    let d = daemon(None);
+    let gate = Arc::new((Notify::new(), Notify::new()));
+    let old = Arc::new(ProviderSession {
+        api: Arc::new(Fixture {
+            playlists_gate: Some(gate.clone()),
+            ..Default::default()
+        }),
+        lib: d.library(),
+    });
+    d.lock().api = Some(old.clone());
+    let request = {
+        let d = d.clone();
+        tokio::spawn(async move { d.list(ipc::LIST_PLAYLISTS, &mut Message::default()).await })
+    };
+    gate.0.notified().await;
+    let new = Arc::new(ProviderSession {
+        api: Arc::new(Fixture::default()),
+        lib: Arc::new(Library::default()),
+    });
+    {
+        let mut i = d.lock();
+        i.lib = new.lib.clone();
+        i.api = Some(new.clone());
+        i.state.status = ipc::STATUS_READY.into();
+    }
+    gate.1.notify_one();
+    assert!(request.await.unwrap().is_err());
+    assert!(old.lib.items(ipc::LIST_PLAYLISTS).is_none());
+    assert!(new.lib.items(ipc::LIST_PLAYLISTS).is_none());
+    // A delayed 401 from the old client must not log the new session out.
+    assert!(
+        d.auth_check::<()>(&old, Err(Error::Unauthorized))
+            .await
+            .is_err()
+    );
+    assert_eq!(d.lock().state.status, ipc::STATUS_READY);
+    let mut reply = Message::default();
+    d.list(ipc::LIST_PLAYLISTS, &mut reply).await.unwrap();
+    assert_eq!(reply.items[0].id, "fixture-playlist");
 }

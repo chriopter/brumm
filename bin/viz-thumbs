@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Picture every visualizer style for the window's list of styles (v):
+# each is shown against the stand-in daemon (tools/fakedaemon) as
+# bin/gui-shot does, taken once it has faded in, and kept small in
+# gui/qml/viz/thumbs/NAME.jpg. Needs ImageMagick (magick).
+#   bin/viz-thumbs
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+build=${GUI_BUILD:-tmp/gui-build}
+bin/build-gui "$build"
+go build -o "$build/fakedaemon" ./tools/fakedaemon
+shots=$(mktemp -d)
+trap 'rm -rf "$shots"' EXIT
+# The names as Store.qml lists them, in order.
+mapfile -t names < <(grep -o 'vizNames: \[[^]]*\]' gui/qml/Store.qml | grep -o '"[a-z]*"' | tr -d '"')
+for i in "${!names[@]}"; do
+  # Digits pick the first ten; tab steps on from the tenth.
+  if ((i < 10)); then keys="f $(((i + 1) % 10))"; else keys="f 0$(printf ' tab%.0s' $(seq 10 "$i"))"; fi
+  GUI_BUILD=$build GUI_SHOT_MS=8000 bin/gui-shot "$shots/${names[$i]}.png" "$keys" 1280x720 >/dev/null 2>&1
+  # Without the strip of what plays along the bottom.
+  magick "$shots/${names[$i]}.png" -crop 1280x620+0+0 +repage -resize 320x160^ -gravity center -extent 320x160 \
+    -quality 82 "gui/qml/viz/thumbs/${names[$i]}.jpg"
+  echo "${names[$i]}"
+done

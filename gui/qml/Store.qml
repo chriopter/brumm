@@ -197,27 +197,31 @@ Item {
     // ── the menu ────────────────────────────────────────────────────────
     // The one menu: what to do that is not on screen already, the shared
     // options as switches, and the ways out. Its rows, top to bottom:
-    //   {act: key, icon, label} runs what key does · {option: name, label,
-    //   hint} is a switch · {heading: text} · {sep: true}
+    //   {act: key, icon, label, keys} runs what key does, keys naming
+    //   more than one · {option: name, label, hint} is a switch ·
+    //   {fold: true, heading: text} opens and closes the switches under it
+    //   · {heading: text} · {sep: true}
     property bool addOpen: false   // the song actions menu on the stage
     property bool menuOpen: false
     property int menuSel: -1 // the row the keys are on; -1 none (opened by a click)
+    property bool menuOptions: false // the switches show under their heading
     readonly property var menuRows: {
         const rows = []
         if (st.status === "logged-out")
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
-        rows.push({ act: "f", icon: "󰊓", label: "Visualizer" },
-                  { act: "F", icon: "󰊓", label: "Full-Screen Visualizer" },
-                  { act: "g", icon: "󰆍", label: "Open in Terminal" },
-                  { act: "y", icon: "󰌷", label: "Copy Song Link" },
-                  { sep: true }, { heading: "Options" },
-                  { option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
-                  { option: "autoplay", label: "Autoplay", hint: "Play on after the last song." },
-                  { option: "reduce_motion", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
-                  { option: "wall", label: "Album Wall", hint: "Covers around the cover, not a flow." })
-        if (daemon.omarchy)
-            rows.push({ option: "bar", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
-                      { option: "music_keys", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
+        rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F" },
+                  { act: "g", icon: "󰆍", label: "TUI" },
+                  { act: "y", icon: "󰌷", label: "Copy Link" },
+                  { sep: true }, { fold: true, heading: "Options" })
+        if (menuOptions) {
+            rows.push({ option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
+                      { option: "autoplay", label: "Autoplay", hint: "Play on after the last song." },
+                      { option: "reduce_motion", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
+                      { option: "wall", label: "Album Wall", hint: "Covers around the cover, not a flow." })
+            if (daemon.omarchy)
+                rows.push({ option: "bar", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
+                          { option: "music_keys", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
+        }
         rows.push({ sep: true },
                   { act: "U", icon: "󰚰", label: st.update ? "Update to " + st.update + "…" : "Check for Updates…" },
                   { act: "?", icon: "󰋖", label: "Keyboard Shortcuts" },
@@ -227,7 +231,7 @@ Item {
                   { act: "q", icon: "󰐥", label: "Quit brumm" })
         return rows
     }
-    function menuPickable(r) { return !!r && (r.act !== undefined || r.option !== undefined) }
+    function menuPickable(r) { return !!r && (r.act !== undefined || r.option !== undefined || !!r.fold) }
 
     // optionOn says whether a switch in the menu is on.
     // The stage shows the cover in a wall of covers, or in a flow: the
@@ -252,6 +256,7 @@ Item {
     function openMenu(onOption) {
         menuOpen = true
         help = false
+        if (onOption) menuOptions = true
         menuSel = onOption ? menuRows.findIndex(r => r.option !== undefined) : -1
     }
     function closeMenu() { menuOpen = false; menuSel = -1 }
@@ -262,6 +267,7 @@ Item {
         const r = menuRows[i]
         if (!menuPickable(r)) return
         if (r.option !== undefined) { menuSel = i; return changeOption(r.option) }
+        if (r.fold) { menuSel = i; menuOptions = !menuOptions; return }
         closeMenu()
         dispatch(r.act, { text: r.act, modifiers: 0 })
     }
@@ -280,8 +286,8 @@ Item {
         case "up": case "k": case "shift+tab": return stepTo(-1)
         case "down": case "j": case "tab": return stepTo(1)
         case "enter": case "space": case " ": return menuSel >= 0 ? menuRow(menuSel) : stepTo(1)
-        case "right": case "l": if (r && r.option !== undefined) setOptionOn(r.option, true); return
-        case "left": case "h": if (r && r.option !== undefined) setOptionOn(r.option, false); return
+        case "right": case "l": if (r && r.option !== undefined) setOptionOn(r.option, true); else if (r && r.fold) menuOptions = true; return
+        case "left": case "h": if (r && r.option !== undefined) setOptionOn(r.option, false); else if (r && r.fold) menuOptions = false; return
         case "esc": case "o": case "q": return closeMenu() // q closes, as it does every popup; the row quits
         }
         const i = rows.findIndex(x => x.act === k) // a row's own key does what it says
@@ -295,8 +301,8 @@ Item {
 
     // ── the visualizer ──────────────────────────────────────────────────
     // Its styles, named and ordered as the terminal player's, best first.
-    readonly property var vizNames: ["milkdrop", "synth", "stars", "wire", "fireworks", "lava", "scope", "plasma", "fire", "matrix", "ridge", "led"]
-    readonly property var vizFiles: ["Milkdrop", "Synth", "Stars", "Wire", "Fireworks", "Lava", "Scope", "Plasma", "Fire", "Matrix", "Ridge", "Led"]
+    readonly property var vizNames: ["milkdrop", "cathedral", "synth", "stars", "wire", "fireworks", "lava", "scope", "plasma", "fire", "matrix", "ridge", "led"]
+    readonly property var vizFiles: ["Milkdrop", "Cathedral", "Synth", "Stars", "Wire", "Fireworks", "Lava", "Scope", "Plasma", "Fire", "Matrix", "Ridge", "Led"]
     property int vizStyle: 0       // it opens on the showpiece
     property bool vizQuick: false  // the last change is shown at once, not dissolved (moving through the list)
     property bool vizList: false   // v: the list of styles shows
@@ -306,7 +312,10 @@ Item {
     function vizShow(i, quick) {
         vizQuick = !!quick
         vizStyle = (i + vizNames.length) % vizNames.length
+        if (daemon.options.viz !== vizNames[vizStyle]) daemon.setOption("viz", vizNames[vizStyle])
     }
+    // The style shown last, in either player; the showpiece at first.
+    function vizLast() { return Math.max(0, vizNames.indexOf(daemon.options.viz || "")) }
     function vizStep(d) { vizShow(vizStyle + d) }
     function vizPick(i) { vizList = false; vizShow(i) }
 
@@ -333,9 +342,15 @@ Item {
         case "shift+tab": case "left": case "up": case "k": case "h": vizStep(-1); return true
         case "v": vizList = true; vizSel = vizStyle; vizFrom = vizStyle; return true
         case "a": vizCycle(); return true
+        case "x": vizBare(); return true
         }
         if (digit >= 0 && digit < n) { vizShow(digit); return true }
         return false
+    }
+    function vizBare() {
+        const bare = !daemon.options.viz_bare
+        daemon.setOption("viz_bare", bare)
+        setFlash(bare ? "controls hide while the mouse rests" : "controls stay")
     }
     function vizCycle() {
         const stays = !daemon.options.no_viz_cycle
@@ -373,7 +388,7 @@ Item {
     function setFlash(text) { flash = text; flashTimer.restart() }
 
     Component.onCompleted: {
-        stacks = navigation.map(rootView)
+        stacks = navigation.map(entry => [rootView(entry)])
         const f = parseFloat(sys.setting("split", 0.4))
         if (f >= 0.08 && f <= 0.7) split = f
         refresh()
@@ -1585,8 +1600,8 @@ Item {
             refresh()
             return
         case "F": return win.toggleVizFullscreen()
-        case "f": // it opens on the showpiece
-            if (!full) vizShow(0, true)
+        case "f": // it opens on the style shown last, in either player
+            if (!full) vizShow(vizLast(), true)
             full = !full; help = false; vizList = false
             return
         case "n": return next()
