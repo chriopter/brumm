@@ -257,7 +257,10 @@ async fn serve_page(
                     Ok(value) => (200, serde_json::to_vec(&value).unwrap_or_default()),
                     Err(Error::Unauthorized) => (401, b"{}".to_vec()),
                     Err(Error::Unsupported) => (404, b"{}".to_vec()),
-                    Err(_) => (502, b"{}".to_vec()),
+                    Err(error) => (
+                        502,
+                        serde_json::to_vec(&json!({"error":error.to_string()})).unwrap_or_default(),
+                    ),
                 };
                 httpd::respond(
                     &mut s,

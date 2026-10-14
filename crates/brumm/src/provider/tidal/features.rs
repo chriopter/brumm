@@ -192,15 +192,24 @@ impl Client {
             "tidal:explore" => match self.native_page("HOME_EDITORIAL", "Explore").await {
                 Ok(page) => Ok(page),
                 Err(Error::Unauthorized) => Err(Error::Unauthorized),
-                Err(_) => Ok(ExplorePage { title: "Explore".into(), info: "Tidal editorial discovery is unavailable for this connection. Search and your collection are available.".into(), ..Default::default() }),
+                Err(_) => self.compatibility_explore().await,
             },
             _ => {
+                if let Some(page) = route.strip_prefix("tidal:page:") {
+                    return self.compatibility_route(page).await;
+                }
                 if let Some(id) = route.strip_prefix("tidal:mix:") {
-                    let (_, resource, title) = MIXES.iter().find(|(name,_,_)| *name == id).ok_or(Error::Unsupported)?;
+                    let (_, resource, title) = MIXES
+                        .iter()
+                        .find(|(name, _, _)| *name == id)
+                        .ok_or(Error::Unsupported)?;
                     return self.full_collection(&format!("{resource}/me/relationships/items?include=items,items.coverArt,items.owners&locale=en-US"), title).await;
                 }
                 if let Some(id) = route.strip_prefix("tidal:module:") {
-                    let id = url::form_urlencoded::parse(format!("id={id}").as_bytes()).next().map(|(_,v)| v.into_owned()).ok_or(Error::Unsupported)?;
+                    let id = url::form_urlencoded::parse(format!("id={id}").as_bytes())
+                        .next()
+                        .map(|(_, v)| v.into_owned())
+                        .ok_or(Error::Unsupported)?;
                     return self.full_collection(&format!("dynamicModules/{}/relationships/items?include=items,items.albums:artists,items.albums:coverArt,items.artists:profileArt,items.playlists:coverArt,items.tracks:artists,items.tracks:albums,items.tracks:albums.coverArt&deviceType=DESKTOP&systemType=DESKTOP&clientVersion={CLIENT_VERSION}&refreshSeed={}", Self::id(&id), self.refresh_seed), "").await;
                 }
                 Err(Error::Unsupported)

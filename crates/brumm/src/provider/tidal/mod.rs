@@ -2,6 +2,7 @@
 pub mod auth;
 pub mod device;
 mod features;
+mod legacy;
 mod mapping;
 pub mod session;
 use crate::{
@@ -56,6 +57,14 @@ impl Client {
         {
             return Err(err("invalid Tidal route"));
         }
+        // Tidal interprets an encoded comma differently when the filter key's
+        // brackets are left raw. Serialize both keys and values consistently.
+        let pairs: Vec<_> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        url.set_query(None);
+        url.query_pairs_mut().extend_pairs(pairs);
         if !url.query_pairs().any(|(key, _)| key == "countryCode") {
             url.query_pairs_mut()
                 .append_pair("countryCode", &self.country);
@@ -64,6 +73,14 @@ impl Client {
     }
     async fn request(&self, method: Method, route: &str, body: Option<Value>) -> Result<Value> {
         let url = self.url(route)?;
+        self.request_url(method, url, body).await
+    }
+    async fn request_url(
+        &self,
+        method: Method,
+        url: url::Url,
+        body: Option<Value>,
+    ) -> Result<Value> {
         let mut session = auth::credentials(&self.account, None).await?;
         for attempt in 0..3 {
             let mut request = self
@@ -748,6 +765,24 @@ mod tests {
             requests
         });
         (client, task)
+    }
+    #[tokio::test]
+    async fn batch_metadata_encodes_filter_keys_and_preserves_duplicate_order() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let (client,server)=fixture(vec![(200,json!({"data":[{"type":"tracks","id":"1","attributes":{"title":"One"}},{"type":"tracks","id":"2","attributes":{"title":"Two"}}]}))]).await;
+        let tracks = client
+            .player_tracks(&["2".into(), "1".into(), "2".into()])
+            .await
+            .unwrap();
+        assert_eq!(
+            tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["2", "1", "2"]
+        );
+        let requests = server.await.unwrap();
+        assert!(requests[0].target.contains("filter%5Bid%5D=2%2C1%2C2"));
+        assert!(!requests[0].target.contains("filter[id]"));
     }
     #[tokio::test]
     async fn mixes_expand_playlist_cards() {

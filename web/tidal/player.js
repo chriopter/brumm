@@ -19,7 +19,7 @@ function fail(error) {
 }
 async function bridge(route, body={}) {
   const response = await fetch(location.pathname + '/' + route, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
-  if (!response.ok) { if(response.status===401){B.needsAuth=true;touch();} const e = new Error(response.status === 401 ? 'Tidal authorization expired' : 'Tidal request failed'); throw e; }
+  if (!response.ok) { if(response.status===401){B.needsAuth=true;touch();} const detail = await response.json().catch(()=>({})); throw new Error(response.status === 401 ? 'Tidal authorization expired' : detail.error || 'Tidal request failed'); }
   return response.json();
 }
 let token = '', listeners = [];
