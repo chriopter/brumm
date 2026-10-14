@@ -172,6 +172,7 @@ type State struct {
 }
 
 type Message struct {
+	Provider json.RawMessage `json:"provider,omitempty"`
 	ID       int             `json:"id,omitempty"`
 	Error    string          `json:"error,omitempty"`
 	Items    []Item          `json:"items,omitempty"`

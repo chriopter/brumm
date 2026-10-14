@@ -7,6 +7,8 @@ TestCase {
     property bool prototypeMode: false
     property var daemon: fakeDaemon
     property var sys: fakeSystem
+    property var appleNavigation: [{"id": "home", "label": "Home", "icon": "home", "destination": {"kind": "home"}}, {"id": "explore", "label": "Explore", "icon": "explore", "destination": {"kind": "page", "route": "app:discover"}}, {"id": "playlists", "label": "Playlists", "icon": "playlists", "destination": {"kind": "library", "list": "playlists"}}, {"id": "albums", "label": "Albums", "icon": "albums", "destination": {"kind": "library", "list": "albums"}}, {"id": "artists", "label": "Artists", "icon": "artists", "destination": {"kind": "library", "list": "artists"}}, {"id": "songs", "label": "Songs", "icon": "songs", "destination": {"kind": "library", "list": "songs"}}, {"id": "radio", "label": "Radio", "icon": "radio", "destination": {"kind": "container", "item": {"kind": "shelf", "id": "radio", "name": "Radio", "catalog": true}}}, {"id": "search", "label": "Search", "icon": "search", "destination": {"kind": "search"}}, {"id": "queue", "label": "Queue", "icon": "queue", "destination": {"kind": "queue"}}]
+    property var appleCapabilities: ({collectionKinds:["song","album","playlist"], ratingKinds:["song","album","playlist","station"], favoriteKinds:["song","album","artist","playlist"], ratings:true, dislike:true, favorites:true, collectionWrite:true, playlistWrite:true, folders:true, stations:true, previews:true, autoplay:true})
 
     QtObject {
         id: fakeSystem
@@ -24,7 +26,7 @@ TestCase {
         function request(request, callback) {
             asked.push(request)
             if (request.cmd === "provider")
-                callback("", { provider: { choices: [{ id: "apple", name: "Apple Music", available: true }, { id: "tidal", name: "Tidal", available: false }], selected: request.query || "", needsChoice: !request.query } })
+                callback("", { provider: { protocolVersion: 1, navigation: appleNavigation, capabilities: appleCapabilities, choices: [{ id: "apple", name: "Apple Music", available: true }, { id: "tidal", name: "Tidal", available: false }], selected: request.query || "", needsChoice: !request.query } })
             else if (request.cmd === "home")
                 callback("", { shelves: [{ title: "Recently played", route: "provider:recent", items: [{ kind: "album", id: "recent", name: "Recent", artwork: "cover" }] }] })
             else if (request.cmd === "explore")
@@ -38,19 +40,22 @@ TestCase {
 
     Brumm.Store { id: store }
 
-    function init() { fakeDaemon.asked = []; store.st = { status: "starting" }; store.providerRequested = false }
+    function init() { fakeDaemon.asked = []; store.st = { status: "starting" }; store.providerRequested = false; store.configureProvider({ selected: "apple", protocolVersion: 1, navigation: appleNavigation, capabilities: appleCapabilities }) }
 
     function test_exploreUsesProviderHandles() {
         store.section = store.secExplore
         const v = store.cur()
         store.loadExploreVisuals(v, { explorer: { title: "Explore", visuals: [
+            { name: "Recently played", route: "provider:recent" },
             { name: "Featured", route: "provider:featured" },
             { name: "Videos", route: "provider:videos" }
         ] } })
         const requests = fakeDaemon.asked.filter(r => r.cmd === "explore")
-        compare(requests.length, 2)
-        compare(requests[0].query, "provider:featured")
-        compare(requests[1].query, "provider:videos")
+        compare(requests.length, 3)
+        compare(requests[0].query, "provider:recent")
+        compare(requests[1].query, "provider:featured")
+        compare(requests[2].query, "provider:videos")
+        compare(fakeDaemon.asked.filter(r => r.cmd === "home").length, 0)
         verify(v.rows.some(r => r.headRoute === "provider:recent"))
         verify(v.rows.some(r => r.head === "Featured" && r.headRoute === "provider:featured"))
     }
@@ -86,6 +91,39 @@ TestCase {
         store.providerKey("enter")
         const chosen = fakeDaemon.asked.find(r => r.cmd === "provider" && r.query === "apple")
         verify(chosen !== undefined)
+    }
+
+    function test_navigationCanReorderRenameAndOmit() {
+        const entries = appleNavigation.filter(e => e.id !== "radio").map(e => Object.assign({}, e))
+        const artists = entries.splice(entries.findIndex(e => e.id === "artists"), 1)[0]
+        artists.label = "My Artists"
+        entries.unshift(artists)
+        store.section = store.secAlbums
+        const place = store.here()
+        store.configureProvider({ selected: "apple", protocolVersion: 1, navigation: entries, capabilities: appleCapabilities })
+        compare(store.sectionNames[0], "My Artists")
+        compare(store.navigation[store.section].id, "albums")
+        compare(store.navigation.length, 8)
+        compare(store.navigation.filter(e => e.id === "radio").length, 0)
+        store.switchTo(store.secQueue)
+        store.goPlace(place)
+        compare(store.navigation[store.section].id, "albums")
+    }
+
+    function test_unsupportedActionsDoNotSendRequests() {
+        store.capabilities = {}
+        store.st = { status: "ready", id: "song", title: "Song" }
+        store.ratePlaying(1)
+        store.radioPlaying()
+        store.libraryPlaying()
+        compare(fakeDaemon.asked.length, 0)
+    }
+
+    function test_protocolMismatchIsVisible() {
+        const before = store.navigation
+        store.configureProvider({ selected: "apple", protocolVersion: 99, navigation: appleNavigation })
+        compare(store.navigation, before)
+        verify(store.flash.includes("daemon and frontends"))
     }
 
 }

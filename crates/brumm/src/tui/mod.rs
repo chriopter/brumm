@@ -93,6 +93,10 @@ pub fn run(rt: &tokio::runtime::Runtime) -> Result<()> {
     }
 
     let mut m = Model::new(Some(client.clone()), reply.state.unwrap_or_default());
+    m.event(crate::ipc::Message {
+        provider: reply.provider,
+        ..Default::default()
+    });
     m.tx = Some(tx.clone());
     let screen = Screen::enter()?;
     let _ = tx.send(Msg::Probe {

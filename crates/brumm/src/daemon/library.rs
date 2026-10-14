@@ -29,10 +29,13 @@ pub struct Library {
 }
 
 fn path() -> PathBuf {
-    config::cache_dir().join("library.json")
+    config::session_cache_dir().join("library.json")
 }
 
 impl Library {
+    pub fn reload(&self) {
+        *self.data.lock().unwrap() = Self::load().data.into_inner().unwrap();
+    }
     pub fn load() -> Library {
         let data = std::fs::read(path())
             .ok()
@@ -45,7 +48,7 @@ impl Library {
 
     pub fn save(&self) -> Result<()> {
         let b = serde_json::to_vec(&*self.data.lock().unwrap())?;
-        std::fs::create_dir_all(config::cache_dir())?;
+        std::fs::create_dir_all(config::session_cache_dir())?;
         config::write_private(&path(), &b)?;
         Ok(())
     }

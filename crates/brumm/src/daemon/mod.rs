@@ -2,11 +2,11 @@
 //! MPRIS server for media keys and the bar, and a unix socket the players
 //! talk to. Music keeps playing when the players are closed.
 
-mod apple;
 mod feedback;
 mod frontends;
 mod library;
 mod playback;
+mod providers;
 mod resume;
 mod selfupdate;
 
@@ -20,7 +20,7 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, Semaphore};
 
-use self::apple::new_api;
+use self::providers::new_api;
 use crate::config::{self, Config, Options};
 use crate::engine::{self, CdpError, Engine};
 use crate::error::{Error, Result, err};
@@ -105,6 +105,7 @@ struct CachedPage {
 
 #[derive(Default)]
 struct Inner {
+    login_task: Option<tokio::task::AbortHandle>,
     eng: Option<Arc<Engine>>,
     api: Option<Arc<dyn Api>>,
     state: State,
@@ -173,7 +174,19 @@ fn same(a: &Option<Arc<Engine>>, b: &Arc<Engine>) -> bool {
 pub async fn run(version: &str) -> Result<()> {
     let ln = listen().await?;
     engine::sweep_profiles(); // left behind by crashes
-    let d = Arc::new(Daemon::new(version, Library::load(), Resume::load()));
+    config::migrate_session_cache()?;
+    let cfg = Config::load()?;
+    let authenticated = crate::provider::registry::definition(cfg.effective_provider())
+        .is_ok_and(|p| p.signed_in(&cfg));
+    let d = Arc::new(Daemon::new(
+        version,
+        if authenticated {
+            Library::load()
+        } else {
+            Library::default()
+        },
+        if authenticated { Resume::load() } else { None },
+    ));
     match mpris::Server::start(Arc::downgrade(&d)).await {
         Ok(m) => {
             let _ = d.mpris.set(m);
@@ -340,15 +353,14 @@ impl Daemon {
             Ok(api) => api,
             Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
         };
-        if cfg.developer().is_empty() {
-            return self
-                .set_status(
-                    ipc::STATUS_ERROR,
-                    "no Apple Music developer token in this build",
-                )
-                .await;
+        let provider = match crate::provider::registry::definition(cfg.effective_provider()) {
+            Ok(p) => p,
+            Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
+        };
+        if let Err(e) = provider.validate(&cfg) {
+            return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
         }
-        if cfg.user_token.is_empty() {
+        if !provider.signed_in(&cfg) {
             return self
                 .set_status(ipc::STATUS_LOGGED_OUT, "not signed in")
                 .await;
@@ -356,7 +368,7 @@ impl Daemon {
         let first = {
             let mut i = self.lock();
             i.api = Some(api);
-            if let Some(exp) = cfg.expires() {
+            if let Some(exp) = provider.expiry(&cfg) {
                 i.expires = Some(exp);
                 let days = (exp - chrono::Utc::now().timestamp()) / 86400;
                 if days < 45 {
@@ -382,7 +394,10 @@ impl Daemon {
         }
         self.set_status(ipc::STATUS_STARTING, "starting player")
             .await;
-        let eng = match Engine::start(cfg.developer(), &cfg.user_token, &self.version).await {
+        let eng = match match provider.playback(&cfg, &self.version) {
+            Ok(page) => Engine::start(page).await,
+            Err(e) => Err(e),
+        } {
             Ok(e) => e,
             Err(e) => return self.failed(e).await,
         };
@@ -646,6 +661,7 @@ impl Daemon {
                 }
             }
             let next = State {
+                auth: i.state.auth.clone(),
                 status: status.into(),
                 message: msg,
                 expires_in: i.expires_in,
@@ -768,6 +784,11 @@ impl Daemon {
     }
 
     async fn handle(self: &Arc<Self>, conn: u64, r: &Request, reply: &mut Message) -> Result<()> {
+        if r.protocol_version != 0 && r.protocol_version != ipc::PROTOCOL_VERSION {
+            return Err(err(
+                "unsupported socket protocol; update Brumm's daemon and frontends together",
+            ));
+        }
         if matches!(
             r.cmd.as_str(),
             ipc::CMD_PLAY
@@ -797,6 +818,11 @@ impl Daemon {
                 };
                 self.poke();
                 reply.state = Some(st);
+                reply.provider = Some(crate::provider::registry::selection(&Config::load()?));
+                return Ok(());
+            }
+            ipc::CMD_CANCEL_LOGIN => {
+                self.cancel_login().await;
                 return Ok(());
             }
             ipc::CMD_PROVIDER => return self.select_provider(&r.query, reply).await,
@@ -1190,7 +1216,12 @@ impl Daemon {
     /// starts the player if it never ran.
     async fn reload(self: Arc<Self>) {
         let cfg = match Config::load() {
-            Ok(c) if !c.user_token.is_empty() => c,
+            Ok(c)
+                if crate::provider::registry::definition(c.effective_provider())
+                    .is_ok_and(|p| p.signed_in(&c)) =>
+            {
+                c
+            }
             _ => return,
         };
         let api = match new_api(&cfg) {
@@ -1200,13 +1231,22 @@ impl Daemon {
                 return;
             }
         };
+        if let Err(e) = config::migrate_session_cache() {
+            self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
+            return;
+        }
+        self.lib.reload();
         let eng = {
             let mut i = self.lock();
+            i.resume = Resume::load();
+            i.pages.clear();
             i.api = Some(api);
             i.eng.clone()
         };
-        if let Some(eng) = eng
-            && eng.set_user_token(&cfg.user_token).await.is_ok()
+        let page = crate::provider::registry::definition(cfg.effective_provider())
+            .and_then(|p| p.playback(&cfg, &self.version));
+        if let (Some(eng), Ok(page)) = (eng, page)
+            && eng.refresh_session(page).await.is_ok()
         {
             self.spawn_refresh();
             return;

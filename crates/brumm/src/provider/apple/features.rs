@@ -24,6 +24,7 @@ impl Client {
                 return Ok(ExplorePage {
                     title: "Explore".into(),
                     visuals: vec![
+                        feature_link("Recently played", "app:discover:recent"),
                         feature_link("Charts", "app:charts:albums"),
                         feature_link("Music videos", "app:charts:videos"),
                     ],
@@ -40,6 +41,27 @@ impl Client {
                         feature_link("Countries and languages", "/v1/storefronts"),
                     ],
                     info: "Search also finds activities, curators and record labels.".into(),
+                    ..Default::default()
+                });
+            }
+            "app:discover:recent" => {
+                let shelves = self
+                    .home()
+                    .await?
+                    .into_iter()
+                    .filter_map(|mut shelf| {
+                        if shelf.title == "Your music" || shelf.title == "Browse" {
+                            return None;
+                        }
+                        shelf.items.retain(|item| !item.artwork.is_empty());
+                        shelf.items.truncate(6);
+                        shelf.tracks.clear();
+                        (!shelf.items.is_empty()).then_some(shelf)
+                    })
+                    .take(2)
+                    .collect();
+                return Ok(ExplorePage {
+                    shelves,
                     ..Default::default()
                 });
             }

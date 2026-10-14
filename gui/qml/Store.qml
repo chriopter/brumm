@@ -15,14 +15,16 @@ Item {
         providerRequested = true
         daemon.request({ cmd: "provider" }, (err, reply) => {
             if (err) { providerRequested = false; return setFlash(err) }
+            if (reply.provider) configureProvider(reply.provider)
             providers = reply.provider ? reply.provider.choices : []
             providerIndex = Math.max(0, providers.findIndex(p => p.available))
+            if (placing && daemon.connected) askPlace()
         })
     }
     function chooseProvider(id) {
         const provider = providers.find(p => p.id === id)
         if (!provider || !provider.available) return
-        daemon.request({ cmd: "provider", query: id }, (err) => { if (err) setFlash(err) })
+        daemon.request({ cmd: "provider", query: id }, (err, reply) => { if (err) setFlash(err); else if (reply.provider) configureProvider(reply.provider) })
     }
     function providerKey(k) {
         if (k === "Q" || k === "q" || k === "ctrl+c") { Qt.quit(); return }
@@ -71,6 +73,7 @@ Item {
         video = it
     }
     function prototypeFavorite() {
+        if (!(capabilities.favorites)) return
         const it = inspect
         daemon.request(prototypeMode ? { cmd: "preview-favorite", start: it.id, value: it.favorite ? 0 : 1 } : { cmd: "favorite", refs: [{kind: it.kind || "song", id: it.id}] }, (err) => {
             if (err) return setFlash(err)
@@ -96,18 +99,63 @@ Item {
         }
     }
 
-    readonly property var sectionNames: ["Home", "Explore", "Playlists", "Albums", "Artists", "Songs", "Radio", "Search", "Queue"]
-    readonly property var sectionIcons: ["󰋜", "󰭎", "󰲸", "󰀥", "󰠃", "󰎈", "󰐹", "󰍉", "󰐑"]
-    readonly property var sectionLists: ["playlists", "albums", "artists", "songs"]
-    readonly property int secHome: 0
-    readonly property int secExplore: 1
-    readonly property int secPlaylists: 2
-    readonly property int secAlbums: 3
-    readonly property int secArtists: 4
-    readonly property int secSongs: 5
-    readonly property int secSearch: 7
-    readonly property int secQueue: 8
-    readonly property int secRadio: 6
+    property var navigation: utilityNavigation()
+    property var capabilities: ({})
+    property string selectedProvider: ""
+    readonly property string providerName: { const p = providers.find(p => p.id === selectedProvider); return p ? p.name : "music service" }
+    readonly property var sectionNames: navigation.map(e => e.label)
+    readonly property var sectionIcons: navigation.map(e => navigationIcon(e.icon))
+    function utilityNavigation() { return [
+        { id: "search", label: "Search", icon: "search", destination: { kind: "search" } },
+        { id: "queue", label: "Queue", icon: "queue", destination: { kind: "queue" } }
+    ] }
+    function navigationIcon(icon) {
+        return ({home:"󰋜", explore:"󰭎", playlists:"󰲸", albums:"󰀥", artists:"󰠃", songs:"󰎈", radio:"󰐹", search:"󰍉", queue:"󰐑"})[icon] || "󰄨"
+    }
+    function sectionIndex(id) {
+        const i = navigation.findIndex(e => e.id === id || (e.destination.kind === "library" && e.destination.list === id))
+        return Math.max(0, i)
+    }
+    function librarySections() { return navigation.map((e, i) => e.destination.kind === "library" ? i : -1).filter(i => i >= 0) }
+    readonly property int secHome: sectionIndex("home")
+    readonly property int secExplore: sectionIndex("explore")
+    readonly property int secPlaylists: sectionIndex("playlists")
+    readonly property int secAlbums: sectionIndex("albums")
+    readonly property int secArtists: sectionIndex("artists")
+    readonly property int secSongs: sectionIndex("songs")
+    readonly property int secSearch: sectionIndex("search")
+    readonly property int secQueue: sectionIndex("queue")
+    readonly property int secRadio: sectionIndex("radio")
+    function rootView(entry) {
+        const d = entry.destination
+        if (d.kind === "home") return newView(entry.label, "home:")
+        if (d.kind === "library") return newView(entry.label, "list:" + d.list)
+        if (d.kind === "page") return newView(entry.label, entry.id + ":", { kind: "shelf", id: entry.id, name: entry.label, route: d.route, catalog: true })
+        if (d.kind === "container") return newView(entry.label, entry.id + ":", d.item)
+        const v = newView(entry.label, d.kind + ":")
+        v.loaded = d.kind === "search"
+        return v
+    }
+    function configureProvider(info) {
+        if (info.protocolVersion !== 1) return setFlash("Update Brumm's daemon and frontends together")
+        if (!info.navigation || !info.navigation.length) return
+        const previous = navigation
+        const providerChanged = selectedProvider !== info.selected
+        const selected = !providerChanged && navigation[section] ? navigation[section].id : ""
+        const nextStacks = info.navigation.map(entry => {
+            const i = previous.findIndex(e => e.id === entry.id && JSON.stringify(e.destination) === JSON.stringify(entry.destination))
+            if (!providerChanged && i >= 0 && stacks[i]) { stacks[i][0].title = entry.label; return stacks[i] }
+            return [rootView(entry)]
+        })
+        capabilities = info.capabilities || {}
+        providers = info.choices || providers
+        selectedProvider = info.selected || ""
+        navigation = info.navigation
+        stacks = nextStacks
+        section = Math.max(0, navigation.findIndex(e => e.id === selected))
+        if (providerChanged) { rating = {}; pending = null; pendingPlay = null; loginTried = false; resumed = false }
+        refresh()
+    }
     readonly property int queueAfter: 500
 
     // ── what shows ──────────────────────────────────────────────────────
@@ -157,7 +205,7 @@ Item {
     readonly property var menuRows: {
         const rows = []
         if (st.status === "logged-out")
-            rows.push({ act: "L", icon: "󰍂", label: "Sign In to Apple Music…" }, { sep: true })
+            rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
         rows.push({ act: "f", icon: "󰊓", label: "Visualizer" },
                   { act: "F", icon: "󰊓", label: "Full-Screen Visualizer" },
                   { act: "g", icon: "󰆍", label: "Open in Terminal" },
@@ -325,17 +373,7 @@ Item {
     function setFlash(text) { flash = text; flashTimer.restart() }
 
     Component.onCompleted: {
-        const st = []
-        for (let i = 0; i < sectionNames.length; i++) st.push([])
-        st[secHome] = [newView("Home", "home:")]
-        st[secExplore] = [newView("Explore", "explore:", { kind: "shelf", id: "discover", name: "Explore", route: "app:discover", catalog: true })]
-        for (let i = secPlaylists; i <= secSongs; i++)
-            st[i] = [newView(sectionNames[i], "list:" + sectionLists[i - secPlaylists])]
-        st[secSearch] = [newView("Search", "search:")]
-        st[secSearch][0].loaded = true
-        st[secQueue] = [newView("Queue", "queue:")]
-        st[secRadio] = [newView("Radio", "radio:", { kind: "shelf", id: "radio", name: "Radio", catalog: true })]
-        stacks = st
+        stacks = navigation.map(rootView)
         const f = parseFloat(sys.setting("split", 0.4))
         if (f >= 0.08 && f <= 0.7) split = f
         refresh()
@@ -348,7 +386,7 @@ Item {
         if (updateAsked) return
         updateAsked = true
         daemon.send({ cmd: "update" }) // look for an update on every start
-        askPlace()
+        askProviders()
     }
 
     function newView(title, key, item) {
@@ -363,6 +401,7 @@ Item {
     function refresh() {
         artwork = stageArtwork()
         const v = cur()
+        if (!v) return
         view = v
         if (rows !== v.rows) rows = v.rows
         sel = v.sel
@@ -402,7 +441,7 @@ Item {
                 return
             }
             fill(v, reply)
-            if (v.item && v.item.route === "app:discover") loadExploreVisuals(v, reply)
+            if (reply.explorer && (reply.explorer.visuals || []).length) loadExploreVisuals(v, reply)
             if (v.want) { selectSong(v, v.want); v.want = "" }
             fetchRatings(v)
             warm(v)
@@ -413,32 +452,26 @@ Item {
 
     function loadExploreVisuals(v, initial) {
         const page = initial.explorer || initial
-        const links = (page.items || []).concat((page.shelves || []).reduce((all, sh) => all.concat(sh.items || []), []))
-        const groups = [[], [], []]
+        const groups = (page.visuals || []).map(() => [])
         const generation = (v.exploreGeneration || 0) + 1
         v.exploreGeneration = generation
         function render() {
             if (v.exploreGeneration !== generation) return
             const selected = v.rows[v.sel]
             const selectedKey = selected ? (selected.track ? "track:" + selected.track.id : selected.item ? itemKey(selected.item) : "") : ""
-            fill(v, { explorer: { title: "Explore", shelves: groups.reduce((all, group) => all.concat(group), []).concat([{ title: "Browse", items: links }]) } })
+            fill(v, { explorer: Object.assign({}, page, { visuals: [], items: [], shelves: groups.reduce((all, group) => all.concat(group), []).concat(page.shelves || []).concat((page.items || []).length ? [{ title: "Browse", items: page.items }] : []) }) })
             if (selectedKey) {
                 const index = v.rows.findIndex(r => (r.track ? "track:" + r.track.id : r.item ? itemKey(r.item) : "") === selectedKey)
                 if (index >= 0) v.sel = index
             }
             if (v === cur()) refresh()
         }
-        daemon.request({ cmd: "home" }, (err, reply) => {
-            if (err) return
-            groups[0] = (reply.shelves || []).filter(sh => sh.title !== "Your music" && sh.title !== "Browse" && (sh.items || []).some(it => it.artwork)).slice(0, 2).map(sh => Object.assign({}, sh, { items: sh.items.filter(it => it.artwork).slice(0, 6), tracks: [] }))
-            render()
-        })
-        for (const [i, link] of (page.visuals || []).slice(0, 2).entries()) {
+        for (const [i, link] of (page.visuals || []).entries()) {
             daemon.request({ cmd: "explore", query: link.route }, (err, reply) => {
                 if (err || !reply.explorer) return
                 const p = reply.explorer
-                groups[i + 1] = (p.shelves || []).map(sh => Object.assign({}, sh, { items: (sh.items || []).slice(0, 6), tracks: (sh.tracks || []).slice(0, 6), route: sh.route || link.route }))
-                if ((p.items || []).length) groups[i + 1].push({ title: link.name, items: p.items.slice(0, 6), route: link.route })
+                groups[i] = (p.shelves || []).map(sh => Object.assign({}, sh, { items: (sh.items || []).slice(0, 6), tracks: (sh.tracks || []).slice(0, 6), route: sh.route || link.route }))
+                if ((p.items || []).length) groups[i].push({ title: link.name, items: p.items.slice(0, 6), route: link.route })
                 render()
             })
         }
@@ -516,7 +549,7 @@ Item {
         for (const r of v.rows) {
             if (refs.length >= 1000) break
             if (r.track) refs.push({ kind: "song", id: r.track.id })
-            else if (r.item && ["album", "playlist", "station"].includes(r.item.kind)) refs.push({ kind: r.item.kind, id: r.item.id })
+            else if (r.item && (capabilities.ratingKinds || []).includes(r.item.kind)) refs.push({ kind: r.item.kind, id: r.item.id })
         }
         if (!refs.length) return
         daemon.request({ cmd: "ratings", refs: refs }, (err, reply) => {
@@ -530,9 +563,11 @@ Item {
 
     Connections {
         target: daemon
+        ignoreUnknownSignals: true
+        function onProviderChanged(info) { s.configureProvider(info) }
         function onState(state) { s.gotState(state) }
         function onLibrary() {
-            for (let i = s.secPlaylists; i <= s.secSongs; i++)
+            for (const i of s.librarySections())
                 for (const v of s.stacks[i]) {
                     if (i === s.section) s.load(v)
                     else v.loaded = false
@@ -540,7 +575,7 @@ Item {
         }
         function onConnectedChanged() {
             if (!daemon.connected) s.st = Object.assign({}, s.st, { status: "starting", message: "connecting to brumm…" })
-            else s.started()
+            else { s.providerRequested = false; s.updateAsked = false; s.started() }
         }
     }
 
@@ -759,7 +794,7 @@ Item {
 
     function here() {
         const v = cur(), r = v.rows[v.sel]
-        return { section: section, sectionName: sectionNames[section], playerView: playerView, query: query,
+        return { section: section, sectionId: navigation[section].id, sectionName: sectionNames[section], playerView: playerView, query: query,
                  views: stack().slice(1).filter(x => x.item).map(x => ({ key: x.key, title: x.title, item: x.item })),
                  sel: { id: r ? (r.track ? r.track.id : r.item ? r.item.id : "") : "", index: v.sel } }
     }
@@ -778,7 +813,8 @@ Item {
     }
 
     function goPlace(p) {
-        const named = sectionNames.indexOf(p.sectionName || "")
+        const stable = navigation.findIndex(e => e.id === p.sectionId)
+        const named = stable >= 0 ? stable : sectionNames.indexOf(p.sectionName || "")
         const sec = named >= 0 ? named : Math.max(0, Math.min(p.section | 0, sectionNames.length - 1))
         playerView = !!p.playerView
         query = p.query || ""
@@ -806,6 +842,7 @@ Item {
     // ── navigation ──────────────────────────────────────────────────────
 
     function switchTo(i) {
+        if (i < 0 || i >= navigation.length) return
         playerView = false
         const sameSection = i === section
         section = i
@@ -900,7 +937,7 @@ Item {
             const i = v.rows.findIndex(r => r.track && r.track.id === id)
             if (i >= 0) v.sel = i
         }
-        for (let i = secHome; i < sectionNames.length; i++) {
+        for (let i = 0; i < sectionNames.length; i++) {
             const at = stacks[i].findIndex(v => v.key === src)
             if (at >= 0) {
                 section = i
@@ -911,7 +948,7 @@ Item {
                 return
             }
         }
-        for (let i = secPlaylists; i <= secArtists; i++) {
+        for (const i of librarySections()) {
             const r = stacks[i][0].rows.find(r => r.item && itemKey(r.item) === src)
             if (r) {
                 section = i
@@ -1192,6 +1229,7 @@ Item {
     }
 
     function playStation() {
+        if (!(capabilities.stations)) return
         const r = cur().rows[cur().sel]
         if (r && r.track) return startStation({ cmd: "station", start: r.track.id })
         if (r && r.item && (r.item.kind === "station" || r.item.kind === "artist")) return startStation({ cmd: "station", item: r.item })
@@ -1228,6 +1266,7 @@ Item {
     // the song playing, whatever the list has selected.
     function playingRow() { return st.id && !st.preview ? { track: { id: st.id, title: st.title, artist: st.artist, album: st.album } } : null }
     function ratePlaying(value) {
+        if (!(capabilities.ratings && (value !== -1 || capabilities.dislike))) return
         if (!st.id || st.preview) return
         if (rating[st.id] === value) value = 0
         if (value === 0) delete rating[st.id]
@@ -1237,6 +1276,7 @@ Item {
         daemon.send({ cmd: "rate", refs: [{ kind: "song", id: st.id }], value: value })
     }
     function pickPlaying() {
+        if (!(capabilities.playlistWrite)) return
         const r = playingRow()
         if (!r) return
         pick = { what: r, name: st.title, lists: [], loading: true, sel: 0, naming: false, input: "" }
@@ -1247,11 +1287,11 @@ Item {
         })
     }
     function libraryPlaying() {
+        if (!(capabilities.collectionWrite)) return
         if (!st.id || st.preview) return
-        if (st.id.startsWith("i.")) return setFlash(st.title + " is already in your library")
         daemon.request({ cmd: "add", list: "songs", ids: [st.id] }, err => setFlash(err ? err : "added " + st.title + " to your library"))
     }
-    function radioPlaying() { if (st.id) startStation({ cmd: "station", start: st.id }) }
+    function radioPlaying() { if (capabilities.stations && st.id) startStation({ cmd: "station", start: st.id }) }
     function linkPlaying() {
         if (!st.id) return
         daemon.request({ cmd: "link", start: st.id }, (err, reply) => {
@@ -1264,12 +1304,13 @@ Item {
     function rateable() {
         const r = cur().rows[cur().sel]
         if (r && r.track) return { ref: { kind: "song", id: r.track.id }, name: r.track.title }
-        if (r && r.item && ["album", "playlist", "station"].includes(r.item.kind)) return { ref: { kind: r.item.kind, id: r.item.id }, name: r.item.name }
+        if (r && r.item && (capabilities.ratingKinds || []).includes(r.item.kind)) return { ref: { kind: r.item.kind, id: r.item.id }, name: r.item.name }
         if (st.id && !st.preview) return { ref: { kind: "song", id: st.id }, name: st.title }
         return null
     }
 
     function rate(value) {
+        if (!(capabilities.ratings && (value !== -1 || capabilities.dislike))) return
         const it = rateable()
         if (!it) return
         if (rating[it.ref.id] === value) value = 0
@@ -1281,16 +1322,16 @@ Item {
     }
 
     function addToLibrary() {
+        if (!(capabilities.collectionWrite)) return
         const r = cur().rows[cur().sel]
         let kind, id, name
         if (r && r.track) { kind = "songs"; id = r.track.id; name = r.track.title }
         else if (r && r.item) {
-            if (r.item.kind === "artist") return setFlash("artists cannot be added; add one of their albums")
+            if (!(capabilities.collectionKinds || []).includes(r.item.kind)) return setFlash("This resource cannot be added to your library")
             if (!r.item.catalog) return setFlash(r.item.name + " is already in your library")
             kind = r.item.kind + "s"; id = r.item.id; name = r.item.name
         } else if (st.id) { kind = "songs"; id = st.id; name = st.title }
         else return
-        if (id.startsWith("i.")) return setFlash(name + " is already in your library")
         daemon.request({ cmd: "add", list: kind, ids: [id] }, err => setFlash(err ? err : "added " + name + " to your library"))
     }
 
@@ -1307,6 +1348,7 @@ Item {
     // ── add to playlist ─────────────────────────────────────────────────
 
     function openPicker() {
+        if (!(capabilities.playlistWrite)) return
         const r = cur().rows[cur().sel]
         let what, name
         if (r && r.track) { what = r; name = r.track.title }
@@ -1425,7 +1467,7 @@ Item {
     }
 
     function signIn() {
-        setFlash("opening the Apple Music sign-in in your browser…")
+        setFlash("opening sign-in in your browser…")
         daemon.send({ cmd: "login" })
     }
 
@@ -1510,6 +1552,7 @@ Item {
     }
 
     function key(k) {
+        if (st.auth && k === "esc") { daemon.send({cmd:"cancel-login"}); return }
         if (providerChoiceNeeded) return providerKey(k)
 
         if (typesSearch(k)) {

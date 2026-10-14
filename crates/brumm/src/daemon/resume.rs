@@ -35,7 +35,7 @@ pub struct Resume {
 }
 
 fn path() -> PathBuf {
-    config::cache_dir().join("resume.json")
+    config::session_cache_dir().join("resume.json")
 }
 
 impl Resume {
@@ -50,7 +50,7 @@ impl Resume {
         let Ok(b) = serde_json::to_vec(self) else {
             return;
         };
-        if std::fs::create_dir_all(config::cache_dir()).is_ok() {
+        if std::fs::create_dir_all(config::session_cache_dir()).is_ok() {
             let _ = config::write_private(&path(), &b);
         }
     }
