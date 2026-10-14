@@ -126,4 +126,15 @@ TestCase {
         verify(store.flash.includes("daemon and frontends"))
     }
 
+    function test_newSessionClearsDataForTheSameProvider() {
+        store.configureProvider({selected:"apple", generation:1, protocolVersion:1, navigation:appleNavigation, capabilities:appleCapabilities})
+        store.st = {status:"ready", title:"Old session"}
+        store.recent = [{id:"old-track"}]
+        store.upNext = [{id:"old-next"}]
+        store.configureProvider({selected:"apple", generation:2, protocolVersion:1, navigation:appleNavigation, capabilities:appleCapabilities})
+        compare(store.st.title, undefined)
+        compare(store.recent.length, 0)
+        compare(store.upNext.length, 0)
+    }
+
 }

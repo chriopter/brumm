@@ -13,6 +13,8 @@ pub struct ProviderInfo {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Selection {
     #[serde(default)]
+    pub generation: i64,
+    #[serde(default)]
     pub navigation: Vec<super::session::NavigationEntry>,
     #[serde(default)]
     pub capabilities: super::session::Capabilities,
@@ -46,6 +48,7 @@ pub fn validate(id: &str) -> Result<()> {
 }
 pub fn selection(cfg: &Config) -> Selection {
     Selection {
+        generation: 0,
         navigation: definition(cfg.effective_provider())
             .map(|p| super::session::navigation(p.navigation()))
             .unwrap_or_else(|_| super::session::navigation(vec![])),

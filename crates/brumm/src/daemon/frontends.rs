@@ -20,7 +20,7 @@ static OPTIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PLACE: Mutex<Option<Value>> = Mutex::new(None);
 
 /// One provider selection at a time.
-static PROVIDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static PROVIDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// One sign-in page at a time.
 static LOGIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -46,14 +46,80 @@ impl Daemon {
         reply: &mut Message,
     ) -> Result<()> {
         let _one = PROVIDER.lock().await;
-        let mut cfg = crate::config::Config::load()?;
+        let cfg = crate::config::Config::load()?;
         if !id.is_empty() {
             crate::provider::registry::validate(id)?;
-            cfg.provider = id.into();
-            cfg.save()?;
-            self.spawn_boot();
+            if id != cfg.effective_provider() {
+                self.cancel_login().await;
+                let _exclusive = self.session.advance().await;
+                crate::config::Config::update(|cfg| {
+                    cfg.provider = id.into();
+                    Ok(())
+                })?;
+                self.install_session().await?;
+            }
         }
-        reply.provider = Some(crate::provider::registry::selection(&cfg));
+        reply.provider = Some(self.provider_selection(&crate::config::Config::load()?));
+        Ok(())
+    }
+
+    /// Called under the transition write lease, after outgoing commands finish.
+    pub(super) async fn install_session(self: &Arc<Self>) -> Result<()> {
+        static PLACES: std::sync::LazyLock<
+            Mutex<std::collections::HashMap<std::path::PathBuf, Option<Value>>>,
+        > = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+        let old_key = self.lib.namespace();
+        let cfg = crate::config::Config::load()?;
+        let authenticated =
+            crate::provider::registry::definition(cfg.effective_provider())?.signed_in(&cfg);
+        let (engine, had_session) = {
+            let mut inner = self.lock();
+            if let Some(resume) = inner.resume.as_mut() {
+                resume.save();
+            }
+            let old = std::mem::take(&mut *inner);
+            inner.conns = old.conns;
+            inner.update = old.update;
+            inner.installed = old.installed;
+            inner.state.status = crate::ipc::STATUS_STARTING.into();
+            inner.active = Some(std::time::Instant::now());
+            if let Some(task) = old.login_task {
+                task.abort();
+            }
+            (old.eng, old.api.is_some())
+        };
+        if let Some(engine) = engine {
+            engine.close().await;
+        }
+        if had_session {
+            self.lib.save()?;
+        }
+        crate::config::migrate_session_cache()?;
+        if authenticated {
+            self.lib.reload();
+        } else {
+            self.lib.clear();
+        }
+        {
+            let mut places = PLACES.lock().unwrap();
+            let mut current = PLACE.lock().unwrap();
+            places.insert(old_key, current.take());
+            *current = places.get(&self.lib.namespace()).cloned().flatten();
+        }
+        if authenticated {
+            self.lock().resume = super::Resume::load().map(|mut r| {
+                r.autoplay = false;
+                r
+            });
+        }
+        let state = self.lock().state.clone();
+        self.broadcast(Message {
+            provider: Some(self.provider_selection(&cfg)),
+            state: Some(state),
+            ..Default::default()
+        })
+        .await;
+        self.spawn_boot();
         Ok(())
     }
 
@@ -98,10 +164,14 @@ impl Daemon {
     /// the new session.
     pub(super) fn login(self: &Arc<Self>) {
         let Ok(guard) = LOGIN.try_lock() else { return }; // the page is open already
+        let generation = self.session.current();
         let d = self.clone();
         let report = {
             let d = d.clone();
             Arc::new(move |event| {
+                if d.session.current() != generation {
+                    return;
+                }
                 let state = {
                     let mut i = d.lock();
                     match event {
@@ -112,24 +182,38 @@ impl Daemon {
                 };
                 let d = d.clone();
                 tokio::spawn(async move {
-                    d.broadcast(Message {
-                        state: Some(state),
-                        ..Default::default()
-                    })
-                    .await;
+                    if let Ok(_lease) = d.session.read(generation).await {
+                        d.broadcast(Message {
+                            generation,
+                            state: Some(state),
+                            ..Default::default()
+                        })
+                        .await;
+                    }
                 });
             })
         };
+        let (start, started) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let _guard = guard;
-            let result = login::run_with_report(report).await;
+            if started.await.is_err() {
+                return;
+            }
+            let mut changed = d.session.subscribe();
+            let Ok(lease) = d.session.read(generation).await else {
+                return;
+            };
+            let result = tokio::select! { r = login::run_with_report(report) => r, _ = changed.changed() => return };
             {
                 let mut i = d.lock();
                 i.state.auth = None;
                 i.login_task = None;
             }
             match result {
-                Ok(()) => d.reload().await,
+                Ok(()) => {
+                    drop(lease);
+                    d.reload_for(generation).await;
+                }
                 Err(e) => {
                     eprintln!("login: {e}");
                     // The players say what went wrong: the report carries it.
@@ -147,6 +231,7 @@ impl Daemon {
             }
         });
         self.lock().login_task = Some(task.abort_handle());
+        let _ = start.send(());
     }
 
     pub(super) async fn cancel_login(&self) {

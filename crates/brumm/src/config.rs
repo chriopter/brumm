@@ -61,10 +61,14 @@ pub fn cache_dir() -> PathBuf {
 /// Account-derived browse and resume data is isolated from the selected service.
 pub fn session_cache_dir() -> PathBuf {
     let cfg = Config::load().unwrap_or_default();
+    session_cache_dir_for(&cfg)
+}
+
+pub fn session_cache_dir_for(cfg: &Config) -> PathBuf {
     match crate::provider::registry::definition(cfg.effective_provider()) {
-        Ok(provider) if provider.signed_in(&cfg) => cache_dir()
+        Ok(provider) if provider.signed_in(cfg) => cache_dir()
             .join(provider.id())
-            .join(provider.account_key(&cfg)),
+            .join(provider.account_key(cfg)),
         _ => cache_dir(),
     }
 }
@@ -72,6 +76,10 @@ pub fn session_cache_dir() -> PathBuf {
 /// Import the original Apple cache once, leaving it available to the old build.
 pub fn migrate_session_cache() -> Result<()> {
     let cfg = Config::load()?;
+    // These files predate providers and contain Apple IDs exclusively.
+    if cfg.effective_provider() != "apple" {
+        return Ok(());
+    }
     let provider = match crate::provider::registry::definition(cfg.effective_provider()) {
         Ok(p) if p.signed_in(&cfg) => p,
         _ => return Ok(()),
@@ -140,6 +148,16 @@ fn config_path() -> PathBuf {
 }
 
 impl Config {
+    /// Read-modify-write without overwriting another task's refreshed credentials
+    /// or selection. The closure must perform only short, synchronous work.
+    pub fn update<T>(change: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
+        static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Self::load()?;
+        let result = change(&mut cfg)?;
+        cfg.save()?;
+        Ok(result)
+    }
     pub fn effective_provider(&self) -> &str {
         if self.provider.is_empty() && !self.user_token.is_empty() {
             "apple"

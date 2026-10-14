@@ -101,6 +101,7 @@ Item {
 
     property var navigation: utilityNavigation()
     property var capabilities: ({})
+    property double providerGeneration: 0
     property string selectedProvider: ""
     readonly property string providerName: { const p = providers.find(p => p.id === selectedProvider); return p ? p.name : "music service" }
     readonly property var sectionNames: navigation.map(e => e.label)
@@ -140,7 +141,7 @@ Item {
         if (info.protocolVersion !== 1) return setFlash("Update Brumm's daemon and frontends together")
         if (!info.navigation || !info.navigation.length) return
         const previous = navigation
-        const providerChanged = selectedProvider !== info.selected
+        const providerChanged = selectedProvider !== info.selected || providerGeneration !== (info.generation || 0)
         const selected = !providerChanged && navigation[section] ? navigation[section].id : ""
         const nextStacks = info.navigation.map(entry => {
             const i = previous.findIndex(e => e.id === entry.id && JSON.stringify(e.destination) === JSON.stringify(entry.destination))
@@ -150,10 +151,15 @@ Item {
         capabilities = info.capabilities || {}
         providers = info.choices || providers
         selectedProvider = info.selected || ""
+        providerGeneration = info.generation || 0
         navigation = info.navigation
         stacks = nextStacks
         section = Math.max(0, navigation.findIndex(e => e.id === selected))
-        if (providerChanged) { rating = {}; pending = null; pendingPlay = null; loginTried = false; resumed = false }
+        if (providerChanged) {
+            st = { status: "starting" }; rating = {}; pending = null; pendingPlay = null
+            upNext = []; recent = []; artwork = ""; artKey = ""; nextFor = ""
+            inspect = null; video = null; loginTried = false; resumed = false
+        }
         refresh()
     }
     readonly property int queueAfter: 500

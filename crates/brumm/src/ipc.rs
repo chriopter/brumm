@@ -114,6 +114,19 @@ pub const LIST_ALBUMS: &str = "albums";
 pub const LIST_ARTISTS: &str = "artists";
 pub const LIST_SONGS: &str = "songs";
 
+pub fn session_free(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        CMD_SUBSCRIBE
+            | CMD_PROVIDER
+            | CMD_OPTIONS
+            | CMD_UPDATE
+            | CMD_QUIT
+            | CMD_SHOW
+            | CMD_FEEDBACK
+    )
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -134,6 +147,8 @@ fn some_value<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<Val
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Request {
+    #[serde(skip_serializing_if = "is_zero_i")]
+    pub generation: i64,
     #[serde(rename = "protocolVersion", skip_serializing_if = "is_zero_i")]
     pub protocol_version: i64,
     pub id: i64,
@@ -253,6 +268,8 @@ pub struct State {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Message {
+    #[serde(skip_serializing_if = "is_zero_i")]
+    pub generation: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<crate::provider::registry::Selection>,
     #[serde(skip_serializing_if = "is_zero_i")]
@@ -363,6 +380,7 @@ pub struct Client {
     writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
     next: Arc<AtomicI64>,
     pending: Pending,
+    generation: Arc<AtomicI64>,
 }
 
 impl Client {
@@ -384,13 +402,40 @@ impl Client {
         let pending: Pending = Arc::new(Mutex::new(Some(HashMap::new())));
         let (tx, rx) = mpsc::channel(256);
         let p = pending.clone();
+        let generation = Arc::new(AtomicI64::new(0));
+        let active = generation.clone();
         tokio::spawn(async move {
             let mut r = BufReader::with_capacity(64 << 10, r);
             let mut line = Vec::new();
             while let Ok(true) = read_line(&mut r, &mut line, MAX_LINE).await {
-                let Ok(m) = serde_json::from_slice::<Message>(&line) else {
+                let Ok(mut m) = serde_json::from_slice::<Message>(&line) else {
                     continue;
                 };
+                if let Some(provider) = &m.provider {
+                    // Ignore an older provider reply racing a newer transition push.
+                    if provider.generation != 0
+                        && provider.generation < active.load(Ordering::Acquire)
+                    {
+                        m = Message {
+                            id: m.id,
+                            error: "the music provider session changed; try again".into(),
+                            ..Default::default()
+                        };
+                    } else {
+                        active.store(provider.generation, Ordering::Release);
+                    }
+                }
+                let current = active.load(Ordering::Acquire);
+                if m.generation != 0 && current != 0 && m.generation != current {
+                    if m.id == 0 {
+                        continue;
+                    }
+                    m = Message {
+                        id: m.id,
+                        error: "the music provider session changed; try again".into(),
+                        ..Default::default()
+                    };
+                }
                 if m.id != 0 {
                     let ch = p.lock().unwrap().as_mut().and_then(|w| w.remove(&m.id));
                     if let Some(ch) = ch {
@@ -411,6 +456,7 @@ impl Client {
                 writer: Arc::new(tokio::sync::Mutex::new(w)),
                 next: Arc::new(AtomicI64::new(0)),
                 pending,
+                generation,
             },
             rx,
         )
@@ -420,6 +466,9 @@ impl Client {
     /// error is that error.
     pub async fn request(&self, mut r: Request) -> Result<Message> {
         r.protocol_version = PROTOCOL_VERSION;
+        if r.generation == 0 {
+            r.generation = self.generation();
+        }
         r.id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         match self.pending.lock().unwrap().as_mut() {
@@ -438,6 +487,10 @@ impl Client {
             return Err(Error::Msg(m.error));
         }
         Ok(m)
+    }
+
+    pub fn generation(&self) -> i64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     /// Ends the connection.
@@ -560,5 +613,51 @@ mod tests {
             .await
             .unwrap();
         assert!(late.is_err());
+    }
+    #[tokio::test]
+    async fn old_replies_after_a_switch_fail_the_waiter_without_leaking_data() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let server = tokio::spawn(async move {
+            let (r, mut w) = b.into_split();
+            let mut provider = crate::provider::registry::selection(&config::Config::default());
+            provider.generation = 1;
+            w.write_all(&encode(&Message {
+                provider: Some(provider.clone()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            let mut r = BufReader::new(r);
+            let mut line = Vec::new();
+            read_line(&mut r, &mut line, MAX_LINE).await.unwrap();
+            let req: Request = serde_json::from_slice(&line).unwrap();
+            assert_eq!(req.generation, 1);
+            provider.generation = 2;
+            w.write_all(&encode(&Message {
+                provider: Some(provider),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            w.write_all(&encode(&Message {
+                id: req.id,
+                generation: 1,
+                link: "old-account-data".into(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        });
+        let (client, mut events) = Client::new(a);
+        events.recv().await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.request(Request::new(CMD_LINK)),
+        )
+        .await
+        .unwrap();
+        assert!(result.unwrap_err().to_string().contains("session changed"));
+        assert_eq!(client.generation(), 2);
+        server.await.unwrap();
     }
 }

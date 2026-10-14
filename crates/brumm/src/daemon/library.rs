@@ -23,9 +23,18 @@ struct Data {
     tracks: HashMap<String, Vec<Track>>,
 }
 
-#[derive(Default)]
 pub struct Library {
     data: Mutex<Data>,
+    path: Mutex<PathBuf>,
+}
+
+impl Default for Library {
+    fn default() -> Self {
+        Self {
+            data: Mutex::new(Data::default()),
+            path: Mutex::new(path()),
+        }
+    }
 }
 
 fn path() -> PathBuf {
@@ -33,23 +42,40 @@ fn path() -> PathBuf {
 }
 
 impl Library {
+    pub fn namespace(&self) -> PathBuf {
+        self.path
+            .lock()
+            .unwrap()
+            .parent()
+            .expect("library parent")
+            .to_owned()
+    }
+    pub fn clear(&self) {
+        *self.data.lock().unwrap() = Data::default();
+        *self.path.lock().unwrap() = path();
+    }
     pub fn reload(&self) {
-        *self.data.lock().unwrap() = Self::load().data.into_inner().unwrap();
+        let loaded = Self::load();
+        *self.data.lock().unwrap() = loaded.data.into_inner().unwrap();
+        *self.path.lock().unwrap() = loaded.path.into_inner().unwrap();
     }
     pub fn load() -> Library {
-        let data = std::fs::read(path())
+        let path = path();
+        let data = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         Library {
             data: Mutex::new(data),
+            path: Mutex::new(path),
         }
     }
 
     pub fn save(&self) -> Result<()> {
         let b = serde_json::to_vec(&*self.data.lock().unwrap())?;
-        std::fs::create_dir_all(config::session_cache_dir())?;
-        config::write_private(&path(), &b)?;
+        let path = self.path.lock().unwrap();
+        std::fs::create_dir_all(path.parent().expect("library parent"))?;
+        config::write_private(&path, &b)?;
         Ok(())
     }
 
@@ -75,6 +101,37 @@ mod tests {
     use super::*;
     use crate::config::testenv;
     use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn a_cache_keeps_its_account_path_after_selection_changes() {
+        let Some(_env) = testenv::isolated() else {
+            return;
+        };
+        let mut cfg = config::Config {
+            provider: "apple".into(),
+            user_token: "account-a".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        let old = Library::load();
+        old.set_items(
+            "albums",
+            vec![Item {
+                id: "only-a".into(),
+                ..Default::default()
+            }],
+        );
+        cfg.user_token = "account-b".into();
+        cfg.save().unwrap();
+        old.save().unwrap();
+        assert!(
+            Library::load().items("albums").is_none(),
+            "late writes must not enter account B"
+        );
+        cfg.user_token = "account-a".into();
+        cfg.save().unwrap();
+        assert_eq!(Library::load().items("albums").unwrap()[0].id, "only-a");
+    }
 
     #[test]
     fn cache_persists_privately() {

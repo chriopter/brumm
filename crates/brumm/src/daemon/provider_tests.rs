@@ -8,6 +8,36 @@ fn daemon(failure: Option<Error>) -> Arc<Daemon> {
 }
 
 #[tokio::test]
+async fn requests_from_an_old_session_never_reach_the_new_provider() {
+    let d = daemon(None);
+    let old = d.session.current();
+    {
+        let _exclusive = d.session.advance().await;
+    }
+    for cmd in [
+        ipc::CMD_SEARCH,
+        ipc::CMD_FAVORITE,
+        ipc::CMD_PLAYLIST,
+        ipc::CMD_PLACE,
+    ] {
+        let r = Request {
+            generation: old,
+            cmd: cmd.into(),
+            ..Default::default()
+        };
+        let mut reply = Message::default();
+        assert!(
+            d.handle(0, &r, &mut reply)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("session changed")
+        );
+        assert!(reply.items.is_empty() && reply.shelves.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn ipc_requests_use_the_injected_provider() {
     let d = daemon(None);
     let requests = [

@@ -11,7 +11,7 @@ use crate::engine::Engine;
 use crate::error::Result;
 use crate::ipc::Player;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Resume {
     pub ids: Vec<String>,
@@ -32,6 +32,28 @@ pub struct Resume {
     pub autoplay: bool,
     #[serde(skip)]
     pub(super) saved_at: Option<Instant>,
+    #[serde(skip)]
+    pub(super) path: Option<PathBuf>,
+}
+
+impl Default for Resume {
+    fn default() -> Self {
+        Self {
+            ids: vec![],
+            station: String::new(),
+            source: String::new(),
+            id: String::new(),
+            pos: 0.0,
+            dur: 0.0,
+            title: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            artwork: String::new(),
+            autoplay: false,
+            saved_at: None,
+            path: Some(path()),
+        }
+    }
 }
 
 fn path() -> PathBuf {
@@ -40,18 +62,21 @@ fn path() -> PathBuf {
 
 impl Resume {
     pub fn load() -> Option<Resume> {
-        let b = std::fs::read(path()).ok()?;
-        let r: Resume = serde_json::from_slice(&b).ok()?;
+        let path = path();
+        let b = std::fs::read(&path).ok()?;
+        let mut r: Resume = serde_json::from_slice(&b).ok()?;
+        r.path = Some(path);
         r.playable().then_some(r)
     }
 
     pub fn save(&mut self) {
+        let path = self.path.get_or_insert_with(path).clone();
         self.saved_at = Some(Instant::now());
         let Ok(b) = serde_json::to_vec(self) else {
             return;
         };
-        if std::fs::create_dir_all(config::session_cache_dir()).is_ok() {
-            let _ = config::write_private(&path(), &b);
+        if std::fs::create_dir_all(path.parent().expect("resume parent")).is_ok() {
+            let _ = config::write_private(&path, &b);
         }
     }
 

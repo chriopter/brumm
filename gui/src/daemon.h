@@ -69,6 +69,7 @@ private:
     QTimer m_retry;
     QByteArray m_buf;
     int m_next = 0;
+    qint64 m_generation = 0;
     QHash<int, QJSValue> m_pending;
     QJSEngine *m_engine = nullptr;
     QVariantMap m_options;

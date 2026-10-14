@@ -246,6 +246,7 @@ pub enum Cmd {
 }
 
 pub enum Msg {
+    Session(i64, Box<Msg>),
     Key(Key),
     Mouse(Mouse),
     Resize(u16, u16),
@@ -390,6 +391,7 @@ pub struct Model {
     pub navigation: Vec<crate::provider::session::NavigationEntry>,
     pub capabilities: crate::provider::session::Capabilities,
     pub provider_name: String,
+    pub provider_generation: i64,
     next_view: u64,
 
     /// The search box has focus.
@@ -697,6 +699,7 @@ impl Model {
             navigation: Vec::new(),
             capabilities: Default::default(),
             provider_name: "music service".into(),
+            provider_generation: 0,
             next_view: 0,
             searching: false,
             query: String::new(),
@@ -808,7 +811,18 @@ impl Model {
     // ── commands ────────────────────────────────────────────────────────
 
     pub fn task(&mut self, f: impl Future<Output = Option<Msg>> + Send + 'static) {
-        self.cmds.push(Cmd::Task(Box::pin(f)));
+        let generation = self.client.as_ref().map(Client::generation).unwrap_or(0);
+        self.cmds.push(Cmd::Task(Box::pin(async move {
+            let msg = f.await?;
+            if matches!(
+                &msg,
+                Msg::ProviderChoices(_) | Msg::Connected(_) | Msg::Closed | Msg::Event(_)
+            ) {
+                Some(msg)
+            } else {
+                Some(Msg::Session(generation, Box::new(msg)))
+            }
+        })));
     }
 
     pub fn after(&mut self, d: Duration, m: Msg) {
@@ -1262,21 +1276,21 @@ impl Model {
 
     fn update_inner(&mut self, msg: Msg) {
         match msg {
+            Msg::Session(generation, msg) => {
+                if generation == self.client.as_ref().map(Client::generation).unwrap_or(0) {
+                    self.update_inner(*msg);
+                }
+            }
             Msg::ProviderChoices(reply) => match reply {
                 Ok(info) => {
                     if info.protocol_version != 1 {
                         self.set_flash("Update Brumm's daemon and frontends together");
                         return;
                     }
-                    self.provider_name = info
-                        .choices
-                        .iter()
-                        .find(|p| p.id == info.selected)
-                        .map(|p| p.name.clone())
-                        .unwrap_or_else(|| "music service".into());
-                    self.capabilities = info.capabilities;
-                    self.configure_navigation(info.navigation);
-                    self.provider_choices = info.choices;
+                    self.event(Message {
+                        provider: Some(info),
+                        ..Default::default()
+                    });
                     self.provider_index = self
                         .provider_choices
                         .iter()
@@ -1533,7 +1547,38 @@ impl Model {
     }
 
     pub fn event(&mut self, msg: Message) {
+        if msg.generation != 0
+            && self
+                .client
+                .as_ref()
+                .is_some_and(|c| c.generation() != msg.generation)
+        {
+            return;
+        }
         if let Some(info) = msg.provider {
+            if info.generation != 0
+                && self
+                    .client
+                    .as_ref()
+                    .is_some_and(|c| c.generation() > info.generation)
+            {
+                return;
+            }
+            if self.provider_generation != info.generation {
+                self.provider_generation = info.generation;
+                self.navigation.clear();
+                self.stacks.clear();
+                self.section = 0;
+                self.rating.clear();
+                self.pending = None;
+                self.want_play = None;
+                self.state = State::default();
+                self.cover = None;
+                self.cover_url.clear();
+                self.spec.clear();
+                self.resumed = false;
+                self.next_gen += 1;
+            }
             if info.protocol_version != 1 {
                 self.set_flash("Update Brumm's daemon and frontends together");
                 return;

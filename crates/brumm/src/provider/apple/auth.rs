@@ -94,7 +94,7 @@ async fn answer(
 /// Opens the login page and waits until a token arrives (five minutes at
 /// most). The token is saved to the config.
 pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
-    let mut cfg = Config::load()?;
+    let cfg = Config::load()?;
     let status = |text: &str| report(crate::provider::session::AuthEvent::Progress(text.into()));
     if cfg.developer().is_empty() {
         return Err(err("no Apple Music developer token in this build"));
@@ -157,12 +157,13 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
     match got {
         Ok(Some(tok)) => {
             // Retain options/configuration changed while the browser was open.
-            cfg = Config::load()?;
-            if cfg.effective_provider() != "apple" {
-                return Err(err("provider changed during sign-in"));
-            }
-            cfg.user_token = tok;
-            cfg.save()
+            Config::update(|cfg| {
+                if cfg.effective_provider() != "apple" {
+                    return Err(err("provider changed during sign-in"));
+                }
+                cfg.user_token = tok;
+                Ok(())
+            })
         }
         _ => Err(err("login timed out")),
     }
