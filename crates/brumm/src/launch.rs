@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use serde::Deserialize;
-
 use crate::config::{self, Options};
 use crate::error::{Result, err};
 use crate::ipc::{Client, Message};
@@ -155,173 +153,37 @@ async fn start_daemon() -> Result<()> {
     detach(cmd, "daemon.log")
 }
 
-// ── the prototype and the live preview (bin/prototype, bin/preview) ──────
-// They share their socket across both faces and stay on the testing
-// workspace, including switches with g.
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct PreviewWindow {
-    address: String,
-    class: String,
-    title: String,
-    mapped: bool,
-    floating: bool,
-    grouped: Vec<String>,
-    workspace: Workspace,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct Workspace {
-    id: i64,
-}
-
-fn preview_hypr(args: &[&str]) -> Result<Vec<u8>> {
-    let runtime = std::env::var("BRUMM_DESKTOP_RUNTIME").unwrap_or_default();
-    let out = Command::new("hyprctl")
-        .args(args)
-        .env("XDG_RUNTIME_DIR", runtime)
-        .output()?;
-    if !out.status.success() {
-        return Err(err(format!(
-            "hyprctl: {}: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout)
-        )));
-    }
-    Ok(out.stdout)
-}
-
-fn preview_windows() -> Result<Vec<PreviewWindow>> {
-    Ok(serde_json::from_slice(&preview_hypr(&["clients", "-j"])?)?)
-}
-
-fn is_preview_face(w: &PreviewWindow, ui: &str) -> bool {
+// The prototype and live preview carry their own socket, account copy and
+// caches in the environment. Launch directly so switching works on the current
+// desktop, regardless of compositor, workspace, tiling or window grouping.
+fn preview_command(ui: &str, me: &Path) -> Result<Command> {
     if ui == GUI {
-        return w.class == "brumm"
-            && (w.title == "brumm · API prototype · sample data"
-                || w.title == "brumm · API preview · live account");
+        return Ok(Command::new(gui_path()?));
     }
-    w.class == "brumm-prototype"
-}
-
-fn preview_source(ws: &[PreviewWindow], ui: &str) -> Option<PreviewWindow> {
-    ws.iter()
-        .find(|w| {
-            w.mapped
-                && w.workspace.id == 4
-                && !is_preview_face(w, ui)
-                && (is_preview_face(w, GUI) || is_preview_face(w, TUI))
-                && !w.floating
-                && w.grouped.is_empty()
-        })
-        .cloned()
-}
-
-fn await_preview(ws: &[PreviewWindow], ui: &str) -> Result<PreviewWindow> {
-    let seen: std::collections::HashSet<&str> = ws.iter().map(|w| w.address.as_str()).collect();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if let Some(w) = preview_windows()?
-            .into_iter()
-            .find(|w| w.mapped && !seen.contains(w.address.as_str()) && is_preview_face(w, ui))
+    if let Some(foot) = which("foot") {
+        let mut cmd = Command::new(foot);
+        cmd.args(["--app-id=brumm-prototype", "--title=brumm preview · TUI"])
+            .arg(me)
+            .arg("--tui");
+        return Ok(cmd);
+    }
+    let terminal = std::env::var("TERMINAL").unwrap_or_default();
+    for name in ["xdg-terminal-exec", terminal.as_str()] {
+        if !name.is_empty()
+            && let Some(program) = which(name)
         {
-            return Ok(w);
+            let mut cmd = Command::new(program);
+            cmd.arg("-e").arg(me).arg("--tui");
+            return Ok(cmd);
         }
-        std::thread::sleep(Duration::from_millis(50));
     }
-    Err(err(
-        "the prototype window did not appear; keeping the current player",
-    ))
-}
-
-/// Stages the new window off-screen, then inserts it at the old focused
-/// leaf and removes the old window in the same compositor batch.
-fn handoff_preview(old: &PreviewWindow, next: &PreviewWindow) -> Result<()> {
-    let active: PreviewWindow = preview_hypr(&["activewindow", "-j"])
-        .ok()
-        .and_then(|o| serde_json::from_slice(&o).ok())
-        .unwrap_or_default();
-    let sel = |w: &PreviewWindow| {
-        serde_json::to_string(&format!("address:{}", w.address)).unwrap_or_default()
-    };
-    let focus_after = if !active.address.is_empty() && active.address != old.address {
-        &active
-    } else {
-        next
-    };
-    let batch = [
-        format!("dispatch hl.dsp.focus({{ window = {} }})", sel(old)),
-        format!(
-            "dispatch hl.dsp.window.move({{ window = {}, workspace = \"4\", follow = false }})",
-            sel(next)
-        ),
-        format!(
-            "dispatch hl.dsp.window.move({{ window = {}, workspace = \"special:brumm-handoff\", follow = false }})",
-            sel(old)
-        ),
-        format!("dispatch hl.dsp.focus({{ window = {} }})", sel(focus_after)),
-    ];
-    preview_hypr(&["--batch", &batch.join("; ")])?;
-    Ok(())
+    Err(err("no terminal to open the preview in"))
 }
 
 fn open_prototype(ui: &str, me: &Path) -> Result<()> {
-    let mut args: Vec<String> = vec!["env".into()];
-    for key in [
-        "XDG_RUNTIME_DIR",
-        "XDG_CONFIG_HOME",
-        "XDG_CACHE_HOME",
-        "WAYLAND_DISPLAY",
-        "BRUMM_DESKTOP_RUNTIME",
-        "BRUMM_PROTOTYPE",
-        "BRUMM_PREVIEW",
-        "PULSE_SERVER",
-        "PIPEWIRE_RUNTIME_DIR",
-    ] {
-        args.push(format!("{key}={}", std::env::var(key).unwrap_or_default()));
-    }
-    if ui == GUI {
-        args.push(gui_path()?.to_string_lossy().into_owned());
-    } else {
-        let foot = which("foot").ok_or_else(|| err("prototype terminal: foot not found"))?;
-        args.extend([
-            foot.to_string_lossy().into_owned(),
-            "--app-id=brumm-prototype".into(),
-            "--title=brumm prototype · TUI".into(),
-            me.to_string_lossy().into_owned(),
-            "--tui".into(),
-        ]);
-    }
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none_or(|v| v.is_empty()) {
-        let mut cmd = Command::new(&args[0]);
-        cmd.args(&args[1..]);
-        return detach(cmd, "prototype.log");
-    }
-    let quoted: Vec<String> = args
-        .iter()
-        .map(|a| format!("'{}'", a.replace('\'', r"'\''")))
-        .collect();
-    let windows = preview_windows()?;
-    let source = preview_source(&windows, ui);
-    let workspace = if source.is_some() {
-        "special:brumm-handoff silent"
-    } else {
-        "4 silent"
-    };
-    let quote = |s: &str| serde_json::to_string(s).unwrap_or_default();
-    let expr = format!(
-        "hl.dsp.exec_cmd({}, {{ workspace = {}, no_initial_focus = true }})",
-        quote(&format!("exec {}", quoted.join(" "))),
-        quote(workspace)
-    );
-    preview_hypr(&["dispatch", &expr])?;
-    let next = await_preview(&windows, ui)?;
-    if let Some(src) = source {
-        handoff_preview(&src, &next)?;
-    }
-    Ok(())
+    // Command inherits every preview variable, including XDG_DATA_HOME and
+    // audio settings. No shell or compositor process can drop that context.
+    detach(preview_command(ui, me)?, "preview.log")
 }
 
 #[cfg(test)]
@@ -390,38 +252,49 @@ mod tests {
     }
 
     #[test]
-    fn preview_source_only_selects_an_eligible_prototype() {
-        let normal = PreviewWindow {
-            address: "old".into(),
-            class: "brumm".into(),
-            title: "brumm · API prototype · sample data".into(),
-            mapped: true,
-            workspace: Workspace { id: 4 },
-            ..Default::default()
+    fn preview_switch_keeps_the_private_runtime_without_a_compositor() {
+        let Some(env) = testenv::isolated() else {
+            return;
         };
-        let mut unrelated = normal.clone();
-        unrelated.title = "Real music · brumm".into();
-        let mut floating = normal.clone();
-        floating.floating = true;
-        let mut grouped = normal.clone();
-        grouped.grouped = vec!["other".into()];
-        let mut hidden = normal.clone();
-        hidden.workspace.id = -99;
-        for w in [&unrelated, &floating, &grouped, &hidden] {
-            assert!(
-                preview_source(std::slice::from_ref(w), TUI).is_none(),
-                "ineligible window chosen: {w:?}"
-            );
+        let foot = env.dir.join("bin/foot");
+        fs::write(&foot, r##"#!/bin/sh
+printf '%s\n' "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$@" > "$XDG_RUNTIME_DIR/preview-args"
+"##).unwrap();
+        fs::set_permissions(&foot, fs::Permissions::from_mode(0o755)).unwrap();
+        let me = Path::new("/tmp/preview build/brumm");
+        open_prototype(TUI, me).unwrap();
+        let recorded = env.dir.join("run/preview-args");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !recorded.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
         }
+        let text = fs::read_to_string(recorded).unwrap();
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines[0], env.dir.join("run").to_str().unwrap());
+        assert_eq!(lines[1], env.dir.join("config").to_str().unwrap());
+        assert_eq!(lines[2], env.dir.join("cache").to_str().unwrap());
+        assert_eq!(lines[3], env.dir.join("data").to_str().unwrap());
         assert_eq!(
-            preview_source(&[unrelated, normal.clone()], TUI)
-                .unwrap()
-                .address,
-            "old"
+            &lines[4..],
+            [
+                "--app-id=brumm-prototype",
+                "--title=brumm preview · TUI",
+                "/tmp/preview build/brumm",
+                "--tui"
+            ]
         );
-        assert!(
-            preview_source(&[normal], GUI).is_none(),
-            "selected the same face as the replacement"
-        );
+    }
+
+    #[test]
+    fn preview_gui_launches_the_available_window_directly() {
+        let Some(env) = testenv::isolated() else {
+            return;
+        };
+        let gui = env.dir.join("bin").join(GUI_NAME);
+        fs::write(&gui, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&gui, fs::Permissions::from_mode(0o755)).unwrap();
+        let command = preview_command(GUI, Path::new("/tmp/preview/brumm")).unwrap();
+        assert_eq!(command.get_program(), gui.as_os_str());
+        assert_eq!(command.get_args().count(), 0);
     }
 }

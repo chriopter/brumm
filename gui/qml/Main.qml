@@ -294,11 +294,9 @@ Window {
         }
     }
 
-    MorphButton {
+    MenuButton {
         visible: win.compact && !store.full
         anchors { left: parent.left; top: parent.top; margins: ui.px(12) }
-        icon: "󰎈"; label: store.providerName + " ▾"; key: "ctrl+o"
-        onClicked: store.openProviderPicker()
     }
 
     FullStage {

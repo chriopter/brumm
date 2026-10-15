@@ -32,19 +32,10 @@ Item {
         anchors { left: parent.left; verticalCenter: parent.verticalCenter }
     }
 
-    MorphButton {
-        id: serviceSwitcher
-        anchors { left: menu.right; leftMargin: ui.px(10); verticalCenter: parent.verticalCenter }
-        icon: "󰎈"
-        label: nav.width > ui.px(700) ? store.providerName + " ▾" : ""
-        key: "ctrl+o"
-        onClicked: store.openProviderPicker()
-    }
-
     Flickable {
         id: viewport
         // Leave room inside the clipped viewport for RowLight's spill.
-        anchors { left: serviceSwitcher.right; leftMargin: -ui.px(2); right: searchBox.left; rightMargin: ui.px(8); top: parent.top; topMargin: -ui.px(14); bottom: parent.bottom; bottomMargin: -ui.px(14) }
+        anchors { left: menu.right; leftMargin: -ui.px(2); right: searchBox.left; rightMargin: ui.px(8); top: parent.top; topMargin: -ui.px(14); bottom: parent.bottom; bottomMargin: -ui.px(14) }
         contentWidth: tabs.width + ui.px(32)
         contentHeight: height
         flickableDirection: Flickable.HorizontalFlick
