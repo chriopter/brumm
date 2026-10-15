@@ -5,8 +5,9 @@ from Apple snapshot `eb6a79b`. The shared lifecycle and Tidal adapter are
 implemented, with Tidal enabled for development. See `providers.md` for current
 validation evidence. Live login, collection/search reads, personal mixes and saved-session switching
 now pass. Full-track SDK state, sustained position, seek and queue transitions
-also pass after adding a scoped native media transport. Audible output remains
-unverified. See the evidence and release limitations in `providers.md`.
+also pass after adding a scoped native media transport. Audible output passed
+on a live desktop session. See the evidence and release limitations in
+`providers.md`.
 
 ## Decisions
 

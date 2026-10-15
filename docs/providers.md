@@ -4,8 +4,8 @@ Brumm keeps the existing Rust core, Unix socket, Qt frontend, terminal
 frontend, and shared player. Provider implementations are built in and run
 inside the daemon. Apple Music and Tidal use the provider
 contract end to end. Tidal is selectable on this development branch. Live
-sign-in, browsing and full-track playback state pass. Audible output
-is still unverified.
+sign-in, browsing and full-track playback state pass. Audible full-track
+playback passed on a live desktop session.
 
 ## Boundaries in this branch
 
@@ -150,7 +150,8 @@ fictional provider data and does not require personal credentials.
   deliveries. Responses are no-store; closing the engine cancels active requests.
   No signed media URLs are persisted or sent to frontends. New CDN hosts and
   larger quality tiers need separate verification before expanding this allowlist.
-- Audible playback remains unverified because omabox has no audio output.
+- Audible full-track playback passed on the user's desktop session; the
+  omabox boxes used for GUI checks have no audio output.
 - Live favorite/playlist mutations were not performed on the user's account;
   deterministic fixtures cover them. Apple paid playback remains unverified.
 - Live testing exposed and fixed a nested heartbeat payload that had hidden SDK
