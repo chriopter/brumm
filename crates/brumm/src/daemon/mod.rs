@@ -4,6 +4,7 @@
 
 mod feedback;
 mod frontends;
+mod known;
 mod library;
 mod playback;
 mod providers;
@@ -889,7 +890,11 @@ impl Daemon {
         if !ipc::session_free(&r.cmd) {
             reply.generation = generation;
         }
-        self.dispatch(conn, r, reply).await
+        let result = self.dispatch(conn, r, reply).await;
+        if !ipc::session_free(&r.cmd) {
+            self.library().known.note_reply(reply);
+        }
+        result
     }
 
     fn provider_selection(&self, cfg: &Config) -> crate::provider::registry::Selection {
@@ -1104,6 +1109,7 @@ impl Daemon {
                     res.source = r.source.clone();
                     res.station.clear();
                 }
+                self.describe(&eng, &r.ids, &r.start, &r.source).await;
                 eng.play_ids(&r.ids, &r.start, &r.source, 0.0).await
             }
             ipc::CMD_TOGGLE => self.toggle_playback(&eng).await,
@@ -1125,13 +1131,25 @@ impl Daemon {
                 Ok(())
             }
             ipc::CMD_JUMP => eng.jump(r.value as i64).await,
-            ipc::CMD_ENQUEUE => eng.enqueue(&r.ids, r.value != 0.0).await,
+            ipc::CMD_ENQUEUE => {
+                self.describe(&eng, &r.ids, "", &r.source).await;
+                eng.enqueue(&r.ids, r.value != 0.0).await
+            }
             ipc::CMD_SHUFFLE => eng.set_shuffle(r.value != 0.0).await,
             ipc::CMD_REPEAT => eng.set_repeat(r.value as i64).await,
             ipc::CMD_AUTOPLAY => eng.set_autoplay(r.value != 0.0).await,
             ipc::CMD_WARM => eng.warm(&r.ids).await,
             other => Err(err(format!("unknown command {other:?}"))),
         }
+    }
+
+    async fn describe(&self, eng: &Engine, ids: &[String], start: &str, source: &str) {
+        let library = self.library();
+        let at = ids.iter().position(|id| id == start).unwrap_or(0);
+        let tracks = library
+            .known
+            .of(ids, at, &library.tracks(source).unwrap_or_default());
+        let _ = eng.describe(&tracks).await;
     }
 
     /// Answers a player command while there is no Chrome: playing wakes
@@ -1331,7 +1349,7 @@ impl Daemon {
             i.active = Some(Instant::now());
         }
         if let Some(eng) = self.engine() {
-            return eng.play_station(&st.id, &source).await;
+            return eng.play_station(&st.id, &source, "", 0.0).await;
         }
         if self.wake(true).await {
             return Ok(());
@@ -1563,7 +1581,10 @@ impl Daemon {
             }
         };
         match eng.state().await {
-            Ok(es) if es.title.is_empty() => r.play(eng).await.is_ok(),
+            Ok(es) if es.title.is_empty() => {
+                self.describe(eng, &r.ids, &r.id, &r.source).await;
+                r.play(eng).await.is_ok()
+            }
             _ => false, // something is loaded: a plain toggle resumes it
         }
     }

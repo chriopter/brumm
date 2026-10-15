@@ -263,6 +263,7 @@ Object.assign(B, {
     else m.skipToPreviousItem().catch(() => {});
   },
   // queue returns the current song and up to n after it.
+  describe(tracks) {},
   queue(n) {
     const m = B.m;
     const out = { pos: -1, items: [] };

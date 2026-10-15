@@ -43,6 +43,12 @@ pub fn choices() -> Vec<ProviderInfo> {
             available: true,
             configured: false,
         },
+        ProviderInfo {
+            id: "spotify".into(),
+            name: "Spotify".into(),
+            available: true,
+            configured: false,
+        },
     ]
 }
 pub fn validate(id: &str) -> Result<()> {
@@ -82,9 +88,11 @@ pub fn selection(cfg: &Config) -> Selection {
 pub fn definition(id: &str) -> Result<&'static dyn super::session::Definition> {
     static APPLE: super::apple::session::Apple = super::apple::session::Apple;
     static TIDAL: super::tidal::session::Tidal = super::tidal::session::Tidal;
+    static SPOTIFY: super::spotify::session::Spotify = super::spotify::session::Spotify;
     match id {
         "apple" => Ok(&APPLE),
         "tidal" => Ok(&TIDAL),
+        "spotify" => Ok(&SPOTIFY),
         _ => Err(Error::Unsupported),
     }
 }

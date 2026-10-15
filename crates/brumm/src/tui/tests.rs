@@ -1907,7 +1907,9 @@ fn provider_choice_skips_unavailable_services_and_blocks_normal_navigation() {
     let mut m = model(120, 35);
     m.state.status = ipc::STATUS_CHOOSE_PROVIDER.into();
     m.provider_choices = crate::provider::registry::choices();
-    m.provider_choices[1].available = false; // Future adapters must remain unselectable.
+    for provider in m.provider_choices.iter_mut().skip(1) {
+        provider.available = false; // Future adapters must remain unselectable.
+    }
     m.provider_key("down");
     assert_eq!(m.provider_index, 0, "unavailable adapters are skipped");
     m.provider_key("up");

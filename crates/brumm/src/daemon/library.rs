@@ -24,6 +24,7 @@ struct Data {
 }
 
 pub struct Library {
+    pub(super) known: super::known::Known,
     path: PathBuf,
     data: Mutex<Data>,
 }
@@ -35,6 +36,7 @@ fn path() -> PathBuf {
 impl Default for Library {
     fn default() -> Self {
         Self {
+            known: Default::default(),
             path: path(),
             data: Mutex::new(Data::default()),
         }
@@ -53,6 +55,7 @@ impl Library {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         Library {
+            known: Default::default(),
             path,
             data: Mutex::new(data),
         }

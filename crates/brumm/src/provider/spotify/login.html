@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>brumm · sign in to Spotify</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --dim: #6e6e73; --bg: #fbfbfd; --line: #d2d2d7; --accent: #1db954; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #f5f5f7; --dim: #98989d; --bg: #111113; --line: #3a3a3c; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  main { max-width: 560px; padding: 24px; }
+  .bear { font: 40px/1 ui-monospace, monospace; color: var(--accent); text-align: center; }
+  h1 { font-size: 28px; margin: 16px 0 4px; text-align: center; }
+  p, li { color: var(--dim); }
+  li { margin: 6px 0; }
+  a { color: var(--accent); }
+  code { font: 14px ui-monospace, monospace; color: var(--fg); user-select: all; word-break: break-all; }
+  form { display: flex; gap: 8px; margin: 20px 0 8px; }
+  input { flex: 1; font: 15px ui-monospace, monospace; padding: 10px 14px; border: 1px solid var(--line);
+          border-radius: 999px; background: transparent; color: var(--fg); min-width: 0; }
+  button { font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 999px;
+           padding: 10px 24px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { min-height: 1.5em; color: var(--fg); }
+</style>
+</head>
+<body>
+<main>
+  <div class="bear">ʕ•ᴥ•ʔ</div>
+  <h1>Sign in to Spotify</h1>
+  <p>Spotify lets one app serve only a few people, so brumm plays through an app of your own.
+     Making it takes a minute, once:</p>
+  <ol>
+    <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">Spotify
+        developer dashboard</a> and create an app.</li>
+    <li>Add this redirect URI: <code id="redirect"></code></li>
+    <li>Tick <b>Web API</b> and <b>Web Playback SDK</b>, then save.</li>
+    <li>Paste the app's Client ID here.</li>
+  </ol>
+  <form id="form">
+    <input id="client" placeholder="Client ID" autocomplete="off" spellcheck="false" maxlength="64" required>
+    <button>Sign in</button>
+  </form>
+  <div id="status"></div>
+  <p>Playing needs Spotify Premium. Signing in with another account than the app's? Add it under
+     User Management in the app's settings.</p>
+</main>
+<script>
+  const CFG = __BRUMM_CFG__;
+  const say = (text) => { document.getElementById('status').textContent = text; };
+  document.getElementById('redirect').textContent = CFG.redirect;
+  const input = document.getElementById('client');
+  input.value = CFG.clientId || '';
+  if (CFG.error) say(CFG.error);
+  document.getElementById('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.querySelector('button');
+    btn.disabled = true;
+    try {
+      const r = await fetch('client', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ clientId: input.value.trim() }) });
+      if (r.status === 400) throw new Error('that is not a Client ID: it has 32 letters and digits');
+      if (!r.ok) throw new Error('brumm did not take it (' + r.status + ')');
+      location.href = (await r.json()).url;
+    } catch (err) {
+      btn.disabled = false;
+      say('Sign-in failed: ' + (err.message || err));
+    }
+  });
+</script>
+</body>
+</html>

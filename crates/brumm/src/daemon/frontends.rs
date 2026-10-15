@@ -72,7 +72,9 @@ impl Daemon {
         let cfg = crate::config::Config::load()?;
         let provider = crate::provider::registry::definition(cfg.effective_provider())?;
         crate::config::migrate_session_cache()?;
-        let engine = self.replace_session(&cfg, provider.api(&cfg)?);
+        let engine = self
+            .replace_session(&cfg, provider.api(&cfg)?)
+            .or_else(|| self.lock().eng.take());
         if let Some(engine) = engine {
             engine.close().await;
         }

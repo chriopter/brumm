@@ -3,6 +3,7 @@ import QtQuick
 Box {
     id: services
     title: "Music services"
+    scrollable: true
     boxWidth: ui.px(470)
 
     Text {
@@ -13,7 +14,7 @@ Box {
     }
     Text {
         width: parent.width
-        text: "Connect one or both. You can switch services or add another at any time."
+        text: "Connect your services. You can switch services or add another at any time."
         wrapMode: Text.WordWrap
         color: ui.dim
         font { family: ui.sans; pixelSize: ui.px(13) }

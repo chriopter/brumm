@@ -1,0 +1,509 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>brumm</title>
+<script>
+// brumm's Spotify playback page, with player.html's contract: headless
+// Chrome (with Widevine) loads it from a loopback origin, the daemon drives
+// it through Runtime.evaluate, and brumm.wait() answers the moment anything
+// changes (and at least every heartbeat).
+//
+// Spotify's Web Playback SDK makes this page a Connect device that plays
+// and reports; what it plays is started over the Web API, naming the
+// device. The queue is brumm's: the page keeps the song ids and hands
+// Spotify a window of them, following along as songs change. Spotify needs
+// Premium for all of it.
+//
+// The host substitutes the configuration object for the CFG placeholder.
+const CFG = __BRUMM_CFG__;
+const API = 'https://api.spotify.com/v1';
+// Songs handed to Spotify at once; the page sends the next window as the
+// last one nears its end.
+const WINDOW = 100;
+const B = window.brumm = {
+  player: null, device: '', token: '', gen: 0, rev: 0,
+  // ids: the queue; pos: the playing one; win: the indices Spotify has, in
+  // its order; stale: brumm's order changed since, so the next song change
+  // sends a new window; order: the queue before shuffling, and from: where
+  // each shuffled song stands in it (a song can be queued twice).
+  q: { ids: [], pos: -1, win: [], stale: false, order: null, from: null },
+  // pending: the play asked for before the device was ready; the last wins.
+  ps: null, at: 0, vol: 1, rep: 0, shuf: false, station: '', pending: null,
+};
+
+// touch says the state changed. Bursts are folded into one answer to the
+// waiting daemon.
+let waiter = null, flushing = 0;
+function touch() {
+  B.rev++;
+  if (waiter && !flushing) flushing = setTimeout(() => { flushing = 0; if (waiter) waiter(); }, 30);
+}
+
+// The fields the daemon reads wake it when they change.
+const seen = { ready: false, err: '', needsAuth: false, source: '' };
+for (const k of Object.keys(seen)) {
+  Object.defineProperty(B, k, { get: () => seen[k], set: (v) => { if (seen[k] !== v) { seen[k] = v; touch(); } } });
+}
+
+window.addEventListener('error', (e) => { if (!B.ready) B.err = 'page: ' + (e.message || 'script error'); });
+
+const errText = (e) => String((e && (e.message || e.name)) || e);
+const valid = (id) => /^[0-9A-Za-z]{22}$/.test(id);
+const uri = (id) => 'spotify:track:' + id;
+
+// The id brumm asked for: Spotify may play a relinked copy of a song.
+function idOf(t) {
+  if (!t) return '';
+  if (t.linked_from && t.linked_from.id) return t.linked_from.id;
+  return t.id || (t.uri || '').split(':').pop();
+}
+
+function widest(images) {
+  let best = null;
+  for (const im of images || []) if (!best || (im.width || 0) > (best.width || 0)) best = im;
+  return best ? best.url : '';
+}
+
+// What songs look like, by id: from describe(), the SDK and lookups.
+// Oldest first out: a Map keeps insertion order.
+const meta = new Map();
+function remember(id, m) {
+  if (!id) return;
+  meta.set(id, Object.assign({}, m, meta.get(id) || {}));
+  if (meta.size > 5000) for (const k of meta.keys()) { meta.delete(k); if (meta.size <= 4000) break; }
+}
+
+function fromSdk(t) {
+  return { title: t.name || '', artist: (t.artists || []).map((a) => a.name).join(', '),
+           album: (t.album && t.album.name) || '', duration: (t.duration_ms || 0) / 1000,
+           artwork: widest(t.album && t.album.images), number: 0 };
+}
+
+// One queue entry, as the daemon reads it.
+function entry(id) {
+  const m = meta.get(id) || {};
+  return { id: id, title: m.title || '', artist: m.artist || '', album: m.album || '',
+           duration: m.duration || 0, artwork: m.artwork || '', number: m.number || 0 };
+}
+
+// A refused token: the daemon brings a new one (setToken), and the request
+// is made once more with it, so a play does not get lost on the way.
+async function bridge(route, body = {}) {
+  const r = await fetch(location.pathname + '/' + route, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(30000)});
+  if (!r.ok) {
+    if (r.status === 401) B.needsAuth = true;
+    const detail = await r.json().catch(() => ({}));
+    throw new Error(detail.error || 'Spotify request failed');
+  }
+  return r.json();
+}
+async function token(rejected) {
+  const value = await bridge('credentials', {rejected});
+  B.token = value.accessToken;
+  B.needsAuth = false;
+  return B.token;
+}
+async function api(method, path, body, again = true) {
+  const access = await token();
+  const headers = {Authorization:'Bearer ' + access};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const r = await fetch(API + path, {method,headers,body:body === undefined ? undefined : JSON.stringify(body), signal:AbortSignal.timeout(15000)});
+  if (r.status === 401 && again) { await token(access); return api(method,path,body,false); }
+  if (!r.ok) {
+    if (r.status === 401) B.needsAuth = true;
+    let msg = 'HTTP ' + r.status;
+    try { const j = await r.json(); if (j.error && j.error.message) msg = j.error.message; } catch (_) {}
+    if (r.status === 403 && /premium/i.test(msg)) msg = 'Spotify Premium is needed to play';
+    throw new Error(msg);
+  }
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
+}
+
+const onDevice = (path) => path + (path.includes('?') ? '&' : '?') + 'device_id=' + encodeURIComponent(B.device);
+
+// The indices of the window starting at pos; with repeat all it wraps.
+function windowFrom(pos) {
+  const n = B.q.ids.length, out = [];
+  for (let i = pos; i < n && out.length < WINDOW; i++) out.push(i);
+  if (B.rep === 2) for (let i = 0; out.length < WINDOW && out.length < n; i++) out.push(i);
+  return out;
+}
+
+// send hands Spotify the window from pos and starts it ms in. A device
+// Spotify has not seen yet gets one more try.
+async function syncModes(gen, station) {
+  // Spotify remembers device modes across contexts; brumm owns normal queue order.
+  const repeat = B.rep === 1 ? 'track' : station && B.rep === 2 ? 'context' : 'off';
+  if (gen !== B.gen) return;
+  await api('PUT', onDevice('/me/player/repeat?state=' + repeat));
+  if (gen !== B.gen) return;
+  await api('PUT', onDevice('/me/player/shuffle?state=' + (station && B.shuf)));
+}
+let sending = Promise.resolve();
+function schedulePlayback(gen, work) {
+  const result = sending.then(async () => { if (gen === B.gen) await work(); });
+  sending = result.catch(() => {});
+  return result;
+}
+function send(pos, ms) {
+  const gen = B.gen, queue = B.q, win = windowFrom(pos);
+  if (!win.length) return Promise.resolve();
+  B.expected = null;
+  queue.pos = pos; queue.win = win; queue.stale = false;
+  const body = {uris:win.map(i => uri(queue.ids[i])), position_ms:Math.max(0,Math.round(ms || 0))};
+  B.transition = true;
+  const work = async () => {
+    if (gen !== B.gen || queue !== B.q) return;
+    try { await api('PUT',onDevice('/me/player/play'),body); await syncModes(gen, false); }
+    catch(e) {
+      if (!/device not found/i.test(errText(e))) throw e;
+      await new Promise(resolve => setTimeout(resolve,1000));
+      if (gen !== B.gen || queue !== B.q) return;
+      await api('PUT',onDevice('/me/player/play'),body);
+      await syncModes(gen, false);
+    } finally { if (gen === B.gen) B.transition = false; }
+  };
+  return schedulePlayback(gen, work);
+}
+
+function position(ps) {
+  if (!ps) return 0;
+  if (ps.paused) return ps.position;
+  return Math.min(ps.duration || Infinity, ps.position + (performance.now() - B.at));
+}
+
+// follow keeps pos on the song Spotify plays, sends the next window when
+// this one is about to run out, and plays brumm's next song after its
+// order changed. A song that ends the queue is noticed too: with repeat
+// all, the queue starts over.
+function follow(st) {
+  const before = B.ps, was = position(before);
+  B.ps = st;
+  B.at = performance.now();
+  if (!st || !st.track_window) return;
+  const tw = st.track_window, cur = idOf(tw.current_track);
+  for (const t of [tw.current_track, ...(tw.next_tracks || []), ...(tw.previous_tracks || [])]) {
+    if (t) remember(idOf(t), fromSdk(t));
+  }
+  if (B.transition || B.station || !B.q.ids.length) return;
+  const q = B.q, n = q.ids.length;
+  if (Number.isInteger(B.expected) && cur === q.ids[B.expected]) {
+    q.pos = B.expected; B.expected = null;
+    return;
+  }
+  const ended = before && !before.paused && st.paused && st.position === 0 &&
+                before.duration && was >= before.duration - 2500;
+  const duplicateNext = cur === q.ids[q.pos] && q.ids[q.pos + 1] === cur && before &&
+    was > st.position + 2500 && was >= before.duration - 2500 &&
+    (tw.previous_tracks || []).some(t => idOf(t) === cur) && B.rep !== 1;
+  if (duplicateNext) { q.pos++; return; }
+  if (cur === q.ids[q.pos]) {
+    if (ended && (q.pos + 1 < n || B.rep === 2)) send(q.pos + 1 < n ? q.pos + 1 : 0, 0).catch(fail('play'));
+    return;
+  }
+  // A song change. After a shuffle or an insert, brumm's next is what plays.
+  const next = q.pos + 1 < n ? q.pos + 1 : (B.rep === 2 ? 0 : -1);
+  if (q.stale) {
+    if (next < 0) return;
+    if (cur === q.ids[next]) send(next, st.position).catch(fail('play'));
+    else send(next, 0).catch(fail('play'));
+    return;
+  }
+  let j = q.win.findIndex((i, k) => q.ids[i] === cur && i !== q.pos && k >= q.win.indexOf(q.pos));
+  if (j < 0) j = q.win.findIndex((i) => q.ids[i] === cur);
+  if (j < 0) return; // played from elsewhere: brumm's queue no longer says what plays
+  q.pos = q.win[j];
+  // The window's last song: send the next window while it has barely begun.
+  if (j === q.win.length - 1 && (q.pos + 1 < n || B.rep === 2)) send(q.pos, st.position).catch(fail('play'));
+}
+
+const fail = (what) => (e) => { B.err = what + ': ' + errText(e); touch(); };
+
+// lookup fetches what describe() did not say, one song at a time (Spotify
+// has no batch lookups for apps), a few at once.
+async function lookup(ids) {
+  const missing = [...new Set(ids.filter(id => !meta.has(id) && valid(id)))];
+  for (let i = 0; i < missing.length; i += 20) {
+    const tracks = await bridge('tracks', {ids:missing.slice(i,i+20)});
+    B.describe(tracks);
+  }
+}
+
+function shuffled(list) {
+  const a = list.slice();
+  for (let i = a.length - 1; i > 0; i--) { const k = Math.floor(Math.random() * (i + 1)); [a[i], a[k]] = [a[k], a[i]]; }
+  return a;
+}
+
+// mix shuffles order with the song at k first: the new ids, and where
+// each stood.
+function mix(order, k) {
+  const from = [k, ...shuffled(order.map((_, i) => i).filter((i) => i !== k))];
+  return { ids: from.map((i) => order[i]), from };
+}
+
+window.onSpotifyWebPlaybackSDKReady = () => {
+  try {
+    const p = new Spotify.Player({ name: 'brumm', getOAuthToken: (cb) => { token().then(cb).catch(fail('sign-in')); }, volume: B.vol });
+    p.addListener('ready', ({ device_id }) => {
+      B.device = device_id;
+      B.ready = true;
+      B.err = '';
+      // A play asked for while the player was still connecting runs now.
+      if (B.pending) { const p = B.pending; B.pending = null; p(); }
+    });
+    p.addListener('not_ready', () => { B.device = ''; B.ready = false; });
+    p.addListener('player_state_changed', (st) => { follow(st); touch(); });
+    p.addListener('initialization_error', ({ message }) => { B.err = 'spotify: ' + message; });
+    p.addListener('authentication_error', () => { token(B.token).then(() => p.connect()).catch(fail('sign-in')); });
+    p.addListener('account_error', () => { B.err = 'Spotify Premium is needed to play'; });
+    p.addListener('playback_error', ({ message }) => { B.err = 'playback: ' + message; });
+    B.player = p;
+    setTimeout(() => { if (!B.ready && !B.err && !B.needsAuth) B.err = 'the Spotify player did not connect'; }, 20000);
+    p.connect().then((ok) => { if (!ok) B.err = 'the Spotify player could not connect'; })
+               .catch((e) => { B.err = 'spotify: ' + errText(e); });
+  } catch (e) {
+    B.err = 'spotify: ' + errText(e);
+  }
+};
+
+Object.assign(B, {
+  // playIds queues the songs and starts startId, startAt seconds in. A
+  // newer call supersedes an older one, so presses never interleave.
+  async playIds(ids, startId, source, startAt) {
+    if (!B.device) { B.pending = () => B.playIds(ids, startId, source, startAt); return; }
+    const gen = ++B.gen;
+    B.err = '';
+    B.station = '';
+    let list = ids.filter(valid);
+    if (!list.length) { B.err = 'nothing playable here'; return; }
+    let k = Math.max(0, list.indexOf(startId));
+    let order = null, from = null;
+    if (B.shuf) {
+      order = list;
+      ({ ids: list, from } = mix(order, k));
+      k = 0;
+    }
+    B.q = { ids: list, pos: k, win: [], stale: false, order, from };
+    B.source = source;
+    try {
+      await send(k, (startAt || 0) * 1000);
+    } catch (e) {
+      if (gen === B.gen) fail('play')(e);
+    }
+  },
+  // playStation plays a context as a whole (a playlist brumm cannot list);
+  // its queue is Spotify's. Resuming one starts at the song and second it
+  // stopped, or at its start when that song has left the playlist.
+  async playStation(id, source, startId, startAt) {
+    if (!B.device) { B.pending = () => B.playStation(id, source, startId, startAt); return; }
+    const gen = ++B.gen;
+    B.err = '';
+    B.station = id;
+    B.q = { ids: [], pos: -1, win: [], stale: false, order: null, from: null };
+    B.source = source;
+    const body = { context_uri: id };
+    B.transition = true;
+    await schedulePlayback(gen, async () => {
+      try {
+        if (valid(startId || '')) {
+          try {
+            await api('PUT',onDevice('/me/player/play'), Object.assign({},body,{offset:{uri:uri(startId)},position_ms:Math.round((startAt || 0)*1000)}));
+            await syncModes(gen, true);
+            return;
+          } catch(e) { if (gen !== B.gen || B.needsAuth) throw e; }
+        }
+        if (gen === B.gen) { await api('PUT',onDevice('/me/player/play'),body); await syncModes(gen, true); }
+      } catch(e) { if (gen === B.gen) fail('station')(e); }
+      finally { if (gen === B.gen) B.transition = false; }
+    });
+  },
+  // describe tells the page what songs look like: the daemon's lists say,
+  // so the queue needs no lookups.
+  describe(list) {
+    for (const t of list || []) {
+      remember(t.id, { title: t.title || '', artist: t.artist || '', album: t.album || '',
+                       duration: t.duration || 0, artwork: t.artwork || '', number: t.number || 0 });
+    }
+  },
+  // Spotify has no lookups to warm, and no similar music to play on: the
+  // queue ends where it ends.
+  warm(ids) {},
+  autoplay(on) { B.autoplayOn = on; },
+  toggle() {
+    if (!B.player) return;
+    B.err = '';
+    B.player.togglePlay().catch(fail('play'));
+  },
+  play() {
+    if (!B.player || !B.ps || !B.ps.paused) return;
+    B.err = '';
+    B.player.resume().catch(fail('play'));
+  },
+  pause() { if (B.player) B.player.pause().catch(() => {}); },
+  next() {
+    if (!B.player) return;
+    const q = B.q;
+    if (B.station || !q.ids.length) { B.player.nextTrack().catch(() => {}); return; }
+    const next = q.pos + 1 < q.ids.length ? q.pos + 1 : (B.rep === 2 ? 0 : -1);
+    if (next < 0) return;
+    const j = q.win.indexOf(q.pos);
+    if (!q.stale && j >= 0 && q.win[j + 1] === next) { B.expected = next; B.player.nextTrack().catch(() => { B.expected = null; }); }
+    else send(next, 0).catch(fail('play'));
+  },
+  // Previous restarts the song once it is past three seconds in, like
+  // every hardware player; before that it goes back a song.
+  prev() {
+    if (!B.player) return;
+    const q = B.q;
+    if (position(B.ps) > 3000) { B.player.seek(0).catch(() => {}); return; }
+    if (B.station || !q.ids.length) { B.player.previousTrack().catch(() => {}); return; }
+    const prev = q.pos > 0 ? q.pos - 1 : (B.rep === 2 ? q.ids.length - 1 : -1);
+    if (prev < 0) { B.player.seek(0).catch(() => {}); return; }
+    const j = q.win.indexOf(q.pos);
+    if (!q.stale && j > 0 && q.win[j - 1] === prev) { B.expected = prev; B.player.previousTrack().catch(() => { B.expected = null; }); }
+    else send(prev, 0).catch(fail('play'));
+  },
+  // queue returns the current song and up to n after it, looking up the
+  // few songs nobody described first.
+  queue(n) {
+    const out = { pos: -1, items: [] };
+    if (B.station) {
+      const tw = B.ps && B.ps.track_window;
+      if (!tw || !tw.current_track) return JSON.stringify(out);
+      out.pos = 0;
+      for (const t of [tw.current_track, ...(tw.next_tracks || [])].slice(0, n)) {
+        remember(idOf(t), fromSdk(t));
+        out.items.push(entry(idOf(t)));
+      }
+      return JSON.stringify(out);
+    }
+    const q = B.q;
+    if (!q.ids.length || q.pos < 0) return JSON.stringify(out);
+    out.pos = q.pos;
+    const ids = q.ids.slice(q.pos, q.pos + n);
+    const answer = () => { out.items = ids.map(entry); return JSON.stringify(out); };
+    if (ids.every((id) => meta.has(id))) return answer();
+    return lookup(ids).then(answer);
+  },
+  jump(i) {
+    if (i < 0 || i >= B.q.ids.length || B.station) return;
+    B.err = '';
+    send(i, 0).catch(fail('play'));
+  },
+  // enqueue adds songs after the current one (next) or at the end.
+  async enqueue(ids, next) {
+    const add = ids.filter(valid);
+    if (!add.length) { B.err = 'nothing playable here'; return; }
+    const q = B.q;
+    if (B.station || !q.ids.length) return B.playIds(add, add[0], 'queue:', 0);
+    const at = next ? q.pos + 1 : q.ids.length;
+    q.ids.splice(at, 0, ...add);
+    if (q.order) {
+      q.from.splice(at, 0, ...add.map((_, i) => q.order.length + i));
+      q.order.push(...add);
+    }
+    // Spotify's window still plays the old order up to the insert.
+    const last = q.win.length ? q.win[q.win.length - 1] : -1;
+    if (next || last >= at - 1) q.stale = true;
+  },
+  seek(t) { if (B.player) B.player.seek(Math.max(0, Math.round(t * 1000))).catch(() => {}); },
+  volume(v) {
+    B.vol = Math.max(0, Math.min(1, v));
+    if (B.player) B.player.setVolume(B.vol).catch(() => {});
+  },
+  // shuffle keeps the current song and mixes the rest after it; turning it
+  // off puts the queue back in order.
+  shuffle(on) {
+    B.shuf = !!on;
+    if (B.station) {
+      api('PUT', onDevice('/me/player/shuffle?state=' + B.shuf)).catch(() => {});
+      return;
+    }
+    const q = B.q;
+    if (!q.ids.length) return;
+    if (on && !q.order) {
+      q.order = q.ids.slice();
+      ({ ids: q.ids, from: q.from } = mix(q.order, q.pos));
+      q.pos = 0;
+    } else if (!on && q.order) {
+      q.pos = q.from[q.pos];
+      q.ids = q.order;
+      q.order = q.from = null;
+    }
+    q.stale = true;
+  },
+  // 0 off, 1 one, 2 all. One is Spotify's; all wraps brumm's window.
+  repeat(mode) {
+    B.rep = mode;
+    const state = mode === 1 ? 'track' : (B.station && mode === 2 ? 'context' : 'off');
+    if (B.device) api('PUT', onDevice('/me/player/repeat?state=' + state)).catch(() => {});
+    if (!B.station && B.q.ids.length) B.q.stale = true;
+  },
+  // Spotify gives apps no preview clips.
+  preview(id) { B.err = 'no previews on Spotify'; },
+  stopPreview() {},
+  setToken(t) {
+    B.token = t;
+    B.needsAuth = false;
+    if (/sign|auth|token/i.test(B.err)) B.err = '';
+
+  },
+
+  // wait answers with the state once it is newer than rev, or after ms.
+  wait(rev, ms) {
+    if (waiter) waiter(); // a stale call: answer it so it does not linger
+    return new Promise((resolve) => {
+      if (B.rev !== rev) { resolve(B.state()); return; }
+      const done = () => { clearTimeout(t); if (waiter === done) waiter = null; resolve(B.state()); };
+      const t = setTimeout(done, ms);
+      waiter = done;
+    });
+  },
+
+  state() {
+    const s = {
+      rev: B.rev, ready: B.ready, err: B.err, needsAuth: B.needsAuth, playing: false,
+      title: '', artist: '', album: '', artwork: '', pos: 0, dur: 0,
+      index: -1, length: 0, source: B.source, volume: B.vol, id: '', shuffle: B.shuf, repeat: B.rep,
+      preview: null,
+    };
+    const ps = B.ps;
+    const t = ps && ps.track_window && ps.track_window.current_track;
+    if (!t) return JSON.stringify(s);
+    const id = idOf(t), m = Object.assign(fromSdk(t), meta.get(id) || {});
+    s.playing = !ps.paused;
+    s.pos = position(ps) / 1000;
+    s.dur = (ps.duration || 0) / 1000 || m.duration;
+    s.id = id;
+    s.title = m.title;
+    s.artist = m.artist;
+    s.album = m.album;
+    s.artwork = m.artwork;
+    if (!B.station && B.q.ids[B.q.pos] === id) {
+      s.index = B.q.pos;
+      s.length = B.q.ids.length;
+    }
+    return JSON.stringify(s);
+  },
+
+  // The SDK plays inside Spotify's own frame, out of this page's reach:
+  // no samples for the visualizer, which breathes as if paused.
+  wave(n) { return []; },
+  spectrum(n) { return []; },
+});
+
+// A command changes state a moment after it runs; tell the daemon then too.
+for (const k of ['playIds', 'playStation', 'autoplay', 'toggle', 'play', 'pause', 'next', 'prev', 'jump', 'enqueue', 'seek',
+                 'volume', 'shuffle', 'repeat', 'preview', 'stopPreview', 'setToken']) {
+  const f = B[k];
+  B[k] = function (...a) { const r = f.apply(B, a); touch(); setTimeout(touch, 300); return r; };
+}
+</script>
+<script src="https://sdk.scdn.co/spotify-player.js"
+        onerror="window.brumm.err = 'could not load the Spotify player'"></script>
+</head>
+<body></body>
+</html>
