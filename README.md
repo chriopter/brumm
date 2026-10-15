@@ -404,6 +404,12 @@ support are documented above.
 - 🟢 Spotify too. Thank you, [@sean-imus](https://github.com/sean-imus)!
 - 🎧 Pick your services. Press <kbd>Ctrl</kbd>+<kbd>O</kbd> to switch.
 
+### Changed
+- 🧹 Tidier menus, README and folders, plus visualizer FPS options.
+
+### Fixed
+- 🔧 Fixed covers, queues, GUI/TUI switching and cathedral glass.
+
 **Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
 
 </details>
