@@ -1,167 +1,211 @@
-# Music API providers
+# Music providers
 
-The Rust core separates the music service from everything else. brumm plays
-Apple Music and Spotify; Tidal is listed as coming soon. New installations
-ask for a service at startup, and existing Apple sessions keep theirs.
+Brumm keeps the existing Rust core, Unix socket, Qt frontend, terminal
+frontend, and shared player. Provider implementations are built in and run
+inside the daemon. Apple Music and Tidal use the provider
+contract end to end. Tidal is selectable on this development branch. Live
+sign-in, browsing and full-track playback state pass. Audible full-track
+playback passed on a live desktop session.
 
-## Module boundaries
+## Boundaries in this branch
 
 ```text
 crates/brumm/src/
-├── music.rs              Shared browse documents
 ├── provider/
-│   ├── mod.rs            Catalog, Library and Api contracts
-│   ├── registry.rs       Services, first-run selection, what each lacks
-│   ├── apple/            Apple REST, mapping and navigation
-│   └── spotify/          Spotify Web API, tokens, mapping and links
+│   ├── session.rs          Provider definition, navigation and capabilities
+│   ├── registry.rs         Built-in choices and selection payload
+│   ├── tidal/
+│   │   ├── session.rs      Definition, private SDK bridge and account identity
+│   │   ├── auth.rs         Device login and serialized token refresh
+│   │   ├── mod.rs          Catalog, collections and explicit preference writes
+│   │   ├── features.rs     Native pages and independently loaded mix fallback
+│   │   └── player.html     Bundled official Web SDK adapter
+│   └── apple/
+│       ├── session.rs      Apple provider definition and playback page
+│       ├── auth.rs         Apple sign-in flow
+│       ├── provider.rs     Apple API adapter
+│       └── features.rs     Apple-specific browse pages
 ├── daemon/
-│   ├── service.rs        Composition point: API, playback page, session
-│   └── known.rs          Songs handed to players, for the Spotify page
-├── ipc.rs                Provider-independent socket protocol
-├── tui/                  Terminal frontend
-├── engine/               Playback in Chrome: player.html (MusicKit JS),
-│                         spotify.html (Spotify Web Playback SDK)
-├── login/                Apple sign-in; spotify.rs: OAuth with PKCE
-└── config.rs             Options, sessions and per-service cache names
+│   ├── providers.rs        Construct the selected provider API
+│   └── mod.rs              Shared commands, lifecycle and socket
+├── engine/                 Shared Chrome/CDP lifecycle and controls
+├── login/mod.rs            Generic login command and progress bridge
+├── ipc.rs                  Versioned newline-delimited JSON socket messages
+├── tui/                    Dynamic provider navigation and rendering
+└── config.rs               Provider selection and account-scoped cache paths
 
-gui/                      Qt frontend
-crates/brumm-shared/       Shared audio/accent code and Qt FFI
+gui/                        Qt frontend; consumes provider metadata over IPC
+tools/fakedaemon/            Deterministic provider fixture for frontend checks
 ```
 
-`music` owns `Item`, `Track`, `Ref`, `Shelf`, `Detail` and `ExplorePage`.
-Both frontends, IPC, the cache and the player use these documents without
-importing an API implementation. Playback state remains in `ipc::Player`.
-The daemon holds `Arc<dyn provider::Api>`. Only its composition module,
-`daemon/service.rs`, constructs a client, and it also picks the playback
-page (`engine::Page`).
+`provider::session::Definition` describes a provider's stable ID, navigation,
+capabilities, sign-in state, API client, playback page, and authentication
+entry point. The registry is the only place that constructs a definition.
+Navigation destinations are typed as home, page route, library list, container,
+search, or queue. Frontends render the supplied order, labels, and semantic
+icons; they do not choose Apple shelf titles or infer resource behavior from
+Apple ID prefixes.
 
-## Implementing another API
+The socket remains the GUI/TUI-to-daemon boundary. Provider implementations do
+not expose another socket. The provider selection response includes a protocol
+version, session generation, navigation, capabilities, and provider choices. Unknown
+or incompatible protocol versions produce a visible error. Apple keeps its
+legacy Home command while other typed destinations use shared browse commands.
 
-Add `provider/<name>` and declare the module in `provider/mod.rs`. Implement
-`Catalog` and `Library`, then implement `Api` for your client, and return it
-from `daemon/service.rs`.
+Apple owns the MusicKit login page, callback flow, API composition, feature
+routes, and HTML playback page under `provider/apple/`. The shared engine owns
+Chrome/CDP startup and common playback controls. It receives an opaque playback
+page from the selected provider instead of loading Apple credentials itself.
+The generic login command reports provider progress and cancellation without
+knowing Apple's token format.
 
-`Catalog` supports search, container tracks, a song's album and artist,
-share links, and resolving a share link to a container plus its selected song.
-`Library` lists playlists, albums, artists and songs. Their successful empty
-lists mean the collection is empty, not that the operation is unsupported.
+## Navigation and capabilities
 
-Calls return `provider::Reply`, a boxed `Send` future. This keeps the contracts
-object-safe without adding an async-trait dependency. For example, a search
-implementation has this signature:
+The Apple definition preserves its current order: Home, Explore, Playlists,
+Albums, Artists, Songs, and Radio. Brumm appends Search and Queue as shared
+utilities. Capabilities declare which resource kinds support ratings,
+favorites, and collection edits, plus features such as stations and previews.
+Both frontends use these declarations to hide unavailable actions.
 
-```rust
-fn search<'a>(&'a self, term: &'a str)
-    -> provider::Reply<'a, Result<Vec<music::Shelf>>>
-```
+Cache files use a provider and account-derived namespace. Legacy Apple library
+and resume files migrate once into the first namespace and remain in place for
+rollback. The current Apple account key is a digest of the Music User Token,
+not a stable Apple account identifier; signing in again with a rotated token can
+create a fresh cache namespace. Stable Apple account identity remains future work. Each API session retains its own
+library and fixed cache path; a fresh login replaces the active session and
+rejects late API replies and authorization errors from the previous one.
+Persisted queues also retain the cache path assigned when created or loaded.
+Reloading the same namespace preserves the in-memory library and queue, including
+changes not saved yet. A different namespace saves the outgoing queue and closes
+its player before starting the new session. Late player reports and startups
+cannot replace the new session or write into its queue.
 
-Return `Box::pin(async move { ... })` from each method. Every borrowed input
-shares the call's lifetime; the future must be safe to run on Tokio's workers.
+## Switching and Tidal
 
-`Api` supplies defaults for optional browsing, radio, ratings, library edits,
-favorites, folder creation and Explorer pages. Override the operations your
-provider supports. The defaults return `Error::Unsupported` and never call
-Apple.
+On first start, both frontends offer a Music Services screen. Connect Apple
+Music, Tidal, or both, then continue into the player. The service name in the
+GUI header and Music Services (Ctrl+O) reopen this screen to switch or add
+a connection. Service credentials remain saved independently. The daemon serializes
+transitions, waits for dispatched mutations, cancels outgoing background work,
+closes playback and the private SDK bridge, then installs the next account.
+Queued commands keep their original session generation. Replies and asynchronous
+UI results from an obsolete session cannot update the new provider's view.
+Switching retains saved credentials and restores each account's queue paused.
 
-Use `Error::Unauthorized` when the session needs a fresh login. List and track
-calls return `Listing<T>`, `(Vec<T>, Option<Error>)`, preserving the existing
-partial-result contract. Return the usable prefix with `Some(Error::Partial)`
-when pagination fails. The daemon shows those results without caching them as
-complete. Return an ordinary error when the operation produced no usable data.
+Tidal supplies Home, Explore, Playlists, Albums, Artists and Tracks. Search and
+Queue remain shared. Home first requests native modules, with independent
+personal mix fallbacks; inaccessible editorial discovery returns an informative
+Explore page. Internal endpoint access remains a live validation question.
 
-Keep IDs opaque. `Item.catalog` distinguishes library and catalog resources
-without inferring that distinction from Apple's ID prefixes. `Item.route`,
-`Shelf.route` and `ExplorePage.next` are provider-owned navigation handles.
-Clients pass them back unchanged, including folder parent handles in create
-requests. Validate handles before authenticated requests. Do not place tokens
-in documents, handles or links.
+Tidal exposes one collection preference, with explicit desired-state writes and
+membership reads. Owned and favorited playlists are combined without treating
+favorites as editable. Playlist create and append preserve order and duplicates;
+a failed append reports the created playlist for recovery. Advanced edits,
+folders, radio, autoplay and previews are not advertised.
 
-`Api::feature` handles brumm's named entry points, including `app:discover`
-and `app:favorites`, plus navigation handles returned by the provider.
-`ExplorePage.visuals` supplies up to two named pages the frontends load as
-artwork rows. `Shelf.route` opens the complete row. Frontends do not construct
-Apple chart URLs or parse Apple folder IDs.
+Device login reuses the approved compatibility client from Untidy. This is a
+service compatibility dependency, not a claim of Tidal application approval.
+The official Web SDK and its locked dependencies are bundled from `web/tidal/`;
+rebuild with `bin/build-tidal`. The private loopback transport exposes finite,
+account-bound credential and metadata operations with origin/Host/path checks,
+request limits and no-store responses. Private credentials never enter the
+frontend socket. Preview-only playback is rejected and actual presentation and
+quality are reported separately from the requested quality.
 
-A service also needs a sign-in (`login/`), a way to keep its session in the
-private config (`config.rs`, `Config::signed_in`), and a playback page with
-the `brumm.*` calls of `engine/player.html`. `engine/mod.rs` tests that every
-page defines every call the engine makes.
+Tidal library and resume caches expire after 24 hours. Shared artwork cache
+entries expire after 24 hours without use and retain the existing size bound.
+Personal tokens and real account data are excluded from fixtures and commits.
 
-## What a service lacks
+Apple's catalog token and fixture-backed browsing can be checked without a
+subscription. This branch has not verified Apple Music subscription playback;
+the available environment has no Apple Music subscription. The clean
+architecture plan and phase roadmap are in
+[`provider-abstraction-plan.md`](provider-abstraction-plan.md).
+The accepted Tidal product decisions and implementation details are in
+[`tidal-provider-spec.md`](tidal-provider-spec.md).
 
-`registry::ProviderInfo::lacks` names what the players hide for a service:
-`explore`, `radio`, `preview`, `dislike`, `favorites`, `folders`, `videos`,
-`visualizer` (no audio to analyze; it breathes as if paused) and
-`love-items` (only songs can be loved: Spotify saves albums and playlists,
-it does not love them). The daemon
-sends the list, and the service's name, in `ipc::State` (`lacks`,
-`service`). The frontends then show "Spotify has no Explore for apps" in
-place of a section, leave out the keys and hints, and say so when a key is
-pressed anyway. Anything else unsupported still shows the provider's error.
+## Development checks
+
+Run Rust and QML tests in the Omarchy test box when they may touch the desktop
+session. Build the Qt frontend with `bin/build-gui`. `tools/fakedaemon` supplies
+fictional provider data and does not require personal credentials.
+
+### Current implementation evidence (2026-10-14)
+
+- 170 Rust core unit tests, 5 shared-library tests and 3 daemon integration tests pass.
+- 13 QML checks and 10 SDK adapter checks pass.
+- Rust formatting, Clippy with warnings denied, Qt build and diff whitespace checks pass.
+- A fictional Tidal desktop fixture renders the approved navigation and unified heart.
+- Live device login completes and survives restarts and Apple → Tidal switching.
+- Live albums, owned/favorited playlists, artists, tracks, search and all three
+  personal mix endpoints return content. Favorite membership reads pass for all
+  four resource kinds. Tidal's API-root-relative cursor links omit `/v2`; the
+  adapter normalizes them while retaining the fixed origin and opaque cursor.
+- Native HOME_STATIC/HOME_EDITORIAL requests require `clientVersion` in addition
+  to device/system/subject. Corrected requests return HTTP 500 for this client;
+  Home uses its personal mix fallback and Explore explains unavailability.
+- The live SDK reports FULL presentation, HIGH quality, AAC at 44.1 kHz, and
+  320.403-second duration. Position advances past 32 seconds without an error.
+  Seeking near the end automatically transitions to the next track. Duplicate
+  queue entries, manual next, pause and resume pass live checks in silent omabox.
+- The media CDN returns HTTP 403 for the loopback browser Origin, while the same
+  signed byte request without Origin succeeds with HTTP 206. The SDK now uses a
+  provider-owned native byte transport for the verified
+  `sp-ad-fa.audio.tidal.com` HTTPS origin. Other hosts retain normal browser
+  networking. The SDK still owns manifests, decoding, DRM and queue events.
+- The transport is account-bound, accepts only same-origin SDK requests, forwards
+  only a validated single byte Range, follows no redirects, sends no cookies or
+  OAuth tokens, and buffers at most 32 MiB per response with four concurrent
+  deliveries. Responses are no-store; closing the engine cancels active requests.
+  No signed media URLs are persisted or sent to frontends. New CDN hosts and
+  larger quality tiers need separate verification before expanding this allowlist.
+- Audible full-track playback passed on the user's desktop session; the
+  omabox boxes used for GUI checks have no audio output.
+- Live favorite/playlist mutations were not performed on the user's account;
+  deterministic fixtures cover them. Apple paid playback remains unverified.
+- Live testing exposed and fixed a nested heartbeat payload that had hidden SDK
+  readiness. The adapter now emits the shared flat player/revision document;
+  an SDK test guards both immediate and heartbeat responses.
+- Live playback exposed a batch-metadata failure: `GET /v2/tracks?filter[id]=<ids>`
+  answers 400 "Must be a positive integer" when commas are percent-encoded under
+  a raw-bracket key. The client now re-serializes query pairs, so the wire form
+  is `filter%5Bid%5D=…%2C…`, which returns 200 live; a fixture test pins the
+  encoding and duplicate order.
+- Native HOME_EDITORIAL Explore still fails for this client, so Explore falls
+  back to the legacy device-client pages under `api.tidal.com/v1/pages/`. Live
+  Explore returns Featured, Genres, Moods & Activities and Decades shelves, and
+  shelf continuation routes (`tidal:page:…`) resolve live. Opening a catalog
+  playlist that previously failed now returns all ten tracks through the daemon
+  socket.
+
+For a fictional Tidal preview, run `tmp/fakedaemon` with
+`BRUMM_FIXTURE_PROVIDER=tidal` inside omabox, then launch the Qt frontend in the
+same box. The default fixture remains Apple.
+
 
 ## Spotify
 
-Spotify's Web API serves apps in development mode with limits that shape
-the adapter (as of 2026):
+Spotify connects from the same service setup as Apple Music and Tidal.
+Create your own app in the [Spotify developer dashboard](https://developer.spotify.com/dashboard),
+select Web API and Web Playback SDK, and register
+`http://127.0.0.1:7777/spotify/callback` as its redirect URI. The browser
+sign-in page asks for the Client ID; no client secret is needed. If you use
+another account, allow it under User Management. Playback needs Premium.
 
-- An app serves five accounts, and its owner needs Premium. brumm ships no
-  app: at sign-in, users paste the Client ID of their own, made at
-  developer.spotify.com with the redirect URI
-  `http://127.0.0.1:7777/spotify/callback`.
-- Recommendations, related artists, previews, browse pages, an artist's top
-  songs and batch lookups are gone. Search returns at most ten per kind.
-- Playlist songs are listed only for playlists the user owns or
-  collaborates on. Other playlists become `KIND_STATION` items with id
-  `spotify:playlist:<id>`: they play as a whole and do not open.
-- Saving and checking go through `PUT|DELETE /me/library` and
-  `GET /me/library/contains`, with URIs. A saved song is a loved one.
+Spotify's development mode currently requires a Premium app owner and limits
+new apps to five users. Each user creates an app because a shared development
+app cannot serve brumm's users. See the [official quota rules](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
 
-Sign-in (`login/spotify.rs`) is OAuth with PKCE. The loopback page asks for
-the Client ID, brumm answers with the authorize address (S256 challenge,
-random state), and the callback trades the code for tokens. The config keeps
-`spotify_client_id`, `spotify_refresh_token` and the account id
-`spotify_user`; another account starts with empty caches.
+Library, search, albums, artists, playlists, liked songs, queue controls and
+media keys work. Followed playlists play as a whole; only owned or collaborative
+playlists expose their tracks. Search returns up to ten results per kind.
+Home shows recent music and top tracks/artists. Radio, Explore, previews,
+Replay, folders and autoplay are unavailable. The visualizer runs without
+an audio spectrum because the SDK keeps playback in its own frame.
+See [Spotify's API migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide).
 
-`provider/spotify/auth.rs` refreshes the hourly access token and saves a
-rotated refresh token. The API client and the daemon share one session: the
-daemon pushes a new token into the playback page shortly before the old one
-ends, and renews it at once when the page reports it refused.
-
-`engine/spotify.html` runs the Web Playback SDK in the same headless Chrome
-as MusicKit; playback needs Premium. The queue stays brumm's: the page hands
-Spotify a window of up to 100 song URIs and follows along as songs change,
-sending the next window near its end and brumm's order after a shuffle or
-an insert. Because Spotify has no batch lookups, the daemon tells the page
-what the songs look like (`Engine::describe`, from `daemon/known.rs`).
-The SDK plays in a frame of its own, so the visualizer gets no audio.
-
-## Caches and switching
-
-Each service keeps its own library cache and resume state:
-`library.json` and `resume.json` for Apple Music (the names they always
-had), `library-spotify.json` and `resume-spotify.json` for Spotify
-(`config::service_cache`).
-
-`CMD_PROVIDER` with a `query` selects a service. When it changes, the daemon
-saves the old service's place, closes its player, loads the new service's
-library and place, and boots it; a boot it overtakes is dropped. Both
-options menus open the picker ("Music Service"), and `brumm provider
-[apple|spotify]` lists or switches from the command line. Mixed-service
-queues are not supported.
-
-## Validation
-
-Run `cargo test --workspace --locked` and `cargo fmt --all -- --check`.
-The Apple and Spotify HTTP fixtures live beside their adapters
-(`provider/testserver.rs` serves both). Independent provider, daemon and
-terminal tests exercise the contracts without an account. Build Qt with
-`bin/build-gui`. The GUI provider tests run without a real daemon:
-
-```sh
-QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_BACKEND=software \
-  QT_STYLE_OVERRIDE=Basic /usr/lib/qt6/bin/qmltestrunner -input gui/tests
-```
-
-`FAKE_SPOTIFY=1` makes the fake daemon (`tools/fakedaemon`) report Spotify,
-for screenshots of the Spotify wording. Playback itself needs a real
-Spotify Premium account and a Client ID.
+Tokens refresh through the account-bound playback bridge, including after
+suspend. Rotated tokens cannot overwrite a different account's session.
+Library and resume files use the same provider/account isolation as the other
+services. Live playback validation needs a Premium account and developer app;
+the automated suite uses HTTP and SDK stand-ins.

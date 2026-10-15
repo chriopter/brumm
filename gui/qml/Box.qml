@@ -7,11 +7,12 @@ Item {
     id: box
     property string title
     default property alias content: inner.data
+    property bool scrollable: false
     property int boxWidth: ui.px(480)
 
     anchors.centerIn: parent
     width: Math.min(boxWidth + ui.px(56), parent.width - ui.gap * 2)
-    height: inner.implicitHeight + ui.px(92)
+    height: scrollable ? Math.min(inner.implicitHeight + ui.px(92), parent.height - ui.gap * 2) : inner.implicitHeight + ui.px(92)
 
     TapHandler {} // a click on the card does not close it
 
@@ -65,10 +66,17 @@ Item {
         color: ui.here
         font { family: ui.sans; pixelSize: ui.px(11); weight: Font.Bold; letterSpacing: 1.8 }
     }
-    Column {
-        id: inner
-        anchors { horizontalCenter: parent.horizontalCenter; top: heading.bottom; topMargin: ui.px(18) }
+    Flickable {
+        anchors { horizontalCenter: parent.horizontalCenter; top: heading.bottom; topMargin: ui.px(18); bottom: parent.bottom; bottomMargin: ui.px(36) }
         width: box.width - ui.px(56)
-        spacing: ui.px(6)
+        contentHeight: inner.implicitHeight
+        clip: box.scrollable
+        interactive: box.scrollable && contentHeight > height
+        boundsBehavior: Flickable.StopAtBounds
+        Column {
+            id: inner
+            width: parent.width
+            spacing: ui.px(6)
+        }
     }
 }

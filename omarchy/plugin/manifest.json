@@ -10,7 +10,7 @@
   "entryPoints": { "barWidget": "BarWidget.qml" },
   "barWidget": {
     "displayName": "brumm",
-    "description": "Apple Music now playing from brumm",
+    "description": "Music now playing from brumm",
     "category": "Media",
     "aliases": ["brumm", "music", "apple music"],
     "allowMultiple": false,

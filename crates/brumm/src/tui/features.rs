@@ -6,7 +6,7 @@ use super::model::{Key, Model, Msg, Row, View};
 use super::text::*;
 use super::view::{MARGIN, box_lines};
 use crate::ipc::{self, Request};
-use crate::music::{Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF};
+use crate::music::{Item, KIND_SHELF};
 
 /// A one-line form for an action row.
 #[derive(Clone, Debug, Default)]
@@ -18,56 +18,40 @@ pub struct FeatureForm {
 }
 
 impl Model {
-    /// The music service, as the daemon names it.
-    pub fn service(&self) -> &str {
-        match self.state.service.as_str() {
-            "" => "Apple Music",
-            s => s,
-        }
-    }
-
-    /// Whether the service lacks what (registry::ProviderInfo::lacks).
-    pub fn lacks(&self, what: &str) -> bool {
-        self.state.lacks.iter().any(|l| l == what)
-    }
-
-    /// Says so when the service lacks what, by the name players know it;
-    /// true then, and the caller does nothing.
-    pub fn lacking(&mut self, what: &str, name: &str) -> bool {
-        if !self.lacks(what) {
-            return false;
-        }
-        let msg = format!("{} has no {name} for apps", self.service());
-        self.set_flash(&msg);
-        true
-    }
-
-    /// The section a view's key names, when the service lacks it.
-    pub fn missing(&self, key: &str) -> Option<&'static str> {
-        match key {
-            "explore:" if self.lacks("explore") => Some("Explore"),
-            "radio:" if self.lacks("radio") => Some("Radio"),
-            _ => None,
-        }
-    }
-
-    /// Opens the music service picker over the player.
-    pub fn pick_provider(&mut self) {
-        self.provider_picking = true;
-        self.provider_chosen = false;
-        self.ask(Request::new(ipc::CMD_PROVIDER), |reply| {
-            Some(Msg::ProviderChoices(reply.and_then(|m| {
-                m.provider.ok_or_else(|| "missing provider choices".into())
-            })))
-        });
-    }
-
     pub fn provider_key(&mut self, key: &str) {
         match key {
-            // Opened from the options, it closes like every other box; only
-            // the first start's choice quits on q.
-            "esc" | "q" | "Q" | "o" | "ctrl+c" if self.provider_picking => {
-                self.provider_picking = false
+            "esc"
+                if self.provider_picker_open
+                    && self.provider_choices.iter().any(|p| p.configured) =>
+            {
+                if !self
+                    .provider_choices
+                    .iter()
+                    .any(|p| p.configured && p.id == self.provider_id)
+                {
+                    let id = self
+                        .provider_choices
+                        .iter()
+                        .find(|p| p.configured)
+                        .unwrap()
+                        .id
+                        .clone();
+                    self.ask(
+                        Request {
+                            cmd: ipc::CMD_PROVIDER.into(),
+                            query: id,
+                            ..Default::default()
+                        },
+                        |reply| {
+                            Some(Msg::ProviderChoices(reply.and_then(|m| {
+                                m.provider
+                                    .ok_or_else(|| "missing provider selection".into())
+                            })))
+                        },
+                    );
+                }
+                self.provider_picker_open = false;
+                self.provider_setup = false;
             }
             "q" | "Q" | "ctrl+c" => self.cmds.push(super::model::Cmd::Quit),
             "up" | "down" | "tab" | "k" | "j" => {
@@ -88,16 +72,17 @@ impl Model {
                     .provider_choices
                     .get(self.provider_index)
                     .filter(|p| p.available)
-                    .cloned()
                 {
-                    if self.provider_picking {
-                        self.provider_chosen = true;
-                        self.set_flash(&format!("switching to {}…", p.name));
+                    let connect = !p.configured;
+                    let id = p.id.clone();
+                    self.provider_connect = connect.then(|| id.clone());
+                    if !self.provider_setup {
+                        self.provider_picker_open = false;
                     }
                     self.ask(
                         Request {
                             cmd: ipc::CMD_PROVIDER.into(),
-                            query: p.id.clone(),
+                            query: id,
                             ..Default::default()
                         },
                         |reply| {
@@ -112,23 +97,45 @@ impl Model {
             _ => {}
         }
     }
+    pub fn auth_box(&self) -> Vec<L> {
+        let Some(prompt) = &self.state.auth else {
+            return vec![];
+        };
+        let lines = vec![
+            one(format!(" Connect {}", self.provider_name), BOLD),
+            one(format!(" {}", prompt.url), PLAIN),
+            one(
+                format!(" Code: {}", prompt.code.as_deref().unwrap_or("")),
+                HERE,
+            ),
+            one(" Approve the connection in your browser · esc cancel", DIM),
+        ];
+        box_lines(
+            "Device login",
+            false,
+            L::default(),
+            lines,
+            (self.width - 8).clamp(20, 78),
+            6,
+        )
+    }
+
     pub fn provider_box(&self) -> Vec<L> {
         let wd = 54.min(self.width - 2 * MARGIN - 4).max(8);
-        let fw = (wd - 3) as usize;
-        let mut lines = vec![one(" Choose your music service", PLAIN)];
+        let mut lines = vec![one(" Connect your music services", PLAIN)];
         for (i, p) in self.provider_choices.iter().enumerate() {
-            let note = if !p.available {
-                " (coming soon)"
-            } else if self.provider_picking && p.name == self.service() {
-                " (in use)"
-            } else {
-                ""
-            };
             lines.push(one(
                 format!(
-                    " {} {}{note}",
+                    " {} {}{}",
                     if i == self.provider_index { ">" } else { " " },
                     p.name,
+                    if !p.available {
+                        " (unavailable)"
+                    } else if p.configured {
+                        " · connected"
+                    } else {
+                        " · connect"
+                    }
                 ),
                 if p.available { HERE } else { DIM },
             ));
@@ -136,17 +143,8 @@ impl Model {
         if self.provider_choices.is_empty() {
             lines.push(one(" Loading providers…", DIM));
         }
-        lines.push(one(
-            if self.provider_picking {
-                " enter switch · esc close"
-            } else {
-                " enter continue · q close"
-            },
-            DIM,
-        ));
+        lines.push(one(" enter connect / switch · esc done · q close", DIM));
         let h = lines.len() as i64 + 2;
-        // Padded to the box, so its right edge stands straight.
-        let lines = lines.iter().map(|l| fit(l, fw)).collect();
         box_lines("Music provider", false, L::default(), lines, wd, h)
     }
 
@@ -250,10 +248,11 @@ impl Model {
             page.rows
                 .push(Row::note("No additional metadata available."));
         }
-        let favorable = r.track.is_some()
-            || r.item.as_ref().is_some_and(|it| {
-                matches!(it.kind.as_str(), KIND_ALBUM | KIND_ARTIST | KIND_PLAYLIST)
-            });
+        let favorable = self.capabilities.favorites
+            && (r.track.is_some()
+                || r.item
+                    .as_ref()
+                    .is_some_and(|it| self.capabilities.favorite_kinds.contains(&it.kind)));
         if favorable {
             let kind = r
                 .item
@@ -261,8 +260,21 @@ impl Model {
                 .map_or("song".to_string(), |it| it.kind.clone());
             page.rows.push(Row::item(Item {
                 kind: KIND_SHELF.into(),
-                id,
-                name: "Add favorite".into(),
+                id: id.clone(),
+                name: if let Some(preference) = &self.capabilities.preference {
+                    if self
+                        .favorites
+                        .get(&format!("{kind}:{id}"))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        preference.remove_label.clone()
+                    } else {
+                        preference.label.clone()
+                    }
+                } else {
+                    "Add favorite".into()
+                },
                 route: format!("action:favorite:{kind}"),
                 ..Default::default()
             }));

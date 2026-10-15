@@ -152,6 +152,15 @@ fn daemon_answers_without_credentials_and_quits() {
     assert!(String::from_utf8_lossy(&second.stderr).contains("already running"));
 
     let mut c = Conn::open(&sock);
+    let unsupported = c.ask(json!({"cmd":"provider","protocolVersion":99}));
+    assert!(
+        unsupported["error"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported socket protocol")
+    );
+    let supported = c.ask(json!({"cmd":"provider","protocolVersion":1}));
+    assert_eq!(supported["provider"]["protocolVersion"], 1);
     let sub = c.ask(json!({"cmd": "subscribe"}));
     let st = &sub["state"];
     assert!(st["status"].is_string(), "{sub}");
@@ -220,7 +229,7 @@ fn daemon_answers_without_credentials_and_quits() {
 }
 
 #[test]
-fn first_run_provider_choice_is_saved_and_unavailable_services_are_rejected() {
+fn provider_selection_persists_and_switches_without_reusing_stale_requests() {
     let mut e = env("provider-choice");
     e.daemon = Some(
         brumm(&e.root)
@@ -237,22 +246,47 @@ fn first_run_provider_choice_is_saved_and_unavailable_services_are_rejected() {
     assert_eq!(before["provider"]["needsChoice"], true);
     assert_eq!(before["provider"]["selected"], "");
     assert_eq!(before["provider"]["choices"][0]["id"], "apple");
-    assert_eq!(before["provider"]["choices"][1]["id"], "spotify");
     assert_eq!(before["provider"]["choices"][1]["available"], true);
-    assert_eq!(before["provider"]["choices"][1]["lacks"][1], "radio");
-    assert_eq!(before["provider"]["choices"][2]["available"], false);
-    let bad = c.ask(json!({"cmd":"provider","query":"tidal"}));
-    assert!(bad["error"].as_str().unwrap().contains("not supported"));
+    let bad = c.ask(json!({"cmd":"provider","query":"unknown"}));
+    assert!(
+        bad["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown music provider")
+    );
     assert!(!e.root.join("config/brumm/config.json").exists());
+    let mut other = Conn::open(&sock);
+    other.ask(json!({"cmd":"subscribe"}));
     let chosen = c.ask(json!({"cmd":"provider","query":"apple"}));
     assert_eq!(chosen["provider"]["selected"], "apple");
     assert_eq!(chosen["provider"]["needsChoice"], false);
+    loop {
+        let mut line = String::new();
+        assert!(other.r.read_line(&mut line).unwrap() > 0);
+        let message: Value = serde_json::from_str(&line).unwrap();
+        if message.get("provider").is_some() {
+            assert_eq!(message["provider"], chosen["provider"]);
+            break;
+        }
+    }
     let saved: Value =
         serde_json::from_slice(&std::fs::read(e.root.join("config/brumm/config.json")).unwrap())
             .unwrap();
     assert_eq!(saved["provider"], "apple");
     let after = c.ask(json!({"cmd":"provider"}));
     assert_eq!(after["provider"]["needsChoice"], false);
+    let apple_epoch = after["provider"]["generation"].as_i64().unwrap();
+    let tidal = c.ask(json!({"cmd":"provider","query":"tidal"}));
+    assert_eq!(tidal["provider"]["selected"], "tidal");
+    assert_eq!(tidal["provider"]["navigation"][5]["label"], "Tracks");
+    let tidal_epoch = tidal["provider"]["generation"].as_i64().unwrap();
+    assert!(tidal_epoch > apple_epoch);
+    let stale = c.ask(json!({"cmd":"set-favorite","generation":apple_epoch,"saved":true,"refs":[{"kind":"song","id":"123"}]}));
+    assert!(stale["error"].as_str().unwrap().contains("session"));
+    let restored = c.ask(json!({"cmd":"provider","query":"apple"}));
+    assert_eq!(restored["provider"]["selected"], "apple");
+    assert!(restored["provider"]["generation"].as_i64().unwrap() > tidal_epoch);
+    assert_eq!(restored["provider"]["navigation"][5]["label"], "Songs");
     c.ask(json!({"cmd":"quit"}));
     e.daemon.as_mut().unwrap().wait().unwrap();
 }

@@ -15,7 +15,7 @@
 //! groups, the play button the one filled element.
 
 use super::keys::Badge;
-use super::model::{Model, SEC_QUEUE};
+use super::model::Model;
 use super::text::*;
 use super::view::{
     Hit, IC_MUTED, IC_NEXT, IC_PAUSE, IC_PLAY, IC_PREV, IC_QUEUE, IC_REPEAT, IC_REPEAT_ONE,
@@ -60,7 +60,14 @@ impl Model {
             tag = one(format!("{}/{}", st.index + 1, st.length), DIM);
         }
         let mut heading = one(title.clone(), BOLD);
-        if st.preview.is_none() && self.rating.get(&st.id).copied().unwrap_or(0) != 0 {
+        if st.preview.is_none()
+            && (self.rating.get(&st.id).copied().unwrap_or(0) != 0
+                || self
+                    .favorites
+                    .get(&format!("song:{}", st.id))
+                    .copied()
+                    .unwrap_or(false))
+        {
             heading.spans.push(sp("  ", PLAIN));
             heading = cat(heading, self.rating_mark(&st.id));
         }
@@ -239,7 +246,7 @@ impl Model {
         ]);
         let volume = cat(
             line(vec![
-                lit(self.section == SEC_QUEUE, IC_QUEUE),
+                lit(self.section == self.sec("queue"), IC_QUEUE),
                 sp("  ", PLAIN),
             ]),
             self.volume_label(),

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Rebuild the committed playback bundle from locked SDK versions.
+set -euo pipefail
+cd "$(dirname "$0")/../web/tidal"
+npm ci --ignore-scripts --no-audit --no-fund
+npm run build

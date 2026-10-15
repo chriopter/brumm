@@ -9,7 +9,6 @@ Rectangle {
             if (store.upd && (store.upd.checking || store.upd.installing)) return
             if (store.barAsk) return store.barAnswer(false)
             store.help = false
-            store.providerPicking = false // the first start's choice stays
             store.pick = null
             if (store.fb && !store.fb.sending) store.fb = null
             if (store.upd) store.updateKey("esc")

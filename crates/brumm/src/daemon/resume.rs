@@ -11,9 +11,11 @@ use crate::engine::Engine;
 use crate::error::Result;
 use crate::ipc::Player;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Resume {
+    #[serde(skip, default = "path")]
+    pub(super) cache_path: PathBuf,
     pub ids: Vec<String>,
     /// A station plays instead of ids.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -32,27 +34,46 @@ pub struct Resume {
     pub autoplay: bool,
     #[serde(skip)]
     pub(super) saved_at: Option<Instant>,
-    /// The music service it belongs to; each keeps its own.
-    #[serde(skip)]
-    pub provider: String,
 }
 
-fn path(provider: &str) -> PathBuf {
-    config::service_cache("resume", provider)
+fn path() -> PathBuf {
+    config::session_cache_dir().join("resume.json")
+}
+
+impl Default for Resume {
+    fn default() -> Self {
+        Self::new_at(config::session_cache_dir())
+    }
 }
 
 impl Resume {
-    pub fn new(provider: &str) -> Resume {
-        Resume {
-            provider: provider.to_string(),
-            ..Default::default()
+    pub fn new_at(dir: PathBuf) -> Self {
+        Self {
+            cache_path: dir.join("resume.json"),
+            ids: Vec::new(),
+            station: String::new(),
+            source: String::new(),
+            id: String::new(),
+            pos: 0.0,
+            dur: 0.0,
+            title: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            artwork: String::new(),
+            autoplay: false,
+            saved_at: None,
         }
     }
 
-    pub fn load(provider: &str) -> Option<Resume> {
-        let b = std::fs::read(path(provider)).ok()?;
+    pub fn load() -> Option<Resume> {
+        Self::load_at(config::session_cache_dir())
+    }
+
+    pub fn load_at(dir: PathBuf) -> Option<Resume> {
+        let cache_path = dir.join("resume.json");
+        let b = std::fs::read(&cache_path).ok()?;
         let mut r: Resume = serde_json::from_slice(&b).ok()?;
-        r.provider = provider.to_string();
+        r.cache_path = cache_path;
         r.playable().then_some(r)
     }
 
@@ -61,8 +82,8 @@ impl Resume {
         let Ok(b) = serde_json::to_vec(self) else {
             return;
         };
-        if std::fs::create_dir_all(config::cache_dir()).is_ok() {
-            let _ = config::write_private(&path(&self.provider), &b);
+        if std::fs::create_dir_all(self.cache_path.parent().expect("cache directory")).is_ok() {
+            let _ = config::write_private(&self.cache_path, &b);
         }
     }
 
@@ -129,11 +150,39 @@ mod tests {
     use crate::config::testenv;
 
     #[test]
+    fn saving_an_old_queue_keeps_its_original_account_path() {
+        let Some(_env) = testenv::isolated() else {
+            return;
+        };
+        let mut cfg = config::Config {
+            provider: "apple".into(),
+            user_token: "old-token".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        let old_dir = config::session_cache_dir();
+        let mut old = Resume {
+            id: "old-song".into(),
+            ids: vec!["old-song".into()],
+            ..Default::default()
+        };
+        old.save();
+        let mut loaded = Resume::load().unwrap();
+        cfg.user_token = "new-token".into();
+        cfg.save().unwrap();
+        loaded.pos = 42.0;
+        loaded.save();
+        assert!(Resume::load().is_none());
+        assert!(!path().exists());
+        assert_eq!(Resume::load_at(old_dir).unwrap().pos, 42.0);
+    }
+
+    #[test]
     fn resume_follows_and_restores() {
         let Some(_env) = testenv::isolated() else {
             return;
         };
-        assert!(Resume::load("").is_none());
+        assert!(Resume::load().is_none());
         let mut r = Resume {
             ids: vec!["a".into(), "b".into()],
             source: "lib:album:l.1".into(),
@@ -146,7 +195,7 @@ mod tests {
             dur: 200.0,
             ..Default::default()
         });
-        let back = Resume::load("").expect("saved on a song change");
+        let back = Resume::load().expect("saved on a song change");
         assert_eq!(
             (back.id.as_str(), back.pos, back.title.as_str()),
             ("b", 42.0, "B")
@@ -157,27 +206,14 @@ mod tests {
             preview: Some(Default::default()),
             ..Default::default()
         });
-        assert_eq!(Resume::load("").unwrap().id, "b");
+        assert_eq!(Resume::load().unwrap().id, "b");
         let shown = back.overlay(Player {
             ready: true,
             ..Default::default()
         });
         assert!(shown.ready && shown.title == "B" && shown.pos == 42.0);
-        // Each service resumes its own.
-        assert!(Resume::load("spotify").is_none());
-        let mut s = Resume {
-            ids: vec!["s".into()],
-            ..Resume::new("spotify")
-        };
-        s.track(&Player {
-            id: "s".into(),
-            title: "S".into(),
-            ..Default::default()
-        });
-        assert_eq!(Resume::load("spotify").unwrap().title, "S");
-        assert_eq!(Resume::load("apple").unwrap().title, "B");
         // Unplayable leftovers are not resumed.
-        std::fs::write(path(""), r#"{"ids":[],"id":"x"}"#).unwrap();
-        assert!(Resume::load("").is_none());
+        std::fs::write(path(), r#"{"ids":[],"id":"x"}"#).unwrap();
+        assert!(Resume::load().is_none());
     }
 }

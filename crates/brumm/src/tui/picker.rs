@@ -40,6 +40,9 @@ pub fn drop_word(s: &str) -> String {
 
 impl Model {
     pub fn open_picker(&mut self) {
+        if !self.capabilities.playlist_write {
+            return;
+        }
         let v = self.cur();
         let row = v.rows.get(v.sel);
         let (what, name) = if let Some(t) = row.and_then(|r| r.track.as_ref()) {
@@ -136,7 +139,9 @@ impl Model {
     fn add_to_playlist(&mut self, id: String, name: String) {
         let Some(p) = self.pick.take() else { return };
         self.set_flash(&format!("adding to {name}…"));
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         self.task(async move {
             let ids = match songs_of(&c, &p.what).await {
                 Ok(ids) => ids,
@@ -213,12 +218,9 @@ impl Model {
                     ),
                     DIM,
                 ));
-            } else if p.lists.is_empty() && self.state.service == "Spotify" {
-                lines.push(one("  Spotify lets apps add only to your own", DIM));
-                lines.push(one("  playlists, like a new one here", DIM));
             } else if p.lists.is_empty() {
-                lines.push(one("  Apple lets apps add only to playlists", DIM));
-                lines.push(one("  made with an app — like a new one here", DIM));
+                lines.push(one("  No editable playlists available", DIM));
+                lines.push(one("  Create a new playlist here", DIM));
             }
             lines.push(L::default());
             lines.push(line(vec![

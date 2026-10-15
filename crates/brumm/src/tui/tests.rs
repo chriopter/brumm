@@ -36,6 +36,13 @@ fn ready() -> State {
 /// A w×h screen, nothing playing.
 fn model(w: i64, h: i64) -> Model {
     let mut m = Model::new(None, ready());
+    use crate::provider::session::Definition;
+    m.configure_navigation(crate::provider::session::navigation(
+        crate::provider::apple::session::Apple.navigation(),
+    ));
+    m.capabilities = crate::provider::apple::session::Apple.capabilities();
+    m.section = 0;
+    m.provider_name = "Apple Music".into();
     m.width = w;
     m.height = h;
     m.split = 0.5;
@@ -170,34 +177,53 @@ fn section_order_matches_the_gui() {
         "/../../gui/qml/Store.qml"
     ))
     .expect("gui/qml/Store.qml");
-    let names = qml
-        .lines()
-        .find_map(|l| l.split_once("sectionNames:").map(|(_, r)| r.trim()))
-        .expect("sectionNames in Store.qml");
-    let gui: Vec<String> =
-        serde_json::from_str(names.trim_end_matches(';')).expect("sectionNames is a list");
-    assert_eq!(gui, SECTION_NAMES.to_vec());
-    for (name, n) in [
-        ("secHome", SEC_HOME),
-        ("secExplore", SEC_EXPLORE),
-        ("secPlaylists", SEC_PLAYLISTS),
-        ("secAlbums", SEC_ALBUMS),
-        ("secArtists", SEC_ARTISTS),
-        ("secSongs", SEC_SONGS),
-        ("secRadio", SEC_RADIO),
-        ("secSearch", SEC_SEARCH),
-        ("secQueue", SEC_QUEUE),
-    ] {
-        let at = qml
-            .find(&format!("{name}:"))
-            .unwrap_or_else(|| panic!("{name} in Store.qml"));
-        let digits: String = qml[at + name.len() + 1..]
-            .trim_start()
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        assert_eq!(digits, n.to_string(), "{name}");
-    }
+    use crate::provider::session::Definition;
+    let entries =
+        crate::provider::session::navigation(crate::provider::apple::session::Apple.navigation());
+    assert_eq!(
+        entries.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(),
+        SECTION_NAMES
+    );
+    assert!(qml.contains("sectionNames: navigation.map(e => e.label)"));
+    assert!(qml.contains("sectionId: navigation[section].id"));
+}
+
+#[test]
+fn provider_navigation_can_reorder_rename_and_omit_sections() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(120, 40);
+    let mut entries = m.navigation[..7].to_vec();
+    entries.retain(|entry| entry.id != "radio");
+    entries.swap(0, SEC_ARTISTS);
+    entries[0].label = "My Artists".into();
+    m.section = SEC_ALBUMS;
+    m.configure_navigation(crate::provider::session::navigation(entries));
+    assert_eq!(m.navigation[0].label, "My Artists");
+    assert_eq!(m.navigation[m.section].id, "albums");
+    assert_eq!(m.sec("artists"), 0);
+    assert_eq!(m.navigation.len(), SEC_QUEUE);
+    assert!(!m.navigation.iter().any(|e| e.id == "radio"));
+    let place = m.here();
+    assert_eq!(place.section_id, "albums");
+    m.switch_to(m.sec("queue"));
+    m.go_place(place);
+    assert_eq!(m.navigation[m.section].id, "albums");
+}
+
+#[test]
+fn provider_capabilities_gate_actions_without_service_checks() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(120, 40);
+    m.capabilities = Default::default();
+    m.rate(1);
+    m.play_station();
+    m.toggle_preview();
+    assert!(m.rating.is_empty());
+    assert!(!m.previewing);
 }
 
 /// Terminal keys get the names the handlers match.
@@ -619,9 +645,11 @@ async fn paste_opens_links() {
     let Cmd::Task(task) = task else {
         panic!("link was not delegated to the provider")
     };
-    assert!(
-        matches!(task.await, Some(Msg::Open(it,song)) if it.id == "resolved" && song == "song")
-    );
+    let result = match task.await {
+        Some(Msg::Session(_, msg)) => Some(*msg),
+        other => other,
+    };
+    assert!(matches!(result, Some(Msg::Open(it,song)) if it.id == "resolved" && song == "song"));
     server.await.unwrap();
     m.update(Msg::Paste("daft punk".into()));
     assert_eq!(m.query, "daft punk");
@@ -1310,7 +1338,6 @@ fn options_menu() {
         "Reduce Motion",
         "Cover Style",
         "Show Shortcuts",
-        "Music Service",
     ]
     .into_iter()
     .enumerate()
@@ -1734,7 +1761,7 @@ fn discovery_cards() {
             }],
             ..Default::default()
         },
-        groups: Default::default(),
+        groups: vec![Vec::new()],
     });
     let shelves = vec![Shelf {
         title: "New".into(),
@@ -1880,15 +1907,13 @@ fn provider_choice_skips_unavailable_services_and_blocks_normal_navigation() {
     let mut m = model(120, 35);
     m.state.status = ipc::STATUS_CHOOSE_PROVIDER.into();
     m.provider_choices = crate::provider::registry::choices();
+    for provider in m.provider_choices.iter_mut().skip(1) {
+        provider.available = false; // Future adapters must remain unselectable.
+    }
     m.provider_key("down");
-    assert_eq!(m.provider_index, 1, "Spotify is selectable");
-    m.provider_key("down");
-    assert_eq!(
-        m.provider_index, 0,
-        "Tidal is not selectable before its adapter exists"
-    );
+    assert_eq!(m.provider_index, 0, "unavailable adapters are skipped");
     m.provider_key("up");
-    assert_eq!(m.provider_index, 1);
+    assert_eq!(m.provider_index, 0);
     let text = m
         .provider_box()
         .iter()
@@ -1896,59 +1921,7 @@ fn provider_choice_skips_unavailable_services_and_blocks_normal_navigation() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("Apple Music"));
-    assert!(text.contains("Spotify") && !text.contains("Spotify (coming soon)"));
-    assert!(text.contains("Tidal (coming soon)"));
-}
-
-#[test]
-fn the_options_open_the_music_service_picker() {
-    let Some(_env) = testenv::isolated() else {
-        return;
-    };
-    let mut m = playing(120, 35);
-    m.state.service = "Spotify".into();
-    m.opt_open = true;
-    m.opt_sel = super::options::OPT_SERVICE;
-    let rows = screen(&mut m).join("\n");
-    assert!(rows.contains("Music Service") && rows.contains("Spotify"));
-    m.options_key("space");
-    assert!(m.provider_picking && !m.opt_open);
-    m.update(Msg::ProviderChoices(Ok(
-        crate::provider::registry::Selection {
-            selected: "spotify".into(),
-            needs_choice: false,
-            choices: crate::provider::registry::choices(),
-        },
-    )));
-    assert_eq!(m.provider_index, 1, "the current service is marked");
-    let text = m
-        .provider_box()
-        .iter()
-        .map(super::text::text)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("enter switch · esc close"));
-    assert!(text.contains("Spotify (in use)"), "{text}");
-    let box_ = m.provider_box();
-    let widths: Vec<usize> = box_.iter().map(super::text::w).collect();
-    assert!(
-        widths.windows(2).all(|p| p[0] == p[1]),
-        "ragged box: {widths:?}"
-    );
-    m.key_press(Key {
-        name: "esc".into(),
-        ..Default::default()
-    });
-    assert!(!m.provider_picking, "esc closes it, not brumm");
-    for close in ["Q", "ctrl+c"] {
-        m.provider_picking = true;
-        m.key_press(Key {
-            name: close.into(),
-            ..Default::default()
-        });
-        assert!(!m.provider_picking, "{close} closes it, not brumm");
-    }
-    assert!(!m.cmds.iter().any(|c| matches!(c, super::model::Cmd::Quit)));
+    assert!(text.contains("Tidal (unavailable)"));
 }
 
 #[test]
@@ -2008,50 +1981,4 @@ fn pixel_cover_resize_runs_off_the_input_thread() {
     m.update(job().unwrap());
     assert!(!m.stage_busy);
     assert!(!m.rendered.contains_key(&(next, false)));
-}
-
-#[test]
-fn spotify_names_itself_and_skips_what_it_lacks() {
-    let Some(_env) = testenv::isolated() else {
-        return;
-    };
-    let mut m = playing(120, 35);
-    m.state.service = "Spotify".into();
-    m.state.lacks = crate::provider::registry::lacks("spotify");
-    m.switch_to(super::model::SEC_EXPLORE);
-    let rows = screen(&mut m).join("\n");
-    assert!(rows.contains("Spotify has no Explore for apps"), "{rows}");
-    assert!(!m.cur().loading, "nothing asked for");
-    m.switch_to(super::model::SEC_SEARCH);
-    let rows = screen(&mut m).join("\n");
-    assert!(rows.contains("search Spotify"), "{rows}");
-    assert!(
-        !rows.contains("preview"),
-        "no preview key in the footer: {rows}"
-    );
-    m.play_station();
-    assert!(m.flash.contains("Spotify has no radio"), "{}", m.flash);
-    m.flash.clear();
-    m.toggle_preview();
-    assert!(m.flash.contains("no previews") && !m.previewing);
-    m.rate(crate::music::DISLIKE);
-    assert!(m.flash.contains("no dislikes"));
-    m.cur_mut().rows = vec![super::model::Row::item(Item {
-        kind: KIND_PLAYLIST.into(),
-        id: "p".into(),
-        name: "Mine".into(),
-        ..Default::default()
-    })];
-    m.cur_mut().sel = 0;
-    m.rate(crate::music::LOVE);
-    assert!(m.flash.contains("loves songs only"), "{}", m.flash);
-    assert!(m.rating.is_empty(), "nothing marked loved");
-    let help = m
-        .help_lines()
-        .iter()
-        .map(|l| super::text::text(&l.text))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!help.contains("radio:") && !help.contains("preview the selected"));
-    assert!(help.contains("love") && !help.contains("love / dislike"));
 }

@@ -116,10 +116,9 @@ pub const OPT_AUTOPLAY: usize = 1;
 pub const OPT_MOTION: usize = 2;
 pub const OPT_COVER: usize = 3;
 pub const OPT_KEYS: usize = 4;
-pub const OPT_SERVICE: usize = 5;
-pub const OPT_BAR: usize = 6;
-pub const OPT_MUSIC_KEYS: usize = 7;
-pub const NUM_OPTIONS: usize = 8;
+pub const OPT_BAR: usize = 5;
+pub const OPT_MUSIC_KEYS: usize = 6;
+pub const NUM_OPTIONS: usize = 7;
 
 const OPT_LABELS: [&str; NUM_OPTIONS] = [
     "Cover Colors",
@@ -127,7 +126,6 @@ const OPT_LABELS: [&str; NUM_OPTIONS] = [
     "Reduce Motion",
     "Cover Style",
     "Show Shortcuts",
-    "Music Service",
     "Show in Top Bar",
     "Music Keys",
 ];
@@ -137,7 +135,6 @@ const OPT_HINTS: [&str; NUM_OPTIONS] = [
     "No scrolling text, fewer wobbles.",
     "How album covers are drawn.",
     "Show keys on the buttons.",
-    "Where the music comes from: space to choose.",
     "The song in Omarchy's top bar.",
     "Super+Shift+M opens brumm, not Spotify.",
 ];
@@ -180,6 +177,7 @@ impl Model {
     /// The top bar's rows only where omarchy can switch them.
     pub fn opt_shown(&self, i: usize) -> bool {
         match i {
+            OPT_AUTOPLAY => self.capabilities.autoplay,
             OPT_BAR => self.has_omarchy,
             OPT_MUSIC_KEYS => self.has_omarchy && crate::update::can_music_keys(),
             _ => true,
@@ -199,7 +197,7 @@ impl Model {
     /// Keeps the options: the daemon saves them and tells every player;
     /// without one they go to the file here.
     pub fn save_options(&mut self) {
-        let Some(c) = self.client.clone() else {
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
             let _ = self.opts.o.save();
             return;
         };
@@ -257,6 +255,7 @@ impl Model {
     /// menu.
     pub fn options_key(&mut self, k: &str) {
         match k {
+            "ctrl+o" => self.open_provider_picker(),
             "up" | "k" | "shift+tab" => self.step_option(-1),
             "down" | "j" | "tab" => self.step_option(1),
             "space" | " " | "enter" => self.change_option(self.opt_sel, 1),
@@ -281,7 +280,11 @@ impl Model {
         }
         self.opts.o.start = launch::GUI.into();
         self.set_flash("opening the gui…");
-        let (client, o, here) = (self.client.clone(), self.opts.o.clone(), self.here());
+        let (client, o, here) = (
+            self.client.as_ref().map(|c| c.for_session()),
+            self.opts.o.clone(),
+            self.here(),
+        );
         self.task(async move {
             super::place::leave_place(client.as_ref(), &here).await; // the window opens where this was
             match &client {
@@ -323,13 +326,8 @@ impl Model {
         }
     }
 
-    /// Flips a switch, or steps a choice by dir; the music service opens
-    /// its own picker.
+    /// Flips a switch, or steps a choice by dir.
     pub fn change_option(&mut self, i: usize, dir: i64) {
-        if i == OPT_SERVICE {
-            self.opt_open = false;
-            return self.pick_provider();
-        }
         match i {
             OPT_COVER => {
                 self.opts.o.cover = step(&COVER_STYLES, self.opts.chosen(), dir).to_string();
@@ -384,7 +382,6 @@ impl Model {
             },
         );
         values[OPT_COVER] = choices(&COVER_STYLES, self.opts.chosen());
-        values[OPT_SERVICE] = one(self.service().to_string(), PLAIN);
         for i in [OPT_AUTOPLAY, OPT_MOTION, OPT_KEYS, OPT_BAR, OPT_MUSIC_KEYS] {
             values[i] = check(self.option_on(i));
         }
@@ -394,7 +391,7 @@ impl Model {
             sp("space", KEY),
             sp(" change   ", DIM),
             sp("esc", KEY),
-            sp(" close", DIM),
+            sp(" close   ctrl+o provider", DIM),
         ]);
         let mut wd = w(&keys) as i64;
         for (i, v) in values.iter().enumerate() {

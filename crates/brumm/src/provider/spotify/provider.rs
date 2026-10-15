@@ -119,7 +119,7 @@ impl Client {
         }
     }
 
-    async fn song(&self, id: &str) -> Result<Value> {
+    pub(super) async fn song(&self, id: &str) -> Result<Value> {
         self.get(&format!("/v1/tracks/{}", checked(id)?)).await
     }
 

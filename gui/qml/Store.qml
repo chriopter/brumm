@@ -9,49 +9,47 @@ Item {
     property var providers: []
     property int providerIndex: 0
     property bool providerRequested: false
-    property string providerSelected: ""
-    readonly property bool providerChoiceNeeded: st.status === "choose-provider"
-    // The picker opened from the menu, to change the music service.
-    property bool providerPicking: false
-    readonly property bool providerShown: providerChoiceNeeded || providerPicking
-    // The music service, as the daemon names it, and what it lacks
-    // (crates/brumm/src/provider/registry.rs): those keys do nothing.
-    readonly property string service: st.service || "Apple Music"
-    function lacks(what) { return !!st.lacks && st.lacks.includes(what) }
-    function lacking(what, name) {
-        if (!lacks(what)) return false
-        setFlash(service + " has no " + name + " for apps")
-        return true
-    }
+    property bool providerPickerOpen: false
+    property bool needsSetup: false
+    property bool setupMode: false
+    property string connectingProvider: ""
+    readonly property var connectedProviders: providers.filter(p => p.configured)
+    readonly property bool providerChoiceNeeded: providerPickerOpen || needsSetup || st.status === "choose-provider"
     function askProviders() {
         if (providerRequested) return
         providerRequested = true
         daemon.request({ cmd: "provider" }, (err, reply) => {
             if (err) { providerRequested = false; return setFlash(err) }
-            providers = reply.provider ? reply.provider.choices : []
-            providerSelected = reply.provider ? reply.provider.selected : ""
-            const here = providers.findIndex(p => p.available && p.id === providerSelected)
-            providerIndex = here >= 0 && providerPicking ? here : Math.max(0, providers.findIndex(p => p.available))
+            if (reply.provider) configureProvider(reply.provider)
+            providerIndex = Math.max(0, providers.findIndex(p => p.id === selectedProvider))
+            if (placing && daemon.connected) askPlace()
         })
     }
-    function pickProvider() {
-        providerPicking = true
-        providerRequested = false
-        askProviders()
-    }
-    function chooseProvider(id) {
+    function openProviderPicker() { menuOpen = false; providerRequested = false; providerPickerOpen = true; askProviders() }
+    function chooseProvider(id, connect) {
         const provider = providers.find(p => p.id === id)
         if (!provider || !provider.available) return
-        if (providerPicking && id === providerSelected) { providerPicking = false; return }
-        daemon.request({ cmd: "provider", query: id }, (err) => {
-            if (err) return setFlash(err)
-            if (providerPicking) { providerPicking = false; setFlash("switching to " + provider.name + "…") }
+        if (connect) connectingProvider = id
+        daemon.request({ cmd: "provider", query: id }, (err, reply) => {
+            if (err) { connectingProvider = ""; return setFlash(err) }
+            if (reply.provider) configureProvider(reply.provider)
+            if (connect) { loginTried = true; signIn() }
+            else if (!setupMode) providerPickerOpen = false
         })
     }
+    function connectProvider(id) { chooseProvider(id, true) }
+    function finishServices() {
+        if (!connectedProviders.length) return
+        const active = connectedProviders.find(p => p.id === selectedProvider)
+        if (!active) chooseProvider(connectedProviders[0].id, false)
+        setupMode = false
+        providerPickerOpen = false
+    }
+    function cancelConnection() { daemon.send({cmd:"cancel-login"}); connectingProvider = "" }
     function providerKey(k) {
-        if (providerPicking && ["esc", "q", "Q", "o", "ctrl+c"].includes(k)) { providerPicking = false; return } // closes, as every box
+        if (k === "esc" && !needsSetup) { finishServices(); return }
         if (k === "Q" || k === "q" || k === "ctrl+c") { Qt.quit(); return }
-        if (k === "enter") { const p = providers[providerIndex]; if (p) chooseProvider(p.id); return }
+        if (k === "enter") { const p = providers[providerIndex]; if (p) { if (p.configured) chooseProvider(p.id, false); else connectProvider(p.id) }; return }
         if (!["up", "down", "tab", "k", "j"].includes(k)) return
         const n = providers.length
         for (let i = 0; i < n; i++) {
@@ -95,8 +93,37 @@ Item {
         if (st.playing) daemon.send({ cmd: "toggle" })
         video = it
     }
+    function favoriteMark(kind, id) { ratingRev; return favoriteState[kind + ":" + id] === true }
+    function readFavorites(refs) {
+        if (!refs.length) return
+        daemon.request({cmd:"favorites", refs:refs}, (err, reply) => {
+            if (err || !reply.favorites) return
+            favoriteState = Object.assign({}, favoriteState, reply.favorites); ratingRev++
+        })
+    }
+    function toggleFavorite(ref, name) {
+        if (!capabilities.preference || !(capabilities.favoriteKinds || []).includes(ref.kind) || !ref.id) return
+        const key = ref.kind + ":" + ref.id
+        if (favoritePending[key]) return
+        favoritePending[key] = true
+        daemon.request({cmd:"favorites", refs:[ref]}, (err, reply) => {
+            if (err || !reply.favorites || reply.favorites[key] === undefined) {
+                delete favoritePending[key]; return setFlash(err || "Favorite state is unavailable")
+            }
+            const saved = !reply.favorites[key]
+            daemon.request({cmd:"set-favorite", refs:[ref], saved:saved}, error => {
+                delete favoritePending[key]
+                if (error) return setFlash(error)
+                favoriteState = Object.assign({}, favoriteState, {[key]:saved}); ratingRev++
+                if (inspect && inspect.id === ref.id) inspect = Object.assign({}, inspect, {favorite:saved})
+                setFlash((saved ? "Favorited " : "Removed from My Collection: ") + name)
+            })
+        })
+    }
     function prototypeFavorite() {
+        if (!(capabilities.favorites)) return
         const it = inspect
+        if (capabilities.preference) return toggleFavorite({kind:it.kind || "song", id:it.id}, it.title || it.name)
         daemon.request(prototypeMode ? { cmd: "preview-favorite", start: it.id, value: it.favorite ? 0 : 1 } : { cmd: "favorite", refs: [{kind: it.kind || "song", id: it.id}] }, (err) => {
             if (err) return setFlash(err)
             if (prototypeMode) inspect = Object.assign({}, it, { favorite: !it.favorite })
@@ -121,18 +148,71 @@ Item {
         }
     }
 
-    readonly property var sectionNames: ["Home", "Explore", "Playlists", "Albums", "Artists", "Songs", "Radio", "Search", "Queue"]
-    readonly property var sectionIcons: ["󰋜", "󰭎", "󰲸", "󰀥", "󰠃", "󰎈", "󰐹", "󰍉", "󰐑"]
-    readonly property var sectionLists: ["playlists", "albums", "artists", "songs"]
-    readonly property int secHome: 0
-    readonly property int secExplore: 1
-    readonly property int secPlaylists: 2
-    readonly property int secAlbums: 3
-    readonly property int secArtists: 4
-    readonly property int secSongs: 5
-    readonly property int secSearch: 7
-    readonly property int secQueue: 8
-    readonly property int secRadio: 6
+    property var navigation: utilityNavigation()
+    property var capabilities: ({})
+    property double providerGeneration: 0
+    property string selectedProvider: ""
+    readonly property string providerName: { const p = providers.find(p => p.id === selectedProvider); return p ? p.name : "music service" }
+    readonly property var sectionNames: navigation.map(e => e.label)
+    readonly property var sectionIcons: navigation.map(e => navigationIcon(e.icon))
+    function utilityNavigation() { return [
+        { id: "search", label: "Search", icon: "search", destination: { kind: "search" } },
+        { id: "queue", label: "Queue", icon: "queue", destination: { kind: "queue" } }
+    ] }
+    function navigationIcon(icon) {
+        return ({home:"󰋜", explore:"󰭎", playlists:"󰲸", albums:"󰀥", artists:"󰠃", songs:"󰎈", radio:"󰐹", search:"󰍉", queue:"󰐑"})[icon] || "󰄨"
+    }
+    function sectionIndex(id) {
+        const i = navigation.findIndex(e => e.id === id || (e.destination.kind === "library" && e.destination.list === id))
+        return Math.max(0, i)
+    }
+    function librarySections() { return navigation.map((e, i) => e.destination.kind === "library" ? i : -1).filter(i => i >= 0) }
+    readonly property int secHome: sectionIndex("home")
+    readonly property int secExplore: sectionIndex("explore")
+    readonly property int secPlaylists: sectionIndex("playlists")
+    readonly property int secAlbums: sectionIndex("albums")
+    readonly property int secArtists: sectionIndex("artists")
+    readonly property int secSongs: sectionIndex("songs")
+    readonly property int secSearch: sectionIndex("search")
+    readonly property int secQueue: sectionIndex("queue")
+    readonly property int secRadio: sectionIndex("radio")
+    function rootView(entry) {
+        const d = entry.destination
+        if (d.kind === "home") return newView(entry.label, "home:")
+        if (d.kind === "library") return newView(entry.label, "list:" + d.list)
+        if (d.kind === "page") return newView(entry.label, entry.id + ":", { kind: "shelf", id: entry.id, name: entry.label, route: d.route, catalog: true })
+        if (d.kind === "container") return newView(entry.label, entry.id + ":", d.item)
+        const v = newView(entry.label, d.kind + ":")
+        v.loaded = d.kind === "search"
+        return v
+    }
+    function configureProvider(info) {
+        if (info.protocolVersion !== 1) return setFlash("Update Brumm's daemon and frontends together")
+        if (!info.navigation || !info.navigation.length) return
+        const previous = navigation
+        const providerChanged = selectedProvider !== info.selected || providerGeneration !== (info.generation || 0)
+        const selected = !providerChanged && navigation[section] ? navigation[section].id : ""
+        const nextStacks = info.navigation.map(entry => {
+            const i = previous.findIndex(e => e.id === entry.id && JSON.stringify(e.destination) === JSON.stringify(entry.destination))
+            if (!providerChanged && i >= 0 && stacks[i]) { stacks[i][0].title = entry.label; return stacks[i] }
+            return [rootView(entry)]
+        })
+        needsSetup = info.needsSetup === undefined ? !!info.needsChoice : info.needsSetup
+        if (needsSetup) { setupMode = true; providerPickerOpen = true }
+        capabilities = info.capabilities || {}
+        providers = info.choices || providers
+        selectedProvider = info.selected || ""
+        providerGeneration = info.generation || 0
+        navigation = info.navigation
+        stacks = nextStacks
+        section = Math.max(0, navigation.findIndex(e => e.id === selected))
+        if (providerChanged) {
+            st = { status: "starting" }; rating = {}; favoriteState = {}; favoritePending = {}; pending = null; pendingPlay = null
+            upNext = []; recent = []; artwork = ""; artKey = ""; nextFor = ""
+            inspect = null; video = null; loginTried = false; resumed = false
+        }
+        refresh()
+    }
     readonly property int queueAfter: 500
 
     // ── what shows ──────────────────────────────────────────────────────
@@ -165,6 +245,8 @@ Item {
 
     property string artwork: ""     // the cover on the stage (stageArtwork)
     property string artKey: ""      // what it was worked out for
+    property var favoriteState: ({})
+    property var favoritePending: ({})
     property var rating: ({})
     property int ratingRev: 0
 
@@ -185,11 +267,11 @@ Item {
     readonly property var menuRows: {
         const rows = []
         if (st.status === "logged-out")
-            rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + service + "…" }, { sep: true })
+            rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
+        rows.push({ act: "ctrl+o", icon: "󰎈", label: "Music Services…" })
         rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F" },
                   { act: "g", icon: "󰆍", label: "TUI" },
                   { act: "y", icon: "󰌷", label: "Copy Link" },
-                  { act: "service", keys: "", icon: "󰎆", label: "Music Service: " + service + "…" },
                   { sep: true }, { fold: true, heading: "Options" })
         if (menuOptions) {
             rows.push({ option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
@@ -207,7 +289,7 @@ Item {
                   { sep: true },
                   { act: "Q", icon: "󰅖", label: "Close Window" },
                   { act: "q", icon: "󰐥", label: "Quit brumm" })
-        return rows
+        return rows.filter(row => row.option !== "autoplay" || capabilities.autoplay)
     }
     function menuPickable(r) { return !!r && (r.act !== undefined || r.option !== undefined || !!r.fold) }
 
@@ -366,17 +448,7 @@ Item {
     function setFlash(text) { flash = text; flashTimer.restart() }
 
     Component.onCompleted: {
-        const st = []
-        for (let i = 0; i < sectionNames.length; i++) st.push([])
-        st[secHome] = [newView("Home", "home:")]
-        st[secExplore] = [newView("Explore", "explore:", { kind: "shelf", id: "discover", name: "Explore", route: "app:discover", catalog: true })]
-        for (let i = secPlaylists; i <= secSongs; i++)
-            st[i] = [newView(sectionNames[i], "list:" + sectionLists[i - secPlaylists])]
-        st[secSearch] = [newView("Search", "search:")]
-        st[secSearch][0].loaded = true
-        st[secQueue] = [newView("Queue", "queue:")]
-        st[secRadio] = [newView("Radio", "radio:", { kind: "shelf", id: "radio", name: "Radio", catalog: true })]
-        stacks = st
+        stacks = navigation.map(entry => [rootView(entry)])
         const f = parseFloat(sys.setting("split", 0.4))
         if (f >= 0.08 && f <= 0.7) split = f
         refresh()
@@ -389,7 +461,7 @@ Item {
         if (updateAsked) return
         updateAsked = true
         daemon.send({ cmd: "update" }) // look for an update on every start
-        askPlace()
+        askProviders()
     }
 
     function newView(title, key, item) {
@@ -404,6 +476,7 @@ Item {
     function refresh() {
         artwork = stageArtwork()
         const v = cur()
+        if (!v) return
         view = v
         if (rows !== v.rows) rows = v.rows
         sel = v.sel
@@ -423,15 +496,8 @@ Item {
 
     // ── loading ─────────────────────────────────────────────────────────
 
-    // missing names the section a view is, when the service lacks it.
-    function missing(v) {
-        if (v.key === "explore:" && lacks("explore")) return "Explore"
-        if (v.key === "radio:" && lacks("radio")) return "Radio"
-        return ""
-    }
-
     function load(v) {
-        if (v.loading || st.status === "logged-out" || missing(v)) return
+        if (v.loading || st.status === "logged-out") return
         let req
         if (v.item && v.item.route && !prototypeMode) req = { cmd: "explore", query: v.item.route }
         else if (v.item) req = { cmd: "open", item: v.item }
@@ -450,7 +516,7 @@ Item {
                 return
             }
             fill(v, reply)
-            if (v.item && v.item.route === "app:discover") loadExploreVisuals(v, reply)
+            if (reply.explorer && (reply.explorer.visuals || []).length) loadExploreVisuals(v, reply)
             if (v.want) { selectSong(v, v.want); v.want = "" }
             fetchRatings(v)
             warm(v)
@@ -461,32 +527,26 @@ Item {
 
     function loadExploreVisuals(v, initial) {
         const page = initial.explorer || initial
-        const links = (page.items || []).concat((page.shelves || []).reduce((all, sh) => all.concat(sh.items || []), []))
-        const groups = [[], [], []]
+        const groups = (page.visuals || []).map(() => [])
         const generation = (v.exploreGeneration || 0) + 1
         v.exploreGeneration = generation
         function render() {
             if (v.exploreGeneration !== generation) return
             const selected = v.rows[v.sel]
             const selectedKey = selected ? (selected.track ? "track:" + selected.track.id : selected.item ? itemKey(selected.item) : "") : ""
-            fill(v, { explorer: { title: "Explore", shelves: groups.reduce((all, group) => all.concat(group), []).concat([{ title: "Browse", items: links }]) } })
+            fill(v, { explorer: Object.assign({}, page, { visuals: [], items: [], shelves: groups.reduce((all, group) => all.concat(group), []).concat(page.shelves || []).concat((page.items || []).length ? [{ title: "Browse", items: page.items }] : []) }) })
             if (selectedKey) {
                 const index = v.rows.findIndex(r => (r.track ? "track:" + r.track.id : r.item ? itemKey(r.item) : "") === selectedKey)
                 if (index >= 0) v.sel = index
             }
             if (v === cur()) refresh()
         }
-        daemon.request({ cmd: "home" }, (err, reply) => {
-            if (err) return
-            groups[0] = (reply.shelves || []).filter(sh => sh.title !== "Your music" && sh.title !== "Browse" && (sh.items || []).some(it => it.artwork)).slice(0, 2).map(sh => Object.assign({}, sh, { items: sh.items.filter(it => it.artwork).slice(0, 6), tracks: [] }))
-            render()
-        })
-        for (const [i, link] of (page.visuals || []).slice(0, 2).entries()) {
+        for (const [i, link] of (page.visuals || []).entries()) {
             daemon.request({ cmd: "explore", query: link.route }, (err, reply) => {
                 if (err || !reply.explorer) return
                 const p = reply.explorer
-                groups[i + 1] = (p.shelves || []).map(sh => Object.assign({}, sh, { items: (sh.items || []).slice(0, 6), tracks: (sh.tracks || []).slice(0, 6), route: sh.route || link.route }))
-                if ((p.items || []).length) groups[i + 1].push({ title: link.name, items: p.items.slice(0, 6), route: link.route })
+                groups[i] = (p.shelves || []).map(sh => Object.assign({}, sh, { items: (sh.items || []).slice(0, 6), tracks: (sh.tracks || []).slice(0, 6), route: sh.route || link.route }))
+                if ((p.items || []).length) groups[i].push({ title: link.name, items: p.items.slice(0, 6), route: link.route })
                 render()
             })
         }
@@ -560,13 +620,16 @@ Item {
     }
 
     function fetchRatings(v) {
+        if (!capabilities.ratings && !capabilities.preference) return
         const refs = []
+        const kinds = capabilities.preference ? capabilities.favoriteKinds || [] : capabilities.ratingKinds || []
         for (const r of v.rows) {
             if (refs.length >= 1000) break
             if (r.track) refs.push({ kind: "song", id: r.track.id })
-            else if (r.item && ["album", "playlist", "station"].includes(r.item.kind)) refs.push({ kind: r.item.kind, id: r.item.id })
+            else if (r.item && kinds.includes(r.item.kind)) refs.push({ kind: r.item.kind, id: r.item.id })
         }
         if (!refs.length) return
+        if (capabilities.preference) return readFavorites(refs)
         daemon.request({ cmd: "ratings", refs: refs }, (err, reply) => {
             if (err || !reply.ratings) return
             for (const id in reply.ratings) rating[id] = reply.ratings[id]
@@ -578,9 +641,11 @@ Item {
 
     Connections {
         target: daemon
+        ignoreUnknownSignals: true
+        function onProviderChanged(info) { s.configureProvider(info) }
         function onState(state) { s.gotState(state) }
         function onLibrary() {
-            for (let i = s.secPlaylists; i <= s.secSongs; i++)
+            for (const i of s.librarySections())
                 for (const v of s.stacks[i]) {
                     if (i === s.section) s.load(v)
                     else v.loaded = false
@@ -588,7 +653,7 @@ Item {
         }
         function onConnectedChanged() {
             if (!daemon.connected) s.st = Object.assign({}, s.st, { status: "starting", message: "connecting to brumm…" })
-            else s.started()
+            else { s.providerRequested = false; s.updateAsked = false; s.started() }
         }
     }
 
@@ -596,7 +661,7 @@ Item {
 
     function gotState(state) {
         const wasLoggedOut = st.status === "logged-out"
-        if (state.status === "logged-out" && !loginTried) { loginTried = true; signIn() } // nobody has to hunt for the key
+        if (state.status === "logged-out" && !loginTried && !providerChoiceNeeded) { loginTried = true; signIn() } // nobody has to hunt for the key
         if (state.update && state.update !== st.update) setFlash("brumm " + state.update + " is available · U updates")
         keepShowing(state)
         const pp = pendingPlay
@@ -614,6 +679,9 @@ Item {
             state.pos = position(Date.now())
         }
         st = state
+        if (state.status === "ready" && connectingProvider) setFlash(providerName + " connected")
+        if (state.status === "ready" || state.err || state.message === "sign-in cancelled") connectingProvider = ""
+        if (songChanged && state.id && capabilities.preference) readFavorites([{kind:"song", id:state.id}])
         if (providerChoiceNeeded) askProviders()
         stateAt = Date.now()
         const key = [state.id, state.preview ? state.preview.artwork : "", state.artwork].join("|")
@@ -807,7 +875,7 @@ Item {
 
     function here() {
         const v = cur(), r = v.rows[v.sel]
-        return { section: section, sectionName: sectionNames[section], playerView: playerView, query: query,
+        return { section: section, sectionId: navigation[section].id, sectionName: sectionNames[section], playerView: playerView, query: query,
                  views: stack().slice(1).filter(x => x.item).map(x => ({ key: x.key, title: x.title, item: x.item })),
                  sel: { id: r ? (r.track ? r.track.id : r.item ? r.item.id : "") : "", index: v.sel } }
     }
@@ -826,7 +894,8 @@ Item {
     }
 
     function goPlace(p) {
-        const named = sectionNames.indexOf(p.sectionName || "")
+        const stable = navigation.findIndex(e => e.id === p.sectionId)
+        const named = stable >= 0 ? stable : sectionNames.indexOf(p.sectionName || "")
         const sec = named >= 0 ? named : Math.max(0, Math.min(p.section | 0, sectionNames.length - 1))
         playerView = !!p.playerView
         query = p.query || ""
@@ -854,6 +923,7 @@ Item {
     // ── navigation ──────────────────────────────────────────────────────
 
     function switchTo(i) {
+        if (i < 0 || i >= navigation.length) return
         playerView = false
         const sameSection = i === section
         section = i
@@ -948,7 +1018,7 @@ Item {
             const i = v.rows.findIndex(r => r.track && r.track.id === id)
             if (i >= 0) v.sel = i
         }
-        for (let i = secHome; i < sectionNames.length; i++) {
+        for (let i = 0; i < sectionNames.length; i++) {
             const at = stacks[i].findIndex(v => v.key === src)
             if (at >= 0) {
                 section = i
@@ -959,7 +1029,7 @@ Item {
                 return
             }
         }
-        for (let i = secPlaylists; i <= secArtists; i++) {
+        for (const i of librarySections()) {
             const r = stacks[i][0].rows.find(r => r.item && itemKey(r.item) === src)
             if (r) {
                 section = i
@@ -1201,7 +1271,8 @@ Item {
     }
 
     function hold() {
-        if (!spaceDown || lacks("preview")) return // release toggles
+        if (!capabilities.previews) return
+        if (!spaceDown) return
         const r = cur().rows[cur().sel]
         if (!r || !r.track) return
         previewing = true
@@ -1221,11 +1292,11 @@ Item {
     }
 
     function togglePreview() {
+        if (!capabilities.previews) return
         if (previewing) {
             previewing = false
             return daemon.send({ cmd: "preview" })
         }
-        if (lacking("preview", "previews")) return
         const r = cur().rows[cur().sel]
         if (!r || !r.track) return
         previewing = true
@@ -1241,9 +1312,8 @@ Item {
     }
 
     function playStation() {
+        if (!(capabilities.stations)) return
         const r = cur().rows[cur().sel]
-        if (r && r.item && r.item.kind === "station") return startStation({ cmd: "station", item: r.item })
-        if (lacking("radio", "radio")) return
         if (r && r.track) return startStation({ cmd: "station", start: r.track.id })
         if (r && r.item && (r.item.kind === "station" || r.item.kind === "artist")) return startStation({ cmd: "station", item: r.item })
         if (st.id) return startStation({ cmd: "station", start: st.id })
@@ -1279,6 +1349,8 @@ Item {
     // the song playing, whatever the list has selected.
     function playingRow() { return st.id && !st.preview ? { track: { id: st.id, title: st.title, artist: st.artist, album: st.album } } : null }
     function ratePlaying(value) {
+        if (capabilities.preference && value === 1) return toggleFavorite({kind:"song", id:st.id}, st.title)
+        if (!(capabilities.ratings && (value !== -1 || capabilities.dislike))) return
         if (!st.id || st.preview) return
         if (rating[st.id] === value) value = 0
         if (value === 0) delete rating[st.id]
@@ -1288,6 +1360,7 @@ Item {
         daemon.send({ cmd: "rate", refs: [{ kind: "song", id: st.id }], value: value })
     }
     function pickPlaying() {
+        if (!(capabilities.playlistWrite)) return
         const r = playingRow()
         if (!r) return
         pick = { what: r, name: st.title, lists: [], loading: true, sel: 0, naming: false, input: "" }
@@ -1298,11 +1371,11 @@ Item {
         })
     }
     function libraryPlaying() {
+        if (!(capabilities.collectionWrite)) return
         if (!st.id || st.preview) return
-        if (st.id.startsWith("i.")) return setFlash(st.title + " is already in your library")
         daemon.request({ cmd: "add", list: "songs", ids: [st.id] }, err => setFlash(err ? err : "added " + st.title + " to your library"))
     }
-    function radioPlaying() { if (st.id) startStation({ cmd: "station", start: st.id }) }
+    function radioPlaying() { if (capabilities.stations && st.id) startStation({ cmd: "station", start: st.id }) }
     function linkPlaying() {
         if (!st.id) return
         daemon.request({ cmd: "link", start: st.id }, (err, reply) => {
@@ -1315,16 +1388,16 @@ Item {
     function rateable() {
         const r = cur().rows[cur().sel]
         if (r && r.track) return { ref: { kind: "song", id: r.track.id }, name: r.track.title }
-        if (r && r.item && ["album", "playlist", "station"].includes(r.item.kind)) return { ref: { kind: r.item.kind, id: r.item.id }, name: r.item.name }
+        if (r && r.item && ((capabilities.ratingKinds || []).includes(r.item.kind) || (capabilities.preference && (capabilities.favoriteKinds || []).includes(r.item.kind)))) return { ref: { kind: r.item.kind, id: r.item.id }, name: r.item.name }
         if (st.id && !st.preview) return { ref: { kind: "song", id: st.id }, name: st.title }
         return null
     }
 
     function rate(value) {
-        if (value === -1 && lacking("dislike", "dislikes")) return
+        if (capabilities.preference && value === 1) { const it = rateable(); if (it) toggleFavorite(it.ref, it.name); return }
+        if (!(capabilities.ratings && (value !== -1 || capabilities.dislike))) return
         const it = rateable()
         if (!it) return
-        if (it.ref.kind !== "song" && lacks("love-items")) return setFlash(service + " loves songs only; press i to add it to your library")
         if (rating[it.ref.id] === value) value = 0
         if (value === 0) delete rating[it.ref.id]
         else rating[it.ref.id] = value
@@ -1334,16 +1407,16 @@ Item {
     }
 
     function addToLibrary() {
+        if (!(capabilities.collectionWrite)) return
         const r = cur().rows[cur().sel]
         let kind, id, name
         if (r && r.track) { kind = "songs"; id = r.track.id; name = r.track.title }
         else if (r && r.item) {
-            if (r.item.kind === "artist") return setFlash("artists cannot be added; add one of their albums")
+            if (!(capabilities.collectionKinds || []).includes(r.item.kind)) return setFlash("This resource cannot be added to your library")
             if (!r.item.catalog) return setFlash(r.item.name + " is already in your library")
             kind = r.item.kind + "s"; id = r.item.id; name = r.item.name
         } else if (st.id) { kind = "songs"; id = st.id; name = st.title }
         else return
-        if (id.startsWith("i.")) return setFlash(name + " is already in your library")
         daemon.request({ cmd: "add", list: kind, ids: [id] }, err => setFlash(err ? err : "added " + name + " to your library"))
     }
 
@@ -1360,6 +1433,7 @@ Item {
     // ── add to playlist ─────────────────────────────────────────────────
 
     function openPicker() {
+        if (!(capabilities.playlistWrite)) return
         const r = cur().rows[cur().sel]
         let what, name
         if (r && r.track) { what = r; name = r.track.title }
@@ -1478,7 +1552,7 @@ Item {
     }
 
     function signIn() {
-        setFlash("opening the " + service + " sign-in in your browser…")
+        setFlash("opening sign-in in your browser…")
         daemon.send({ cmd: "login" })
     }
 
@@ -1525,6 +1599,8 @@ Item {
     }
 
     function dispatch(k, ev) {
+        if (k === "ctrl+o") { openProviderPicker(); return }
+        if (providerChoiceNeeded) { key(k); return }
         if (inspect || prototypeForm) { if (k === "esc") { inspect = null; prototypeForm = null }; return }
         if (video) { if (k === "esc" || k === "q") closeVideo(); return }
         if ((prototypeMode && k === "i") || k === "ctrl+i") return inspectAt(sel)
@@ -1563,7 +1639,9 @@ Item {
     }
 
     function key(k) {
-        if (providerShown) return providerKey(k)
+        if (k === "ctrl+o") { openProviderPicker(); return }
+        if (st.auth && k === "esc") { daemon.send({cmd:"cancel-login"}); return }
+        if (providerChoiceNeeded) return providerKey(k)
 
         if (typesSearch(k)) {
             searching = true
@@ -1581,7 +1659,6 @@ Item {
             Qt.quit() // close the window; the music plays on
             return
         case "L": return signIn()
-        case "service": return pickProvider() // the menu's row
         case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8": case "9":
             return switchTo(parseInt(k) - 1)
         case "tab": return switchTo((section === secQueue ? secHome : (section + 1) % secQueue))

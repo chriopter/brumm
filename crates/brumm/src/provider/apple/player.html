@@ -231,8 +231,6 @@ Object.assign(B, {
       if (isAuthError(e)) B.needsAuth = true;
     }
   },
-  // describe is for pages that cannot look songs up in batches; MusicKit can.
-  describe(list) {},
   // warm looks songs up ahead of a play, quietly; failures do not matter.
   warm(ids) { if (B.m) resolve(B.m, ids.slice(0, 500)).catch(() => {}); },
   // autoplay keeps similar music coming after the queue ends. MusicKit
@@ -265,6 +263,7 @@ Object.assign(B, {
     else m.skipToPreviousItem().catch(() => {});
   },
   // queue returns the current song and up to n after it.
+  describe(tracks) {},
   queue(n) {
     const m = B.m;
     const out = { pos: -1, items: [] };

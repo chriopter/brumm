@@ -30,6 +30,7 @@ Daemon::Daemon(QObject *parent) : QObject(parent)
     m_retry.setSingleShot(true);
     connect(&m_retry, &QTimer::timeout, this, &Daemon::connectNow);
     connect(&m_sock, &QLocalSocket::connected, this, [this] {
+        m_generation = 0;
         emit connectedChanged();
         subscribe();
     });
@@ -127,6 +128,8 @@ void Daemon::write(QJsonObject req, const QJSValue &done)
         return;
     }
     const int id = ++m_next;
+    req.insert("protocolVersion", 1);
+    req.insert("generation", m_generation);
     req.insert("id", id);
     m_pending.insert(id, done);
     m_sock.write(QJsonDocument(req).toJson(QJsonDocument::Compact) + '\n');
@@ -142,6 +145,20 @@ void Daemon::readLines()
         const QJsonObject msg = QJsonDocument::fromJson(line).object();
         if (msg.isEmpty())
             continue;
+        const auto provider = msg.value("provider").toObject();
+        const qint64 incoming = provider.value("generation").toInteger();
+        const qint64 replyGeneration = msg.value("generation").toInteger();
+        const bool stale = (incoming && incoming < m_generation) ||
+                           (replyGeneration && m_generation && replyGeneration != m_generation && provider.isEmpty());
+        if (stale) {
+            QJSValue done = m_pending.take(msg.value("id").toInt());
+            if (done.isCallable()) done.call(QJSValueList{QJSValue(QStringLiteral("the music provider session changed; try again"))});
+            continue;
+        }
+        if (!provider.isEmpty()) {
+            m_generation = incoming;
+            emit providerChanged(provider.toVariantMap());
+        }
         if (msg.contains("options")) {
             const QVariantMap o = msg.value("options").toObject().toVariantMap();
             const bool omarchy = msg.contains("omarchy") ? msg.value("omarchy").toBool() : m_omarchy;

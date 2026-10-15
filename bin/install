@@ -51,8 +51,8 @@ if command -v pacman >/dev/null && ! pacman -Q qt6-multimedia >/dev/null 2>&1; t
 fi
 ./brumm/brumm setup ./brumm
 
-# Straight on to the music: sign in first if needed (the player opens
-# once signed in), else the player. Piped into bash, the keys come from
+# Open the player, which offers service setup on first run.
+# Piped into bash, the keys come from
 # the terminal itself.
 brumm="${XDG_BIN_HOME:-$HOME/.local/bin}/brumm"
 if [[ -r /dev/tty && -w /dev/tty ]]; then
@@ -64,10 +64,7 @@ if [[ -r /dev/tty && -w /dev/tty ]]; then
     case ${answer,,} in "" | y | yes | j | ja) "$brumm" keys on || true ;; esac
   fi
   cd ~ && rm -rf "$work" # exec skips the EXIT trap
-  if grep -qE '"(user_token|spotify_refresh_token)"' "${XDG_CONFIG_HOME:-$HOME/.config}/brumm/config.json" 2>/dev/null; then
-    exec "$brumm" </dev/tty >/dev/tty 2>&1
-  fi
-  exec "$brumm" login </dev/tty >/dev/tty 2>&1
+  exec "$brumm" </dev/tty >/dev/tty 2>&1
 fi
 echo
-echo "next: brumm login — it opens the player once you are signed in"
+echo "next: brumm — connect your music services in the player"

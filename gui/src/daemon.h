@@ -54,6 +54,7 @@ signals:
     void connectedChanged();
     void optionsChanged();
     void state(const QVariantMap &state);
+    void providerChanged(const QVariantMap &provider);
     void library();
     void failed(const QString &error);
     void sound(const QVector<int> &spectrum, const QVector<int> &wave);
@@ -68,6 +69,7 @@ private:
     QTimer m_retry;
     QByteArray m_buf;
     int m_next = 0;
+    qint64 m_generation = 0;
     QHash<int, QJSValue> m_pending;
     QJSEngine *m_engine = nullptr;
     QVariantMap m_options;

@@ -86,10 +86,11 @@ struct Tokens {
     refresh: String,
 }
 
-type Save = Box<dyn Fn(&str) -> Result<()> + Send + Sync>;
+type Save = Box<dyn Fn(&str, &str) -> Result<()> + Send + Sync>;
 
 pub struct Session {
     client_id: String,
+    account: Option<String>,
     accounts: String,
     http: reqwest::Client,
     tokens: tokio::sync::Mutex<Tokens>,
@@ -97,18 +98,29 @@ pub struct Session {
     save: Save,
 }
 
-fn save_to_config(refresh: &str) -> Result<()> {
-    let mut c = Config::load()?;
-    if c.spotify_refresh_token != refresh {
-        c.spotify_refresh_token = refresh.to_string();
-        c.save()?;
-    }
-    Ok(())
-}
-
 impl Session {
-    pub fn new(client_id: &str, refresh: &str) -> Session {
-        Session::with(ACCOUNTS_BASE, client_id, refresh, Box::new(save_to_config))
+    pub fn new(cfg: &Config) -> Session {
+        let client = cfg.spotify_client_id.clone();
+        let account = cfg.spotify_user.clone();
+        let mut session = Session::with(
+            ACCOUNTS_BASE,
+            &cfg.spotify_client_id,
+            &cfg.spotify_refresh_token,
+            Box::new(move |old, refresh| {
+                Config::update(|cfg| {
+                    if cfg.spotify_client_id != client
+                        || cfg.spotify_user != account
+                        || cfg.spotify_refresh_token != old
+                    {
+                        return Err(Error::Unauthorized);
+                    }
+                    cfg.spotify_refresh_token = refresh.into();
+                    Ok(())
+                })
+            }),
+        );
+        session.account = Some(cfg.spotify_user.clone());
+        session
     }
 
     pub(crate) fn with(accounts: &str, client_id: &str, refresh: &str, save: Save) -> Session {
@@ -118,6 +130,7 @@ impl Session {
             .unwrap_or_default();
         Session {
             client_id: client_id.to_string(),
+            account: None,
             accounts: accounts.to_string(),
             http,
             tokens: tokio::sync::Mutex::new(Tokens {
@@ -132,7 +145,7 @@ impl Session {
     /// A session holding an access token that stays good, for tests.
     #[cfg(test)]
     pub(crate) fn fixed(access: &str) -> Session {
-        let s = Session::with("http://127.0.0.1:9", "client", "", Box::new(|_| Ok(())));
+        let s = Session::with("http://127.0.0.1:9", "client", "", Box::new(|_, _| Ok(())));
         if let Ok(mut t) = s.tokens.try_lock() {
             t.access = access.to_string();
             t.until = Some(SystemTime::now() + Duration::from_secs(3600));
@@ -143,7 +156,7 @@ impl Session {
     /// A session whose access token Spotify will refuse, for tests.
     #[cfg(test)]
     pub(crate) fn stale(accounts: &str, access: &str) -> Session {
-        let s = Session::with(accounts, "client", "refresh", Box::new(|_| Ok(())));
+        let s = Session::with(accounts, "client", "refresh", Box::new(|_, _| Ok(())));
         if let Ok(mut t) = s.tokens.try_lock() {
             t.access = access.to_string();
             t.until = Some(SystemTime::now() + Duration::from_secs(3600));
@@ -173,22 +186,17 @@ impl Session {
         self.refresh(&mut t).await
     }
 
-    /// A new access token now: the playback page's was refused.
-    pub async fn refresh_now(&self) -> Result<String> {
-        let mut t = self.tokens.lock().await;
-        self.refresh(&mut t).await
-    }
-
-    /// How long the current access token stays good, less the margin a
-    /// refresh keeps; zero when there is none.
-    pub async fn remaining(&self) -> Duration {
-        let t = self.tokens.lock().await;
-        t.until
-            .map(|u| left(u).saturating_sub(EARLY))
-            .unwrap_or_default()
-    }
-
     async fn refresh(&self, t: &mut Tokens) -> Result<String> {
+        // Separate API and playback clients share one rotating grant.
+        static RENEW: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _renew = RENEW.lock().await;
+        if let Some(account) = &self.account {
+            let cfg = Config::load()?;
+            if cfg.spotify_client_id != self.client_id || &cfg.spotify_user != account {
+                return Err(Error::Unauthorized);
+            }
+            t.refresh = cfg.spotify_refresh_token;
+        }
         if t.refresh.is_empty() {
             return Err(Error::Unauthorized);
         }
@@ -203,7 +211,7 @@ impl Session {
         )
         .await?;
         if !g.refresh_token.is_empty() && g.refresh_token != t.refresh {
-            (self.save)(&g.refresh_token)?;
+            (self.save)(&t.refresh, &g.refresh_token)?;
             t.refresh = g.refresh_token;
         }
         t.access = g.access_token;
@@ -237,7 +245,7 @@ mod tests {
             &base,
             "cid",
             "old",
-            Box::new(move |t| {
+            Box::new(move |_, t| {
                 keep.lock().unwrap().push(t.to_string());
                 Ok(())
             }),
@@ -260,7 +268,61 @@ mod tests {
 
     #[tokio::test]
     async fn no_refresh_token_means_signed_out() {
-        let s = Session::with("http://127.0.0.1:9", "cid", "", Box::new(|_| Ok(())));
+        let s = Session::with("http://127.0.0.1:9", "cid", "", Box::new(|_, _| Ok(())));
         assert_eq!(s.token().await, Err(Error::Unauthorized));
+    }
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+    #[test]
+    fn stale_rotation_cannot_replace_another_accounts_credentials() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let mut cfg = Config {
+            provider: "spotify".into(),
+            spotify_client_id: "client".into(),
+            spotify_user: "alice".into(),
+            spotify_refresh_token: "alice-old".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        let session = Session::new(&cfg);
+        cfg.spotify_user = "bob".into();
+        cfg.spotify_refresh_token = "bob-current".into();
+        cfg.provider = "tidal".into();
+        cfg.save().unwrap();
+        assert_eq!(
+            (session.save)("alice-old", "alice-rotated"),
+            Err(Error::Unauthorized)
+        );
+        assert_eq!(Config::load().unwrap(), cfg);
+    }
+    #[test]
+    fn token_rotation_preserves_the_selected_service() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let cfg = Config {
+            provider: "spotify".into(),
+            spotify_client_id: "client".into(),
+            spotify_user: "alice".into(),
+            spotify_refresh_token: "old".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        let session = Session::new(&cfg);
+        Config::update(|cfg| {
+            cfg.provider = "tidal".into();
+            Ok(())
+        })
+        .unwrap();
+        (session.save)("old", "rotated").unwrap();
+        let got = Config::load().unwrap();
+        assert_eq!(got.provider, "tidal");
+        assert_eq!(got.spotify_refresh_token, "rotated");
+        assert_eq!((session.save)("old", "stale"), Err(Error::Unauthorized));
     }
 }

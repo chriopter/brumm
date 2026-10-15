@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -29,6 +30,12 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+//go:embed provider.json
+var providerFixture json.RawMessage
+
+//go:embed tidal-provider.json
+var tidalProviderFixture json.RawMessage
 
 var albums = [][2]string{
 	{"Random Access Memories", "Daft Punk"}, {"Discovery", "Daft Punk"}, {"Currents", "Tame Impala"},
@@ -130,6 +137,18 @@ func sound(bands, wave, fps int, stop chan struct{}, send func(Message) error) {
 }
 
 func main() {
+	tidal := os.Getenv("BRUMM_FIXTURE_PROVIDER") == "tidal"
+	selected := "apple"
+	if tidal {
+		selected = "tidal"
+	}
+	configured := map[string]bool{selected: true}
+	if os.Getenv("BRUMM_FIXTURE_FIRST_RUN") != "" {
+		selected = ""
+		configured = map[string]bool{}
+	}
+	generation := int64(1)
+	favorites := make(map[string]bool)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatal(err)
@@ -165,10 +184,9 @@ func main() {
 	st := State{Status: StatusReady, Player: Player{Ready: true, Playing: playing, Title: "Instant Crush", Artist: "Daft Punk",
 		Album: "Random Access Memories", Artwork: art(0), Pos: 97, Dur: 337, Index: 4, Length: 13, ID: "i.0.4",
 		Source: "lib:album:a0", Volume: 0.8, Repeat: 2}}
-	// FAKE_SPOTIFY=1: the players show Spotify and hide what it lacks.
-	if os.Getenv("FAKE_SPOTIFY") != "" {
-		st.Service = "Spotify"
-		st.Lacks = []string{"explore", "radio", "preview", "dislike", "favorites", "folders", "videos", "visualizer", "love-items"}
+	sample := st
+	if selected == "" {
+		st = State{Status: "choose-provider"}
 	}
 	var mu sync.Mutex
 	var opts Options
@@ -210,8 +228,34 @@ func main() {
 							m.Error = fmt.Sprintf("%v: %s", err, out)
 						}
 					}
+				case "provider":
+					mu.Lock()
+					if r.Query == "apple" || r.Query == "tidal" || r.Query == "spotify" {
+						selected = r.Query
+						tidal = selected == "tidal"
+						generation++
+						if configured[selected] {
+							st = sample
+						} else {
+							st = State{Status: "logged-out"}
+						}
+					}
+					m.Provider = serviceInfo(selected, configured, generation)
+					snapshot := st
+					m.State = &snapshot
+					mu.Unlock()
+				case "login":
+					mu.Lock()
+					configured[selected] = true
+					generation++
+					st = sample
+					m.Provider = serviceInfo(selected, configured, generation)
+					snapshot := st
+					m.State = &snapshot
+					mu.Unlock()
 				case CmdSubscribe:
 					mu.Lock()
+					m.Provider = serviceInfo(selected, configured, generation)
 					snapshot := st
 					mu.Unlock()
 					m.State = &snapshot
@@ -228,7 +272,26 @@ func main() {
 						go sound(r.Bands, r.Wave, fps, stop, send)
 					}
 				case CmdExplore:
-					previewExplore(r, &m)
+					if tidal {
+						page := &ExplorePage{Title: "Home", Shelves: []Shelf{{Title: "My Mix", Items: playlists()[:3]}, {Title: "Daily Discovery", Tracks: tracks(1)[:5]}, {Title: "My New Arrivals", Items: items()[:4]}}}
+						if r.Query == "tidal:explore" {
+							page = &ExplorePage{Title: "Explore", Shelves: []Shelf{{Title: "New Albums", Items: items()[:6]}, {Title: "Featured Playlists", Items: playlists()}}}
+						}
+						m.Explorer = page
+					} else {
+						previewExplore(r, &m)
+					}
+				case "favorites", "set-favorite":
+					mu.Lock()
+					m.Favorites = make(map[string]bool)
+					for _, ref := range r.Refs {
+						key := ref.Kind + ":" + ref.ID
+						if r.Cmd == "set-favorite" && r.Saved != nil {
+							favorites[key] = *r.Saved
+						}
+						m.Favorites[key] = favorites[key]
+					}
+					mu.Unlock()
 				case "preview-favorite", "preview-create":
 					previewMutation(r, &m)
 				case CmdPlay:
@@ -335,19 +398,6 @@ func main() {
 					}
 				case CmdRatings:
 					m.Ratings = map[string]int{"i.0.7": 1}
-				case CmdProvider: // the services, as the registry lists them
-					selected := "apple"
-					if os.Getenv("FAKE_SPOTIFY") != "" {
-						selected = "spotify"
-					}
-					if r.Query != "" {
-						selected = r.Query
-					}
-					m.Provider, _ = json.Marshal(map[string]any{"selected": selected, "needsChoice": false, "choices": []map[string]any{
-						{"id": "apple", "name": "Apple Music", "available": true},
-						{"id": "spotify", "name": "Spotify", "available": true, "lacks": st.Lacks},
-						{"id": "tidal", "name": "Tidal", "available": false},
-					}})
 				case CmdPlace: // where a player left off, as the daemon keeps it
 					mu.Lock()
 					if len(r.Place) > 0 {

@@ -17,14 +17,18 @@ use sha2::{Digest, Sha256};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
-use super::{ADDR, open};
-use crate::config::{self, Config};
+#[cfg(not(test))]
+const ADDR: &str = "127.0.0.1:7777";
+#[cfg(test)]
+const ADDR: &str = "127.0.0.1:0";
+use crate::config::Config;
 use crate::engine::{random_hex, script_json};
 use crate::error::{Error, Result, err};
 use crate::httpd;
+use crate::provider::session::{AuthEvent, AuthPrompt, AuthReporter};
 use crate::provider::spotify::{ACCOUNTS_BASE, API_BASE, SCOPES, grant};
 
-const PAGE: &str = include_str!("spotify.html");
+const PAGE: &str = include_str!("login.html");
 
 /// Where Spotify sends the browser back: the app's redirect URI must be
 /// exactly this.
@@ -185,11 +189,16 @@ async fn answer(s: &mut TcpStream, f: &Flow, tx: &mpsc::Sender<Got>) {
         .await;
     }
     if r.path == CALLBACK && r.method == "GET" {
-        let state = param(&r.query, "state");
+        let query = r
+            .target
+            .split_once('?')
+            .map(|(_, query)| query)
+            .unwrap_or("");
+        let state = param(query, "state");
         if state.is_empty() || state != f.state {
             return httpd::respond(s, 403, &TEXT, b"forbidden\n").await;
         }
-        let refused = param(&r.query, "error");
+        let refused = param(query, "error");
         if !refused.is_empty() {
             let _ = tx.send(Got::Refused(refused.clone())).await;
             return html(
@@ -200,7 +209,7 @@ async fn answer(s: &mut TcpStream, f: &Flow, tx: &mpsc::Sender<Got>) {
             )
             .await;
         }
-        let code = param(&r.query, "code");
+        let code = param(query, "code");
         if code.is_empty() {
             return httpd::respond(s, 400, &TEXT, b"missing code\n").await;
         }
@@ -275,36 +284,34 @@ async fn finish(
 
 /// Saves the session. Another account starts with empty caches.
 fn save(client: &str, refresh: &str, user: &str) -> Result<()> {
-    let mut cfg = Config::load()?;
-    if !cfg.spotify_user.is_empty() && cfg.spotify_user != user {
-        for name in config::SERVICE_CACHES {
-            let _ = std::fs::remove_file(config::service_cache(name, "spotify"));
-        }
-    }
-    cfg.provider = "spotify".into();
-    cfg.spotify_client_id = client.to_string();
-    cfg.spotify_refresh_token = refresh.to_string();
-    cfg.spotify_user = user.to_string();
-    cfg.save()
+    Config::update(|cfg| {
+        cfg.provider = "spotify".into();
+        cfg.spotify_client_id = client.into();
+        cfg.spotify_refresh_token = refresh.into();
+        cfg.spotify_user = user.into();
+        Ok(())
+    })
 }
 
 /// Opens the sign-in page and waits until Spotify sends the browser back
 /// with a code that works (fifteen minutes at most). A code that fails
 /// leaves the page open for another try.
-pub(super) async fn run(cfg: Config, status: &impl Fn(&str)) -> Result<()> {
+pub(super) async fn run(report: AuthReporter) -> Result<()> {
+    let cfg = Config::load()?;
+    let status = |text: &str| report(AuthEvent::Progress(text.into()));
     let ln = TcpListener::bind(ADDR)
         .await
         .map_err(|e| err(format!("login: {e} (is another login open?)")))?;
     let verifier = verifier();
     let flow = Arc::new(Flow::new(
-        &format!("http://{ADDR}"),
+        &format!("http://{}", ln.local_addr()?),
         &cfg.spotify_client_id,
         &verifier,
     ));
     let (tx, mut rx) = mpsc::channel::<Got>(4);
     let server = {
         let flow = flow.clone();
-        tokio::spawn(async move {
+        async move {
             loop {
                 let Ok((mut s, _)) = ln.accept().await else {
                     return;
@@ -312,43 +319,60 @@ pub(super) async fn run(cfg: Config, status: &impl Fn(&str)) -> Result<()> {
                 let (flow, tx) = (flow.clone(), tx.clone());
                 tokio::spawn(async move { answer(&mut s, &flow, &tx).await });
             }
-        })
+        }
     };
     let url = format!("{}/{}/", flow.origin, flow.secret);
     status("opening Spotify sign-in in your browser…");
-    open(&url, status);
+    report(AuthEvent::Prompt(AuthPrompt {
+        kind: "browser".into(),
+        url: url.clone(),
+        code: None,
+        expires_at: chrono::Utc::now().timestamp() + WAIT.as_secs() as i64,
+    }));
+    #[cfg(not(test))]
+    if std::process::Command::new("xdg-open")
+        .arg(&url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_err()
+    {
+        status(&format!("open {url} to sign in"));
+    }
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .unwrap_or_default();
     let deadline = tokio::time::Instant::now() + WAIT;
-    let r = loop {
-        let got = match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(g)) => g,
-            _ => break Err(err("login timed out")),
-        };
-        match got {
-            Got::Refused(why) => break Err(err(format!("spotify sign-in: {why}"))),
-            Got::Code(code, done) => {
-                let client = flow
-                    .client
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
-                let r =
-                    match finish(&http, ACCOUNTS_BASE, API_BASE, &client, &code, &verifier).await {
+    let processing = async {
+        loop {
+            let got = match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(g)) => g,
+                _ => break Err(err("login timed out")),
+            };
+            match got {
+                Got::Refused(why) => break Err(err(format!("spotify sign-in: {why}"))),
+                Got::Code(code, done) => {
+                    let client = flow
+                        .client
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    let r = match finish(&http, ACCOUNTS_BASE, API_BASE, &client, &code, &verifier)
+                        .await
+                    {
                         Ok((refresh, user)) => save(&client, &refresh, &user),
                         Err(e) => Err(e),
                     };
-                let _ = done.send(r.as_ref().map(|_| ()).map_err(|e| e.to_string()));
-                if r.is_ok() {
-                    break r;
+                    let _ = done.send(r.as_ref().map(|_| ()).map_err(|e| e.to_string()));
+                    if r.is_ok() {
+                        break r;
+                    }
                 }
             }
         }
     };
-    server.abort();
-    r
+    tokio::select! { result = processing => result, _ = server => Err(err("login server stopped")) }
 }
 
 #[cfg(test)]
@@ -509,5 +533,33 @@ mod tests {
         ] {
             assert!(body.contains(part), "{part} in {body}");
         }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    #[tokio::test]
+    async fn cancelled_login_releases_its_listener() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let prompt = Arc::new(Mutex::new(String::new()));
+        let saved = prompt.clone();
+        let mut pending = Box::pin(run(Arc::new(move |event| {
+            if let AuthEvent::Prompt(p) = event {
+                *saved.lock().unwrap() = p.url;
+            }
+        })));
+        tokio::select! {
+            _ = &mut pending => panic!("login completed without a callback"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {},
+        }
+        let url = url::Url::parse(&prompt.lock().unwrap()).unwrap();
+        let addr = format!("127.0.0.1:{}", url.port().unwrap());
+        drop(pending);
+        let _listener = TcpListener::bind(addr)
+            .await
+            .expect("cancel must release the port immediately");
     }
 }

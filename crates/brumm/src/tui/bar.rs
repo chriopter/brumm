@@ -38,7 +38,7 @@ impl Model {
     pub fn set_bar(&mut self, on: bool) {
         self.bar_on = on;
         self.opts.o.bar = on_off(on).into();
-        match self.client.clone() {
+        match self.client.as_ref().map(|c| c.for_session()) {
             None => self.cmds.push(Cmd::Blocking(Box::new(move || {
                 Some(Msg::BarSet {
                     on,

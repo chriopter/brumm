@@ -17,7 +17,6 @@ const (
 	CmdOptions    = "options"
 	CmdPlace      = "place"
 	CmdPlay       = "play"
-	CmdProvider   = "provider"
 	CmdQueue      = "queue"
 	CmdRatings    = "ratings"
 	CmdSearch     = "search"
@@ -140,19 +139,21 @@ type Options struct {
 }
 
 type Request struct {
-	ID     int      `json:"id"`
-	Cmd    string   `json:"cmd"`
-	List   string   `json:"list,omitempty"`
-	Item   *Item    `json:"item,omitempty"`
-	Query  string   `json:"query,omitempty"`
-	IDs    []string `json:"ids,omitempty"`
-	Start  string   `json:"start,omitempty"`
-	Source string   `json:"source,omitempty"`
-	Value  float64  `json:"value,omitempty"`
-	Refs   []Ref    `json:"refs,omitempty"`
-	Bands  int      `json:"bands,omitempty"`
-	Wave   int      `json:"wave,omitempty"` // waveform samples wanted per frame
-	FPS    int      `json:"fps,omitempty"`  // spectrum frames per second wanted; 25 by default
+	Generation int64    `json:"generation,omitempty"`
+	Saved      *bool    `json:"saved,omitempty"`
+	ID         int      `json:"id"`
+	Cmd        string   `json:"cmd"`
+	List       string   `json:"list,omitempty"`
+	Item       *Item    `json:"item,omitempty"`
+	Query      string   `json:"query,omitempty"`
+	IDs        []string `json:"ids,omitempty"`
+	Start      string   `json:"start,omitempty"`
+	Source     string   `json:"source,omitempty"`
+	Value      float64  `json:"value,omitempty"`
+	Refs       []Ref    `json:"refs,omitempty"`
+	Bands      int      `json:"bands,omitempty"`
+	Wave       int      `json:"wave,omitempty"` // waveform samples wanted per frame
+	FPS        int      `json:"fps,omitempty"`  // spectrum frames per second wanted; 25 by default
 	// Options changes the named options, by their JSON names; the rest
 	// stay as they are.
 	Options map[string]any `json:"options,omitempty"`
@@ -169,35 +170,33 @@ type State struct {
 	ExpiresIn int `json:"expiresIn,omitempty"`
 	// Update names a newer release when one is available.
 	Update string `json:"update,omitempty"`
-	// Service names the music service: Apple Music, Spotify.
-	Service string `json:"service,omitempty"`
-	// Lacks lists what the players hide for the service.
-	Lacks []string `json:"lacks,omitempty"`
 	Player
 }
 
 type Message struct {
-	ID       int             `json:"id,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	Items    []Item          `json:"items,omitempty"`
-	Tracks   []Track         `json:"tracks,omitempty"`
-	Shelves  []Shelf         `json:"shelves,omitempty"`
-	Explorer *ExplorePage    `json:"explorer,omitempty"`
-	Ratings  map[string]int  `json:"ratings,omitempty"`
-	State    *State          `json:"state,omitempty"`
-	Spectrum []int           `json:"spectrum,omitempty"`
-	Wave     []int           `json:"wave,omitempty"`
-	Library  bool            `json:"library,omitempty"` // the cached library changed
-	Pos      int             `json:"pos,omitempty"`
-	IDs      []string        `json:"ids,omitempty"`
-	Link     string          `json:"link,omitempty"`
-	Version  string          `json:"version,omitempty"`  // the daemon's own, with an update check
-	Notes    []string        `json:"notes,omitempty"`    // with an update check: what the newest release says is new
-	Options  *Options        `json:"options,omitempty"`  // the saved options, answering or announcing a change
-	Omarchy  bool            `json:"omarchy,omitempty"`  // with the options: omarchy is here, the bar widget can be switched
-	Agent    bool            `json:"agent,omitempty"`    // with the options: Omarchy has a coding agent to hand feedback to
-	Place    json.RawMessage `json:"place,omitempty"`    // where a player last was (CmdPlace)
-	Provider json.RawMessage `json:"provider,omitempty"` // the music services and the chosen one (CmdProvider)
+	Generation int64           `json:"generation,omitempty"`
+	Favorites  map[string]bool `json:"favorites,omitempty"`
+	Provider   json.RawMessage `json:"provider,omitempty"`
+	ID         int             `json:"id,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Items      []Item          `json:"items,omitempty"`
+	Tracks     []Track         `json:"tracks,omitempty"`
+	Shelves    []Shelf         `json:"shelves,omitempty"`
+	Explorer   *ExplorePage    `json:"explorer,omitempty"`
+	Ratings    map[string]int  `json:"ratings,omitempty"`
+	State      *State          `json:"state,omitempty"`
+	Spectrum   []int           `json:"spectrum,omitempty"`
+	Wave       []int           `json:"wave,omitempty"`
+	Library    bool            `json:"library,omitempty"` // the cached library changed
+	Pos        int             `json:"pos,omitempty"`
+	IDs        []string        `json:"ids,omitempty"`
+	Link       string          `json:"link,omitempty"`
+	Version    string          `json:"version,omitempty"` // the daemon's own, with an update check
+	Notes      []string        `json:"notes,omitempty"`   // with an update check: what the newest release says is new
+	Options    *Options        `json:"options,omitempty"` // the saved options, answering or announcing a change
+	Omarchy    bool            `json:"omarchy,omitempty"` // with the options: omarchy is here, the bar widget can be switched
+	Agent      bool            `json:"agent,omitempty"`   // with the options: Omarchy has a coding agent to hand feedback to
+	Place      json.RawMessage `json:"place,omitempty"`   // where a player last was (CmdPlace)
 }
 
 func socketPath() string {

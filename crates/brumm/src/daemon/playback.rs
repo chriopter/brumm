@@ -30,7 +30,9 @@ impl Daemon {
     pub(super) async fn toggle_playback(self: &Arc<Self>, eng: &Arc<Engine>) -> Result<()> {
         let seq = self.cancel_play_check();
         let es = eng.state().await?;
-        self.apply(es.clone()).await;
+        if !self.apply(eng, es.clone()).await {
+            return Err(crate::error::err("music session changed; try again"));
+        }
         if self.resume_if_idle(eng).await {
             tokio::spawn(self.clone().verify_playback(eng.clone(), seq));
             return Ok(());
@@ -101,7 +103,7 @@ impl Daemon {
             }
             if let Ok(es) = es {
                 let done = es.playing || es.needs_auth || !es.err.is_empty();
-                self.apply(es).await;
+                self.apply(eng, es).await;
                 if done {
                     return;
                 }

@@ -6,7 +6,7 @@ use std::time::Instant;
 use ratatui::buffer::Buffer;
 
 use super::geometry::{FootHit, Geometry, Rect};
-use super::model::{Cmd, Model, Msg, NUM_SECTIONS, SEC_QUEUE, SEC_SEARCH, SECTION_NAMES};
+use super::model::{Cmd, Model, Msg};
 use super::text::*;
 use super::viz;
 use crate::art::Size;
@@ -34,17 +34,20 @@ pub const IC_STATION: &str = "󰐹";
 pub const IC_SHELF: &str = "󰄨";
 pub const IC_DISLIKE: &str = "󰔑";
 
-pub const SECTION_ICONS: [&str; NUM_SECTIONS] = [
-    IC_HOME,
-    "󰭎",
-    IC_PLAYLIST,
-    IC_ALBUM,
-    IC_ARTIST,
-    IC_SONG,
-    IC_STATION,
-    IC_SEARCH,
-    IC_QUEUE,
-];
+pub fn navigation_icon(icon: &str) -> &'static str {
+    match icon {
+        "home" => IC_HOME,
+        "explore" => "󰭎",
+        "playlists" => IC_PLAYLIST,
+        "albums" => IC_ALBUM,
+        "artists" => IC_ARTIST,
+        "songs" => IC_SONG,
+        "radio" => IC_STATION,
+        "search" => IC_SEARCH,
+        "queue" => IC_QUEUE,
+        _ => IC_SHELF,
+    }
+}
 
 /// The glyph in front of an item of kind.
 pub fn kind_icon(kind: &str) -> &'static str {
@@ -149,24 +152,27 @@ impl Model {
         for (y, l) in lines.iter().enumerate() {
             put(buf, 0, y as i64, l);
         }
-        let boxed =
-            if self.state.status == crate::ipc::STATUS_CHOOSE_PROVIDER || self.provider_picking {
-                Some(self.provider_box())
-            } else if self.feature_form.is_some() {
-                Some(self.feature_box())
-            } else if self.fb.is_some() {
-                Some(self.feedback_box())
-            } else if self.upd.is_some() {
-                Some(self.update_box())
-            } else if self.bar_asking() {
-                Some(self.bar_box())
-            } else if self.pick.is_some() {
-                Some(self.picker_box())
-            } else if self.opt_open {
-                Some(self.options_box())
-            } else {
-                None
-            };
+        let boxed = if self.state.auth.as_ref().is_some_and(|p| p.code.is_some()) {
+            Some(self.auth_box())
+        } else if self.provider_picker_open
+            || self.state.status == crate::ipc::STATUS_CHOOSE_PROVIDER
+        {
+            Some(self.provider_box())
+        } else if self.feature_form.is_some() {
+            Some(self.feature_box())
+        } else if self.fb.is_some() {
+            Some(self.feedback_box())
+        } else if self.upd.is_some() {
+            Some(self.update_box())
+        } else if self.bar_asking() {
+            Some(self.bar_box())
+        } else if self.pick.is_some() {
+            Some(self.picker_box())
+        } else if self.opt_open {
+            Some(self.options_box())
+        } else {
+            None
+        };
         if let Some(b) = boxed {
             self.overlay(buf, &b);
         }
@@ -297,9 +303,6 @@ impl Model {
             e("?", "keys", "?"),
             e("!", "feedback", "!"),
         ];
-        if self.lacks("preview") {
-            keys.retain(|k| k.1 != "preview");
-        }
         if self.show_tips() {
             // the rest is on the buttons: the footer has what is not
             keys = vec![
@@ -364,8 +367,8 @@ impl Model {
             right = cat(right, bear);
         } else if st.expires_in > 0 && self.flash.is_empty() {
             let msg = format!(
-                "Apple Music access in this build ends in {} days: press U to update",
-                st.expires_in
+                "{} access in this build ends in {} days: press U to update",
+                self.provider_name, st.expires_in
             );
             right = cat(line(vec![sp(msg, ERR), spaces(3)]), bear);
         } else if !self.flash.is_empty() {
@@ -400,7 +403,11 @@ impl Model {
         // Tabs: the active one where-you-are colored, the rest dim; spaced
         // tighter when the list is narrow, and only icons for the inactive
         // ones when even that does not fit.
-        let nav_names = &SECTION_NAMES[..SEC_QUEUE];
+        let nav_names = self.navigation[..self.sec("queue")]
+            .iter()
+            .map(|e| e.label.as_str())
+            .collect::<Vec<_>>();
+        self.geo.tabs = vec![Rect::default(); self.navigation.len()];
         let names_w: i64 = nav_names.iter().map(|n| sw(n) as i64).sum();
         let digits = if self.show_tips() {
             2 * nav_names.len() as i64
@@ -418,7 +425,7 @@ impl Model {
         let mut tabs: Vec<L> = Vec::new();
         let mut tx = tx0;
         for (i, name) in nav_names.iter().enumerate() {
-            if i == SEC_SEARCH && tx + 15 < x + wd - 1 {
+            if i == self.sec("search") && tx + 15 < x + wd - 1 {
                 let style = if self.player_view { bold(HERE) } else { DIM };
                 tabs.push(one("♪ Now Playing", style));
                 self.geo.now_playing = Rect::new(tx, y + 1, tx + 13, y + 2);
@@ -426,7 +433,7 @@ impl Model {
             }
             let active = i == self.section;
             let name = if icons && !active {
-                super::view::SECTION_ICONS[i]
+                navigation_icon(&self.navigation[i].icon)
             } else {
                 name
             };
@@ -458,7 +465,7 @@ impl Model {
         let mut rows = h - 2 - lines.len() as i64 - 1;
         let mut top = y + 1 + lines.len() as i64;
         let (is_search_root, has_filter) = (
-            self.section == SEC_SEARCH && self.stack().len() == 1,
+            self.section == self.sec("search") && self.stack().len() == 1,
             self.filtering || self.cur().all.is_some(),
         );
         if is_search_root {
@@ -480,9 +487,6 @@ impl Model {
         let msg = |s: L| centered(s, inner, rows);
         if err.is_some() && nrows == 0 {
             lines.extend(msg(one(err.unwrap_or_default(), ERR)));
-        } else if let Some(what) = self.missing(&key) {
-            let s = format!("{} has no {what} for apps", self.service());
-            lines.extend(msg(one(s, DIM)));
         } else if !loaded && self.state.status == ipc::STATUS_LOGGED_OUT {
             lines.extend(msg(one("sign in to see your library", DIM)));
         } else if !loaded {
@@ -492,7 +496,10 @@ impl Model {
             )));
         } else if key == "search:" {
             lines.extend(msg(line(vec![
-                sp(format!("search {}: type and press ", self.service()), DIM),
+                sp(
+                    format!("search {}: type and press ", self.provider_name),
+                    DIM,
+                ),
                 sp("enter", KEY),
             ])));
         } else if nrows == 0 {
@@ -559,7 +566,7 @@ impl Model {
         let q = &self.query;
         if q.is_empty() && !self.searching {
             return line(vec![
-                sp(format!("{IC_SEARCH}  search {}  ", self.service()), DIM),
+                sp(format!("{IC_SEARCH}  search {}  ", self.provider_name), DIM),
                 sp("/", KEY),
             ]);
         }
@@ -675,7 +682,7 @@ impl Model {
             let src = &self.state.player.source;
             let playing = it.key() == *src
                 || (it.kind == KIND_STATION && *src == format!("station:{}", it.id));
-            let mut d = self.rating_mark(&it.id);
+            let mut d = self.rating_mark_for(&it.kind, &it.id);
             if playing && !self.state.player.title.is_empty() {
                 d = cat(line(vec![sp("♪", self.acc.plays), sp(" ", PLAIN)]), d);
             }
@@ -746,7 +753,7 @@ impl Model {
             add(&mut top, L::default());
             add(
                 &mut top,
-                one(format!("Sign in to {}", self.service()), BOLD),
+                one(format!("Sign in to {}", self.provider_name), BOLD),
             );
             add(
                 &mut top,
@@ -915,7 +922,12 @@ impl Model {
         lines
     }
 
-    pub(super) fn help_lines(&self) -> Vec<StageLine> {
+    fn help_lines(&self) -> Vec<StageLine> {
+        let sections = format!("← → tab 1–{}", self.navigation.len());
+        let filtering = format!(
+            "filter the list; tab searches all of {} (or paste a link)",
+            self.provider_name
+        );
         let groups: [(&str, &[(&str, &str)]); 4] = [
             (
                 "browse",
@@ -923,11 +935,8 @@ impl Model {
                     ("↑↓ jk", "move"),
                     ("enter l", "open / play"),
                     ("esc h", "back"),
-                    ("← → tab 1–9", "sections"),
-                    (
-                        "/",
-                        "filter the list; tab searches the whole service (or paste a link)",
-                    ),
+                    (&sections, "sections"),
+                    ("/", &filtering),
                     ("a A", "the song's album / artist (or click them)"),
                     ("c", "go to what's playing"),
                 ],
@@ -981,13 +990,6 @@ impl Model {
             }
             out.push(StageLine::of(one(*name, BOLD)));
             for (k, d) in keys.iter() {
-                // What the service lacks has no key.
-                let (k, d) = match *k {
-                    "hold space  O" if self.lacks("preview") => continue,
-                    "R" if self.lacks("radio") => continue,
-                    "* d" if self.lacks("dislike") => (&"*", &"love"),
-                    _ => (k, d),
-                };
                 out.push(StageLine::of(line(vec![
                     sp(format!("{k:<13}"), KEY),
                     sp("  ", PLAIN),
@@ -1051,8 +1053,7 @@ impl Model {
             }
         };
         let f = if from.is_some() { f } else { 1.0 };
-        // Without audio to analyze it breathes, as when paused.
-        let playing = self.state.player.playing && !self.lacks("visualizer");
+        let playing = self.state.player.playing;
         self.viz.render_mix(
             from,
             self.viz_style,

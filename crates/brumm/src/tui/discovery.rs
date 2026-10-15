@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::browse::fill;
 use super::geometry::{CardHit, Rect};
-use super::model::{ExploreLoad, Model, Msg, Row, SEC_EXPLORE, View};
+use super::model::{ExploreLoad, Model, Msg, Row, View};
 use super::text::*;
 use crate::ipc::{self, Message, Request};
 use crate::music::{ExplorePage, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, Shelf};
@@ -29,7 +29,7 @@ impl Model {
                 return true;
             }
         }
-        self.section == SEC_EXPLORE && v.rows.iter().all(|r| r.track.is_none())
+        self.section == self.sec("explore") && v.rows.iter().all(|r| r.track.is_none())
     }
 
     /// Shelves filling the panel w×h at x, y; each card keeps the row it
@@ -140,45 +140,16 @@ impl Model {
     /// Asks for Explore's artwork shelves, each group a request of its own,
     /// once its first links are shown.
     pub fn load_explore_visuals(&mut self, id: u64, page: ExplorePage) {
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         let load = LOADS.fetch_add(1, Ordering::Relaxed) + 1;
-        let visuals: Vec<_> = page.visuals.iter().take(2).cloned().collect();
+        let visuals: Vec<_> = page.visuals.clone();
         let Some(v) = self.view_by_id(id) else { return };
         v.explore = Some(ExploreLoad {
             id: load,
             page,
-            groups: Default::default(),
-        });
-        let home = c.clone();
-        self.task(async move {
-            let mut shelves = Vec::new();
-            if let Ok(reply) = home.request(Request::new(ipc::CMD_HOME)).await {
-                for mut sh in reply.shelves {
-                    if sh.title == "Your music" || sh.title == "Browse" {
-                        continue;
-                    }
-                    let items: Vec<_> = sh
-                        .items
-                        .into_iter()
-                        .filter(|it| !it.artwork.is_empty())
-                        .take(6)
-                        .collect();
-                    if !items.is_empty() {
-                        sh.items = items;
-                        sh.tracks.clear();
-                        shelves.push(sh);
-                    }
-                    if shelves.len() == 2 {
-                        break;
-                    }
-                }
-            }
-            Some(Msg::ExploreGroup {
-                view: id,
-                load,
-                group: 0,
-                shelves,
-            })
+            groups: vec![Vec::new(); visuals.len()],
         });
         for (i, link) in visuals.into_iter().enumerate() {
             let (c, query) = (c.clone(), link.route);
@@ -210,7 +181,7 @@ impl Model {
                 Some(Msg::ExploreGroup {
                     view: id,
                     load,
-                    group: i + 1,
+                    group: i,
                     shelves,
                 })
             });
@@ -237,6 +208,7 @@ pub fn merge_explore_group(v: &mut View, group: usize, shelves: Vec<Shelf>) {
     for g in &load.groups {
         page.shelves.extend(g.iter().cloned());
     }
+    page.shelves.extend(load.page.shelves.clone());
     page.shelves.push(Shelf {
         title: "Browse".into(),
         items: load.page.items.clone(),

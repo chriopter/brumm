@@ -61,7 +61,7 @@ func previewExplore(r Request, m *Message) {
 	switch {
 	case route == "app:discover":
 		p.Title = "Explore"
-		p.Visuals = []Item{exploreLink("Charts", "shelf", "app:chart:albums"), exploreLink("Music videos", "shelf", "app:videos")}
+		p.Visuals = []Item{exploreLink("Recently played", "shelf", "app:discover:recent"), exploreLink("Charts", "shelf", "app:chart:albums"), exploreLink("Music videos", "shelf", "app:videos")}
 		p.Shelves = []Shelf{{Title: "Browse", Items: []Item{
 			exploreLink("Genres", "genres", "/v1/catalog/{storefront}/genres"),
 			exploreLink("Charts", "charts", "app:charts"),
@@ -70,6 +70,8 @@ func previewExplore(r Request, m *Message) {
 			exploreLink("Curators", "curators", "app:curators"),
 			exploreLink("Record labels", "record-labels", "app:labels"),
 		}}, {Title: "Find a release", Items: []Item{exploreLink("Catalog lookup", "lookup", "app:lookup")}}}
+	case route == "app:discover:recent":
+		p.Shelves = []Shelf{{Title: "Recently played", Items: items()[:6], Route: "provider:recent"}}
 	case route == "app:favorites":
 		p.Title = "Favorites"
 		ts := previewTracks(0)

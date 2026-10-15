@@ -50,9 +50,9 @@ impl Model {
             return L::default();
         };
         let preview = if self.releases { "space" } else { "O" };
-        let mut keys: Vec<(&str, &str)> = if v.key == "queue:" {
+        let keys: Vec<(&str, &str)> = if v.key == "queue:" {
             vec![("enter", "play"), ("a A", "album artist"), ("*", "love")]
-        } else if let Some(t) = &r.track {
+        } else if r.track.is_some() {
             let mut k = vec![
                 ("enter", "play"),
                 (preview, "preview"),
@@ -63,7 +63,7 @@ impl Model {
                 ("P", "playlist"),
                 ("y", "link"),
             ];
-            if !t.id.starts_with("i.") {
+            if self.capabilities.collection_write {
                 k.insert(6, ("i", "library"));
             }
             k
@@ -91,21 +91,20 @@ impl Model {
                 _ => vec![("enter", "open")],
             }
         };
-        // What the service lacks has no key.
-        keys.retain(|(k, _)| match *k {
-            "R" => !self.lacks("radio"),
-            "O" | "space" => !self.lacks("preview"),
-            _ => true,
-        });
-        if self.lacks("love-items") && r.track.is_none() {
-            keys.retain(|k| k.0 != "* d" && k.0 != "*");
-        }
-        if self.lacks("dislike") {
-            for k in keys.iter_mut().filter(|k| k.0 == "* d") {
-                *k = ("*", "love");
-            }
-        }
         let mut out = L::default();
+        let keys = keys
+            .into_iter()
+            .filter(|(_, action)| match *action {
+                "preview" => self.capabilities.previews,
+                "radio" => self.capabilities.stations,
+                "rate" | "love" => {
+                    self.capabilities.ratings || self.capabilities.preference.is_some()
+                }
+                "playlist" => self.capabilities.playlist_write,
+                "library" => self.capabilities.collection_write,
+                _ => true,
+            })
+            .collect::<Vec<_>>();
         for (i, (k, d)) in keys.iter().enumerate() {
             if i > 0 {
                 out.spans.push(sp("  ", DIM));

@@ -2,10 +2,10 @@
 
 <img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
 
-**Apple Music & Spotify for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
+**Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
+- 🎧 Supported Services: Apple Music by [@chriopter](https://github.com/chriopter), Tidal by [@keylimesoda](https://github.com/keylimesoda), Spotify by [@sean-imus](https://github.com/sean-imus)
 - 🎵 Library, catalog, search as you type
-- 🎧 Apple Music or Spotify: <kbd>o</kbd> → Music Service, or `brumm provider`
 - 🏠 Home: recent, heavy rotation, picks
 - 🧭 Explore: charts, genres, videos, countries
 - ❤️ Favorites, Replay and playlist folders
@@ -56,18 +56,19 @@ Visuals
 | <kbd>f</kbd> | visualizer: <kbd>tab</kbd> <kbd>v</kbd> <kbd>a</kbd> <kbd>x</kbd> <kbd>F</kbd> |
 | <kbd>g</kbd> | switch between terminal and window |
 | <kbd>o</kbd> | options |
+| <kbd>Ctrl</kbd>+<kbd>o</kbd> | connect or switch music services |
 | <kbd>U</kbd> | look for an update |
 | <kbd>Q</kbd> / <kbd>q</kbd> | close, keep playing / quit |
 
 Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
-Not possible with Spotify's API for apps: radio, Explore, previews, dislikes,
-the songs of playlists you do not own (they play as a whole), the visualizer
-hearing the music.
+Features vary by service; radio, Replay and playlist folders are Apple Music features.
+Spotify needs your own [developer app](https://developer.spotify.com/dashboard) and Premium.
+Its visualizer has no access to the audio. See [service setup and limits](docs/providers.md).
 
 ## More
 
-- 🔑 Needs Apple Music, or Spotify Premium; the installer asks which, signs you in and starts brumm
-- 🟢 Spotify plays through an app of your own (Spotify lets one app serve only a few people): at sign-in, brumm shows how to make one at [developer.spotify.com](https://developer.spotify.com/dashboard) with the redirect URI `http://127.0.0.1:7777/spotify/callback`
+- 🔑 Needs an Apple Music, Tidal or Spotify Premium subscription. Connect your services on first start.
+- ⇄ Click the service name or press <kbd>Ctrl</kbd>+<kbd>o</kbd> to switch or add services later.
 - ▶️ Later: `brumm`, the launcher, or the bar widget — whichever face you used last
 - 🔄 Updates: <kbd>U</kbd> when offered, or `brumm update`
 - 🔏 Signed releases (Ed25519) and GitHub-attested builds — check the installer first:
@@ -80,7 +81,7 @@ gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 ## Development
 
 The [music provider guide](docs/providers.md) describes the Rust API boundary
-and the remaining work for adding another service.
+and the Apple Music, Tidal and Spotify integrations.
 
 The daemon and terminal player use Rust; the window uses Qt Quick/QML
 with Rust for shared calculations. Building needs Rust 1.89 or newer,
@@ -89,25 +90,25 @@ tools.
 
 ```sh
 bin/setup       # build and install from this checkout (the window too, with Qt 6)
+bin/build-tidal # rebuild the bundled Tidal Web SDK adapter after changing web/tidal
 bin/dev         # the daemon in the foreground; bin/dev ui / gui for a player
 bin/gui-shot    # screenshot the window against a stand-in daemon
 bin/viz-thumbs  # picture each visualizer style for the list of styles
 bin/bench       # what the players cost
 ```
 
-One background service is the core — music, queue, library, options, sign-in, where you were, for each music service. The players only draw, and come and go while the music plays on:
+One background service is the core — music, queue, library, options, sign-in, where you were. The players only draw, and come and go while the music plays on:
 
 ```text
 +--------------------------------------------------------+
 | brumm daemon  |  Rust / Tokio                          |
 | systemd background service                             |
 |                                                        |
-| Apple Music & Spotify APIs / library / queue / sign-in |
+| Apple Music / Tidal / Spotify / library / queue / sign-in / options |
 +--+-----------------------------------------------------+
    |
    +-- playback --> Chrome / Widevine
-   |                MusicKit JS / Web Audio
-   |                Spotify Web Playback SDK
+   |                MusicKit JS / Tidal Web SDK / Web Audio
    |
    +-- MPRIS -----> Omarchy bar widget
    |

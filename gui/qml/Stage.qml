@@ -42,7 +42,7 @@ Item {
             lineHeight: 1.3
             font { family: ui.sans; pixelSize: ui.px(15) }
             text: {
-                if (store.st.status === "logged-out") return "Not signed in to " + store.service + ".\nPress L to sign in in your browser."
+                if (store.st.status === "logged-out") return "Not signed in to " + store.providerName + ".\nPress L to connect."
                 if (store.st.status === "error") return store.st.message || "brumm could not start its player."
                 if (store.st.status === "starting") return store.st.message || "Starting the player…"
                 return "Nothing plays.\nPick a song and press enter."
@@ -106,9 +106,9 @@ Item {
                     anchors { right: parent.right; verticalCenter: titleText.verticalCenter }
                     spacing: ui.px(10)
                     visible: !stage.preview
-                    readonly property int mark: { store.ratingRev; return store.rating[stage.st.id] || 0 }
+                    readonly property int mark: { store.ratingRev; return store.capabilities.preference ? (store.favoriteMark("song", stage.st.id) ? 1 : 0) : store.rating[stage.st.id] || 0 }
                     Orb { id: add; size: ui.px(34); icon: "󰇙"; on: store.addOpen; onClicked: store.addOpen = !store.addOpen }
-                    Orb { size: ui.px(34); icon: rate.mark > 0 ? "󰋑" : "󰋕"; on: rate.mark > 0; onClicked: store.ratePlaying(1) }
+                    Orb { visible: store.capabilities.ratings || !!store.capabilities.preference; size: ui.px(34); icon: rate.mark > 0 ? "󰋑" : "󰋕"; on: rate.mark > 0; onClicked: store.ratePlaying(1) }
                 }
                 // A right click on the title copies the song's link.
                 TapHandler { acceptedButtons: Qt.RightButton; onTapped: store.linkPlaying() }
@@ -241,7 +241,7 @@ Item {
                 model: [["󰲸", "Add to Playlist…", "P", () => store.pickPlaying()],
                         ["󰋚", "Add to Library", "i", () => store.libraryPlaying()],
                         ["󰐹", "Start Radio", "R", () => store.radioPlaying()],
-                        ["󰔑", "Suggest Less", "d", () => store.ratePlaying(-1)]]
+                        ["󰔑", "Suggest Less", "d", () => store.ratePlaying(-1)]].filter(row => row[2] === "P" ? store.capabilities.playlistWrite : row[2] === "i" ? store.capabilities.collectionWrite : row[2] === "R" ? store.capabilities.stations : store.capabilities.dislike)
                 Item {
                     required property var modelData
                     width: addRows.width

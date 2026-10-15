@@ -5,8 +5,10 @@
 
 mod auth;
 mod link;
+mod login;
 mod map;
 mod provider;
+pub mod session;
 
 use std::sync::Arc;
 use std::time::Duration;

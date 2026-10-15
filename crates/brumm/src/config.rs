@@ -58,17 +58,81 @@ pub fn cache_dir() -> PathBuf {
     xdg("XDG_CACHE_HOME", ".cache").join("brumm")
 }
 
-/// The files each music service caches apart: its library and where it
-/// stopped.
-pub const SERVICE_CACHES: &[&str] = &["library", "resume"];
+/// Account-derived browse and resume data is isolated from the selected service.
+pub fn session_cache_dir() -> PathBuf {
+    let cfg = Config::load().unwrap_or_default();
+    session_cache_dir_for(&cfg)
+}
 
-/// One of a music service's cache files. Apple Music's keep the names they
-/// had before there were other services.
-pub fn service_cache(name: &str, provider: &str) -> PathBuf {
-    match provider {
-        "" | "apple" => cache_dir().join(format!("{name}.json")),
-        p => cache_dir().join(format!("{name}-{p}.json")),
+pub fn session_cache_dir_for(cfg: &Config) -> PathBuf {
+    match crate::provider::registry::definition(cfg.effective_provider()) {
+        Ok(provider) => cache_dir()
+            .join(provider.id())
+            .join(if provider.signed_in(cfg) {
+                provider.account_key(cfg)
+            } else {
+                "signed-out".into()
+            }),
+        _ => cache_dir(),
     }
+}
+
+/// A provider may expire persisted metadata instead of inheriting Apple's cache
+/// lifetime. Also remove expired files from inactive accounts on startup.
+pub fn expire_session_files() {
+    for provider in crate::provider::registry::choices() {
+        let Some(age) = crate::provider::registry::definition(&provider.id)
+            .ok()
+            .and_then(|p| p.cache_max_age())
+        else {
+            continue;
+        };
+        let Ok(accounts) = fs::read_dir(cache_dir().join(&provider.id)) else {
+            continue;
+        };
+        for account in accounts.flatten() {
+            for name in ["library.json", "resume.json"] {
+                let path = account.path().join(name);
+                if fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|elapsed| elapsed > age)
+                {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+    }
+}
+
+/// Import the original Apple cache once, leaving it available to the old build.
+pub fn migrate_session_cache() -> Result<()> {
+    let cfg = Config::load()?;
+    // These files predate providers and contain Apple IDs exclusively.
+    if cfg.effective_provider() != "apple" {
+        return Ok(());
+    }
+    let provider = match crate::provider::registry::definition(cfg.effective_provider()) {
+        Ok(p) if p.signed_in(&cfg) => p,
+        _ => return Ok(()),
+    };
+    let marker = cache_dir().join(format!("legacy-{}-imported", provider.id()));
+    if marker.exists() {
+        return Ok(());
+    }
+    let target = session_cache_dir_for(&cfg);
+    fs::create_dir_all(&target)?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+    for name in ["library.json", "resume.json"] {
+        if let Ok(bytes) = fs::read(cache_dir().join(name))
+            && !target.join(name).exists()
+        {
+            write_private(&target.join(name), &bytes)?;
+        }
+    }
+    write_private(&marker, b"1\n")?;
+    Ok(())
 }
 
 /// The daemon's control socket.
@@ -100,10 +164,14 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// The user's music sessions: Apple Music's token (and a developer token
-/// of their own), and Spotify's app and refresh token.
+/// The user's Apple Music session, and a developer token of their own.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Config {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::tidal::auth::Session::is_empty"
+    )]
+    pub tidal: crate::provider::tidal::auth::Session,
     /// The saved service; old Apple sessions remain compatible.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider: String,
@@ -111,14 +179,10 @@ pub struct Config {
     pub developer_token: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_token: String,
-    /// The user's own Spotify app: Spotify lets one app serve only a few
-    /// accounts, so brumm ships none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub spotify_client_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub spotify_refresh_token: String,
-    /// The signed-in Spotify account, so a different one starts with an
-    /// empty cache.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub spotify_user: String,
 }
@@ -128,6 +192,16 @@ fn config_path() -> PathBuf {
 }
 
 impl Config {
+    /// Read-modify-write without overwriting another task's refreshed credentials
+    /// or selection. The closure must perform only short, synchronous work.
+    pub fn update<T>(change: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
+        static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Self::load()?;
+        let result = change(&mut cfg)?;
+        cfg.save()?;
+        Ok(result)
+    }
     pub fn effective_provider(&self) -> &str {
         if self.provider.is_empty() && !self.user_token.is_empty() {
             "apple"
@@ -137,26 +211,6 @@ impl Config {
     }
     pub fn needs_provider_choice(&self) -> bool {
         self.effective_provider().is_empty()
-    }
-
-    /// The active service's name, as the players say it.
-    pub fn service_name(&self) -> &'static str {
-        crate::provider::registry::name(self.effective_provider())
-    }
-
-    /// Whether the active service has a session to start with; an error
-    /// when this build cannot sign in to it at all.
-    pub fn signed_in(&self) -> Result<bool> {
-        match self.effective_provider() {
-            "apple" if self.developer().is_empty() => {
-                Err(err("no Apple Music developer token in this build"))
-            }
-            "apple" => Ok(!self.user_token.is_empty()),
-            "spotify" => {
-                Ok(!self.spotify_client_id.is_empty() && !self.spotify_refresh_token.is_empty())
-            }
-            _ => Ok(false),
-        }
     }
 
     /// The config; a missing file is an empty config, not an error.

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use super::browse::nearest;
-use super::model::{Key, Model, SEC_SEARCH, View};
+use super::model::{Key, Model, View};
 use super::picker::drop_word;
 use super::text::*;
 
@@ -65,7 +65,7 @@ impl Model {
     /// Whether / filters the list on screen.
     pub fn filterable(&self) -> bool {
         let v = self.cur();
-        self.section != SEC_SEARCH
+        self.section != self.sec("search")
             && v.key != "queue:"
             && v.loaded
             && v.rows.len() + v.all.as_ref().map_or(0, Vec::len) > 0
@@ -86,7 +86,7 @@ impl Model {
         self.filtering = false;
         clear_filter(self.cur_mut());
         self.query = q;
-        self.section = SEC_SEARCH;
+        self.section = self.sec("search");
         self.searching = false;
         self.run_search(true);
     }
@@ -147,7 +147,7 @@ impl Model {
             l.spans.extend([
                 sp("  ", DIM),
                 sp("tab", KEY),
-                sp(format!(" all of {}  ", self.service()), DIM),
+                sp(format!(" all of {}  ", self.provider_name), DIM),
                 sp("esc", KEY),
                 sp(" clear", DIM),
             ]);

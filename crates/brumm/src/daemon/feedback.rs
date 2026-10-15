@@ -83,7 +83,7 @@ fn spawn(program: &str, args: &[&str]) -> bool {
 /// Asks the agent to look into what the user reports and file it.
 fn agent_prompt(text: &str, version: &str, face: &str) -> String {
     format!(
-        r#"A user of brumm (an Apple Music and Spotify player for Omarchy, https://github.com/{ISSUES_REPO}) reports:
+        r#"A user of brumm (an Apple Music player for Omarchy, https://github.com/{ISSUES_REPO}) reports:
 
   {text}
 
