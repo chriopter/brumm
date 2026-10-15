@@ -99,6 +99,143 @@ async fn provider_authorization_failure_updates_session_state() {
 }
 
 #[tokio::test]
+async fn refresh_keeps_other_lists_when_one_request_fails() {
+    let Some(_env) = config::testenv::isolated() else {
+        return;
+    };
+    let d = daemon(Some(err("temporary playlist failure")));
+    d.library().set_items(
+        ipc::LIST_PLAYLISTS,
+        vec![Item {
+            id: "cached-playlist".into(),
+            ..Default::default()
+        }],
+    );
+    d.refresh_with(&d.client().unwrap()).await;
+    assert_eq!(
+        d.library().items(ipc::LIST_PLAYLISTS).unwrap()[0].id,
+        "cached-playlist"
+    );
+    for name in [ipc::LIST_ALBUMS, ipc::LIST_ARTISTS] {
+        assert_eq!(d.library().items(name), Some(vec![]));
+        assert_eq!(Library::load().items(name), Some(vec![]));
+    }
+    assert_eq!(d.library().tracks(ipc::LIST_SONGS), Some(vec![]));
+}
+
+#[tokio::test]
+async fn refresh_stops_when_authorization_fails() {
+    let Some(_env) = config::testenv::isolated() else {
+        return;
+    };
+    let d = daemon(Some(Error::Unauthorized));
+    d.refresh_with(&d.client().unwrap()).await;
+    assert_eq!(d.lock().state.status, ipc::STATUS_LOGGED_OUT);
+    assert!(d.library().items(ipc::LIST_ALBUMS).is_none());
+}
+
+#[tokio::test]
+async fn reloading_the_same_account_keeps_unsaved_library_and_queue() {
+    let Some(_env) = config::testenv::isolated() else {
+        return;
+    };
+    let cfg = Config {
+        provider: "apple".into(),
+        user_token: "account-one".into(),
+        ..Default::default()
+    };
+    cfg.save().unwrap();
+    let d = daemon(None);
+    let lib = d.library();
+    lib.set_items(
+        ipc::LIST_ALBUMS,
+        vec![Item {
+            id: "unsaved".into(),
+            ..Default::default()
+        }],
+    );
+    let engine = Engine::stand_in();
+    {
+        let mut i = d.lock();
+        i.eng = Some(engine.clone());
+        i.resume = Some(Resume {
+            ids: vec!["song".into()],
+            id: "song".into(),
+            pos: 42.0,
+            ..Default::default()
+        });
+    }
+    assert!(
+        d.replace_session(&cfg, Arc::new(Fixture::default()))
+            .is_none()
+    );
+    assert!(Arc::ptr_eq(&lib, &d.library()));
+    assert_eq!(
+        d.library().items(ipc::LIST_ALBUMS).unwrap()[0].id,
+        "unsaved"
+    );
+    assert_eq!(d.lock().resume.as_ref().unwrap().pos, 42.0);
+    assert!(same(&d.lock().eng, &engine));
+}
+
+#[tokio::test]
+async fn a_new_account_detaches_the_old_player_and_saves_its_queue() {
+    let Some(_env) = config::testenv::isolated() else {
+        return;
+    };
+    let mut cfg = Config {
+        provider: "apple".into(),
+        user_token: "account-one".into(),
+        ..Default::default()
+    };
+    cfg.save().unwrap();
+    let old_dir = config::session_cache_dir();
+    let d = daemon(None);
+    let old_api = d.client().unwrap();
+    let old_engine = Engine::stand_in();
+    {
+        let mut i = d.lock();
+        i.eng = Some(old_engine.clone());
+        i.resume = Some(Resume {
+            ids: vec!["old-song".into()],
+            id: "old-song".into(),
+            pos: 42.0,
+            ..Default::default()
+        });
+    }
+    cfg.user_token = "account-two".into();
+    cfg.save().unwrap();
+    let new_dir = config::session_cache_dir();
+    let mut queue = Resume::new_at(new_dir.clone());
+    queue.id = "new-song".into();
+    queue.ids = vec![queue.id.clone()];
+    queue.save();
+    let removed = d
+        .replace_session(&cfg, Arc::new(Fixture::default()))
+        .unwrap();
+    assert!(Arc::ptr_eq(&removed, &old_engine));
+    assert!(d.engine().is_none());
+    assert_eq!(Resume::load_at(old_dir).unwrap().id, "old-song");
+    assert_eq!(d.lock().resume.as_ref().unwrap().id, "new-song");
+    assert!(
+        !d.apply(
+            &old_engine,
+            Player {
+                id: "old-song".into(),
+                title: "Old song".into(),
+                ..Default::default()
+            }
+        )
+        .await
+    );
+    assert_eq!(d.lock().resume.as_ref().unwrap().id, "new-song");
+    assert_eq!(Resume::load_at(new_dir).unwrap().id, "new-song");
+    // A Chrome startup which began before the login cannot take over later.
+    assert!(d.install_engine(&old_api, &old_engine).is_err());
+    assert!(d.engine().is_none());
+}
+
+#[tokio::test]
 async fn a_reply_from_before_login_cannot_populate_the_new_library() {
     let d = daemon(None);
     let gate = Arc::new((Notify::new(), Notify::new()));

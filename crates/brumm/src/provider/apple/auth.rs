@@ -110,7 +110,7 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<String>(1);
     let server = {
         let (secret, origin) = (secret.clone(), origin.clone());
-        tokio::spawn(async move {
+        async move {
             loop {
                 let Ok((mut s, _)) = ln.accept().await else {
                     return;
@@ -123,16 +123,8 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
                     }
                 });
             }
-        })
-    };
-    // Aborting authentication closes its private listener rather than leaving port 7777 busy.
-    struct StopServer(tokio::task::JoinHandle<()>);
-    impl Drop for StopServer {
-        fn drop(&mut self) {
-            self.0.abort();
         }
-    }
-    let server = StopServer(server);
+    };
     let url = format!("{origin}/{secret}/");
     report(crate::provider::session::AuthEvent::Prompt(
         crate::provider::session::AuthPrompt {
@@ -152,10 +144,15 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
     {
         status(&format!("open {url} to sign in"));
     }
-    let got = tokio::time::timeout(Duration::from_secs(5 * 60), rx.recv()).await;
-    drop(server);
+    // Own the listener in this future. Dropping a cancelled login releases
+    // the port immediately, before the next login can try to bind it.
+    let got = tokio::select! {
+        token = rx.recv() => token,
+        _ = tokio::time::sleep(Duration::from_secs(5 * 60)) => None,
+        _ = server => None,
+    };
     match got {
-        Ok(Some(tok)) => {
+        Some(tok) => {
             // Retain options/configuration changed while the browser was open.
             cfg = Config::load()?;
             if cfg.effective_provider() != "apple" {
@@ -172,6 +169,35 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn dropping_login_releases_its_port_before_the_executor_runs_again() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        Config {
+            provider: "apple".into(),
+            developer_token: "fictional".into(),
+            ..Default::default()
+        }
+        .save()
+        .unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut login = Box::pin(run(std::sync::Arc::new(move |event| {
+            if let crate::provider::session::AuthEvent::Prompt(prompt) = event {
+                let _ = tx.try_send(prompt);
+            }
+        })));
+        tokio::select! {
+            result = &mut login => panic!("login finished before cancellation: {result:?}"),
+            prompt = rx.recv() => assert!(prompt.is_some()),
+        }
+        drop(login);
+        let listener = TcpListener::bind(ADDR)
+            .await
+            .expect("cancelled login kept its port");
+        drop(listener);
+    }
 
     #[tokio::test]
     async fn cancelling_authentication_releases_the_listener_without_saving_credentials() {
