@@ -31,17 +31,11 @@ Music-video previews need Qt 6 Multimedia. The installer adds
 `qt6-multimedia` on Omarchy and Arch Linux; install your distribution's
 Qt 6 Multimedia QML package on other Linux systems.
 
-![brumm in the terminal](docs/tui.webp)
-TUI
-
-![brumm as a window](docs/gui.webp)
-GUI
-
-![Explore with covers and the glass player](docs/release-1.0.0.webp)
-Explore
-
-![the visualizer, terminal and window](docs/visualizer.webp)
-Visuals
+| TUI | GUI |
+|:---:|:---:|
+| ![brumm in the terminal](docs/tui.webp) | ![brumm as a window](docs/gui.webp) |
+| **Explore** | **Visualizer** |
+| ![Explore with covers and the glass player](docs/release-1.0.0.webp) | ![the visualizer, terminal and window](docs/visualizer.webp) |
 
 ## Keys
 
@@ -93,23 +87,23 @@ Providers handle Apple Music, Tidal and Spotify. The engine runs their
 playback pages and controls the audio through Chrome DevTools. See the
 [provider guide](docs/providers.md) for details.
 
-```mermaid
-flowchart LR
-    apple["Apple Music"] <--> appleProvider
-    tidal["Tidal"] <--> tidalProvider
-    spotify["Spotify"] <--> spotifyProvider
-
-    subgraph daemon["brumm daemon"]
-        appleProvider["Apple provider"] <--> core
-        tidalProvider["Tidal provider"] <--> core
-        spotifyProvider["Spotify provider"] <--> core
-        core["Shared provider interface<br/>Session · Library · Queue · Options"]
-        core <--> engine["Playback engine<br/>Chrome + provider web player"]
-    end
-
-    core <-->|"Unix socket · JSON"| tui["TUI<br/>Rust / Ratatui"]
-    core <-->|"Unix socket · JSON"| gui["GUI<br/>Qt Quick / QML"]
-    core <-->|"MPRIS · D-Bus"| widget["Omarchy widget"]
+```text
+  Apple Music           Tidal              Spotify
+       ^                  ^                   ^
+       |                  |                   |
+  Apple provider    Tidal provider    Spotify provider
+       \                  |                  /
+        +-----------------+-----------------+
+                          |
+                   brumm daemon <----> Playback engine
+              Shared provider interface   Chrome / web player
+         Session / Library / Queue / Options
+                          |
+              +-----------+------------+
+              |                        |
+       Unix socket / JSON         MPRIS / D-Bus
+           /       \                   |
+         TUI       GUI           Omarchy widget
 ```
 
 ### Development scripts
