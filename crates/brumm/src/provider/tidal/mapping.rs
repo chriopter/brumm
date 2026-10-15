@@ -38,8 +38,7 @@ impl Document {
         self.resources.extend(Self::new(value).resources);
     }
     pub fn found(&self, kind: &str, id: &str) -> Option<&Value> {
-        self.resources
-            .get(&(kind.to_owned(), id.to_owned()))
+        self.resources.get(&(kind.to_owned(), id.to_owned()))
     }
     pub fn related<'a>(&'a self, resource: &'a Value, name: &str) -> Vec<&'a Value> {
         Self::data(&resource["relationships"][name])

@@ -24,7 +24,7 @@ async function fixture() {
 }
 test('duplicate tracks retain queue positions and actual audio quality',async()=>{
   const f=await fixture();await f.B.playIds(['1','2','1'],'1','album');
-  assert.deepEqual(JSON.parse(f.B.queue(20)).items.map(t=>t.id),['1','2','1']);
+  assert.deepEqual(JSON.parse(await f.B.queue(20)).items.map(t=>t.id),['1','2','1']);
   assert.equal(f.next.referenceId,'1:1');await f.B.jump(2);
   const state=JSON.parse(f.B.state());assert.equal(state.index,2);assert.equal(state.audioQuality,'LOSSLESS');assert.equal(state.sampleRate,44100);
 });
@@ -91,4 +91,17 @@ test('native transport hooks fetch and XHR before SDK evaluation',async()=>{
   new XHR().open('POST',media,true);assert.equal(requests.pop()[1],media);
   await window.fetch(media);assert.ok(requests.pop()[0].startsWith('/private/media/'));
   const external='https://example.com/test';await window.fetch(external);assert.equal(requests.pop()[0],external);
+});
+
+
+test('queue rows beyond the prepared successor include metadata', async()=>{
+  const f=await fixture();await f.B.playIds(['1','2','3','4'],'1','album');
+  const queue=JSON.parse(await f.B.queue(20));
+  assert.deepEqual(queue.items.map(t=>t.title),['Track 1','Track 2','Track 3','Track 4']);
+});
+
+test('previous restarts after three seconds, then goes to the previous song', async()=>{
+  const f=await fixture();await f.B.playIds(['1','2'],'2','album',40);
+  await f.B.prev();let state=JSON.parse(f.B.state());assert.equal(state.index,1);assert.equal(state.pos,0);
+  await f.B.prev();state=JSON.parse(f.B.state());assert.equal(state.index,0);
 });

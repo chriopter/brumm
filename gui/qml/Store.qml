@@ -10,28 +10,46 @@ Item {
     property int providerIndex: 0
     property bool providerRequested: false
     property bool providerPickerOpen: false
-    readonly property bool providerChoiceNeeded: st.status === "choose-provider" || providerPickerOpen
+    property bool needsSetup: false
+    property bool setupMode: false
+    property string connectingProvider: ""
+    readonly property var connectedProviders: providers.filter(p => p.configured)
+    readonly property bool providerChoiceNeeded: providerPickerOpen || needsSetup || st.status === "choose-provider"
     function askProviders() {
         if (providerRequested) return
         providerRequested = true
         daemon.request({ cmd: "provider" }, (err, reply) => {
             if (err) { providerRequested = false; return setFlash(err) }
             if (reply.provider) configureProvider(reply.provider)
-            providers = reply.provider ? reply.provider.choices : []
-            providerIndex = Math.max(0, providers.findIndex(p => p.available))
+            providerIndex = Math.max(0, providers.findIndex(p => p.id === selectedProvider))
             if (placing && daemon.connected) askPlace()
         })
     }
     function openProviderPicker() { menuOpen = false; providerRequested = false; providerPickerOpen = true; askProviders() }
-    function chooseProvider(id) {
+    function chooseProvider(id, connect) {
         const provider = providers.find(p => p.id === id)
         if (!provider || !provider.available) return
-        daemon.request({ cmd: "provider", query: id }, (err, reply) => { if (err) setFlash(err); else if (reply.provider) { providerPickerOpen = false; configureProvider(reply.provider) } })
+        if (connect) connectingProvider = id
+        daemon.request({ cmd: "provider", query: id }, (err, reply) => {
+            if (err) { connectingProvider = ""; return setFlash(err) }
+            if (reply.provider) configureProvider(reply.provider)
+            if (connect) { loginTried = true; signIn() }
+            else if (!setupMode) providerPickerOpen = false
+        })
     }
+    function connectProvider(id) { chooseProvider(id, true) }
+    function finishServices() {
+        if (!connectedProviders.length) return
+        const active = connectedProviders.find(p => p.id === selectedProvider)
+        if (!active) chooseProvider(connectedProviders[0].id, false)
+        setupMode = false
+        providerPickerOpen = false
+    }
+    function cancelConnection() { daemon.send({cmd:"cancel-login"}); connectingProvider = "" }
     function providerKey(k) {
-        if (k === "esc" && providerPickerOpen) { providerPickerOpen = false; return }
+        if (k === "esc" && !needsSetup) { finishServices(); return }
         if (k === "Q" || k === "q" || k === "ctrl+c") { Qt.quit(); return }
-        if (k === "enter") { const p = providers[providerIndex]; if (p) chooseProvider(p.id); return }
+        if (k === "enter") { const p = providers[providerIndex]; if (p) { if (p.configured) chooseProvider(p.id, false); else connectProvider(p.id) }; return }
         if (!["up", "down", "tab", "k", "j"].includes(k)) return
         const n = providers.length
         for (let i = 0; i < n; i++) {
@@ -179,6 +197,8 @@ Item {
             if (!providerChanged && i >= 0 && stacks[i]) { stacks[i][0].title = entry.label; return stacks[i] }
             return [rootView(entry)]
         })
+        needsSetup = info.needsSetup === undefined ? !!info.needsChoice : info.needsSetup
+        if (needsSetup) { setupMode = true; providerPickerOpen = true }
         capabilities = info.capabilities || {}
         providers = info.choices || providers
         selectedProvider = info.selected || ""
@@ -236,28 +256,32 @@ Item {
     // ── the menu ────────────────────────────────────────────────────────
     // The one menu: what to do that is not on screen already, the shared
     // options as switches, and the ways out. Its rows, top to bottom:
-    //   {act: key, icon, label} runs what key does · {option: name, label,
-    //   hint} is a switch · {heading: text} · {sep: true}
+    //   {act: key, icon, label, keys} runs what key does, keys naming
+    //   more than one · {option: name, label, hint} is a switch ·
+    //   {fold: true, heading: text} opens and closes the switches under it
+    //   · {heading: text} · {sep: true}
     property bool addOpen: false   // the song actions menu on the stage
     property bool menuOpen: false
     property int menuSel: -1 // the row the keys are on; -1 none (opened by a click)
+    property bool menuOptions: false // the switches show under their heading
     readonly property var menuRows: {
         const rows = []
         if (st.status === "logged-out")
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
-        rows.push({ act: "ctrl+o", icon: "󰎈", label: "Switch Music Provider…" },
-                  { act: "f", icon: "󰊓", label: "Visualizer" },
-                  { act: "F", icon: "󰊓", label: "Full-Screen Visualizer" },
-                  { act: "g", icon: "󰆍", label: "Open in Terminal" },
-                  { act: "y", icon: "󰌷", label: "Copy Song Link" },
-                  { sep: true }, { heading: "Options" },
-                  { option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
-                  { option: "autoplay", label: "Autoplay", hint: "Play on after the last song." },
-                  { option: "reduce_motion", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
-                  { option: "wall", label: "Album Wall", hint: "Covers around the cover, not a flow." })
-        if (daemon.omarchy)
-            rows.push({ option: "bar", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
-                      { option: "music_keys", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
+        rows.push({ act: "ctrl+o", icon: "󰎈", label: "Music Services…" })
+        rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F" },
+                  { act: "g", icon: "󰆍", label: "TUI" },
+                  { act: "y", icon: "󰌷", label: "Copy Link" },
+                  { sep: true }, { fold: true, heading: "Options" })
+        if (menuOptions) {
+            rows.push({ option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
+                      { option: "autoplay", label: "Autoplay", hint: "Play on after the last song." },
+                      { option: "reduce_motion", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
+                      { option: "wall", label: "Album Wall", hint: "Covers around the cover, not a flow." })
+            if (daemon.omarchy)
+                rows.push({ option: "bar", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
+                          { option: "music_keys", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
+        }
         rows.push({ sep: true },
                   { act: "U", icon: "󰚰", label: st.update ? "Update to " + st.update + "…" : "Check for Updates…" },
                   { act: "?", icon: "󰋖", label: "Keyboard Shortcuts" },
@@ -267,7 +291,7 @@ Item {
                   { act: "q", icon: "󰐥", label: "Quit brumm" })
         return rows.filter(row => row.option !== "autoplay" || capabilities.autoplay)
     }
-    function menuPickable(r) { return !!r && (r.act !== undefined || r.option !== undefined) }
+    function menuPickable(r) { return !!r && (r.act !== undefined || r.option !== undefined || !!r.fold) }
 
     // optionOn says whether a switch in the menu is on.
     // The stage shows the cover in a wall of covers, or in a flow: the
@@ -292,6 +316,7 @@ Item {
     function openMenu(onOption) {
         menuOpen = true
         help = false
+        if (onOption) menuOptions = true
         menuSel = onOption ? menuRows.findIndex(r => r.option !== undefined) : -1
     }
     function closeMenu() { menuOpen = false; menuSel = -1 }
@@ -302,6 +327,7 @@ Item {
         const r = menuRows[i]
         if (!menuPickable(r)) return
         if (r.option !== undefined) { menuSel = i; return changeOption(r.option) }
+        if (r.fold) { menuSel = i; menuOptions = !menuOptions; return }
         closeMenu()
         dispatch(r.act, { text: r.act, modifiers: 0 })
     }
@@ -320,8 +346,8 @@ Item {
         case "up": case "k": case "shift+tab": return stepTo(-1)
         case "down": case "j": case "tab": return stepTo(1)
         case "enter": case "space": case " ": return menuSel >= 0 ? menuRow(menuSel) : stepTo(1)
-        case "right": case "l": if (r && r.option !== undefined) setOptionOn(r.option, true); return
-        case "left": case "h": if (r && r.option !== undefined) setOptionOn(r.option, false); return
+        case "right": case "l": if (r && r.option !== undefined) setOptionOn(r.option, true); else if (r && r.fold) menuOptions = true; return
+        case "left": case "h": if (r && r.option !== undefined) setOptionOn(r.option, false); else if (r && r.fold) menuOptions = false; return
         case "esc": case "o": case "q": return closeMenu() // q closes, as it does every popup; the row quits
         }
         const i = rows.findIndex(x => x.act === k) // a row's own key does what it says
@@ -335,8 +361,8 @@ Item {
 
     // ── the visualizer ──────────────────────────────────────────────────
     // Its styles, named and ordered as the terminal player's, best first.
-    readonly property var vizNames: ["milkdrop", "synth", "stars", "wire", "fireworks", "lava", "scope", "plasma", "fire", "matrix", "ridge", "led"]
-    readonly property var vizFiles: ["Milkdrop", "Synth", "Stars", "Wire", "Fireworks", "Lava", "Scope", "Plasma", "Fire", "Matrix", "Ridge", "Led"]
+    readonly property var vizNames: ["milkdrop", "cathedral", "synth", "stars", "wire", "fireworks", "lava", "scope", "plasma", "fire", "matrix", "ridge", "led"]
+    readonly property var vizFiles: ["Milkdrop", "Cathedral", "Synth", "Stars", "Wire", "Fireworks", "Lava", "Scope", "Plasma", "Fire", "Matrix", "Ridge", "Led"]
     property int vizStyle: 0       // it opens on the showpiece
     property bool vizQuick: false  // the last change is shown at once, not dissolved (moving through the list)
     property bool vizList: false   // v: the list of styles shows
@@ -346,7 +372,10 @@ Item {
     function vizShow(i, quick) {
         vizQuick = !!quick
         vizStyle = (i + vizNames.length) % vizNames.length
+        if (daemon.options.viz !== vizNames[vizStyle]) daemon.setOption("viz", vizNames[vizStyle])
     }
+    // The style shown last, in either player; the showpiece at first.
+    function vizLast() { return Math.max(0, vizNames.indexOf(daemon.options.viz || "")) }
     function vizStep(d) { vizShow(vizStyle + d) }
     function vizPick(i) { vizList = false; vizShow(i) }
 
@@ -373,9 +402,15 @@ Item {
         case "shift+tab": case "left": case "up": case "k": case "h": vizStep(-1); return true
         case "v": vizList = true; vizSel = vizStyle; vizFrom = vizStyle; return true
         case "a": vizCycle(); return true
+        case "x": vizBare(); return true
         }
         if (digit >= 0 && digit < n) { vizShow(digit); return true }
         return false
+    }
+    function vizBare() {
+        const bare = !daemon.options.viz_bare
+        daemon.setOption("viz_bare", bare)
+        setFlash(bare ? "controls hide while the mouse rests" : "controls stay")
     }
     function vizCycle() {
         const stays = !daemon.options.no_viz_cycle
@@ -626,7 +661,7 @@ Item {
 
     function gotState(state) {
         const wasLoggedOut = st.status === "logged-out"
-        if (state.status === "logged-out" && !loginTried) { loginTried = true; signIn() } // nobody has to hunt for the key
+        if (state.status === "logged-out" && !loginTried && !providerChoiceNeeded) { loginTried = true; signIn() } // nobody has to hunt for the key
         if (state.update && state.update !== st.update) setFlash("brumm " + state.update + " is available · U updates")
         keepShowing(state)
         const pp = pendingPlay
@@ -644,6 +679,8 @@ Item {
             state.pos = position(Date.now())
         }
         st = state
+        if (state.status === "ready" && connectingProvider) setFlash(providerName + " connected")
+        if (state.status === "ready" || state.err || state.message === "sign-in cancelled") connectingProvider = ""
         if (songChanged && state.id && capabilities.preference) readFavorites([{kind:"song", id:state.id}])
         if (providerChoiceNeeded) askProviders()
         stateAt = Date.now()
@@ -1234,6 +1271,7 @@ Item {
     }
 
     function hold() {
+        if (!capabilities.previews) return
         if (!spaceDown) return
         const r = cur().rows[cur().sel]
         if (!r || !r.track) return
@@ -1254,6 +1292,7 @@ Item {
     }
 
     function togglePreview() {
+        if (!capabilities.previews) return
         if (previewing) {
             previewing = false
             return daemon.send({ cmd: "preview" })
@@ -1561,6 +1600,7 @@ Item {
 
     function dispatch(k, ev) {
         if (k === "ctrl+o") { openProviderPicker(); return }
+        if (providerChoiceNeeded) { key(k); return }
         if (inspect || prototypeForm) { if (k === "esc") { inspect = null; prototypeForm = null }; return }
         if (video) { if (k === "esc" || k === "q") closeVideo(); return }
         if ((prototypeMode && k === "i") || k === "ctrl+i") return inspectAt(sel)
@@ -1633,8 +1673,8 @@ Item {
             refresh()
             return
         case "F": return win.toggleVizFullscreen()
-        case "f": // it opens on the showpiece
-            if (!full) vizShow(0, true)
+        case "f": // it opens on the style shown last, in either player
+            if (!full) vizShow(vizLast(), true)
             full = !full; help = false; vizList = false
             return
         case "n": return next()

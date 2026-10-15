@@ -90,7 +90,10 @@ impl Definition for Apple {
     }
     fn account_key(&self, cfg: &Config) -> String {
         use sha2::{Digest, Sha256};
-        format!("{:x}", Sha256::digest(cfg.user_token.as_bytes()))
+        Sha256::digest(cfg.user_token.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
     fn api(&self, cfg: &Config) -> Result<Arc<dyn Api>> {
         Ok(Arc::new(super::Client::new(

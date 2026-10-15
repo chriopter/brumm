@@ -24,58 +24,48 @@ struct Data {
 }
 
 pub struct Library {
+    path: PathBuf,
     data: Mutex<Data>,
-    path: Mutex<PathBuf>,
-}
-
-impl Default for Library {
-    fn default() -> Self {
-        Self {
-            data: Mutex::new(Data::default()),
-            path: Mutex::new(path()),
-        }
-    }
 }
 
 fn path() -> PathBuf {
     config::session_cache_dir().join("library.json")
 }
 
+impl Default for Library {
+    fn default() -> Self {
+        Self {
+            path: path(),
+            data: Mutex::new(Data::default()),
+        }
+    }
+}
+
 impl Library {
-    pub fn namespace(&self) -> PathBuf {
-        self.path
-            .lock()
-            .unwrap()
-            .parent()
-            .expect("library parent")
-            .to_owned()
-    }
-    pub fn clear(&self) {
-        *self.data.lock().unwrap() = Data::default();
-        *self.path.lock().unwrap() = path();
-    }
-    pub fn reload(&self) {
-        let loaded = Self::load();
-        *self.data.lock().unwrap() = loaded.data.into_inner().unwrap();
-        *self.path.lock().unwrap() = loaded.path.into_inner().unwrap();
-    }
     pub fn load() -> Library {
-        let path = path();
+        Self::load_at(config::session_cache_dir())
+    }
+
+    pub fn load_at(dir: PathBuf) -> Library {
+        let path = dir.join("library.json");
         let data = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         Library {
+            path,
             data: Mutex::new(data),
-            path: Mutex::new(path),
         }
+    }
+
+    pub fn directory(&self) -> PathBuf {
+        self.path.parent().expect("cache directory").to_path_buf()
     }
 
     pub fn save(&self) -> Result<()> {
         let b = serde_json::to_vec(&*self.data.lock().unwrap())?;
-        let path = self.path.lock().unwrap();
-        std::fs::create_dir_all(path.parent().expect("library parent"))?;
-        config::write_private(&path, &b)?;
+        std::fs::create_dir_all(self.path.parent().expect("cache directory"))?;
+        config::write_private(&self.path, &b)?;
         Ok(())
     }
 
@@ -103,34 +93,34 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
 
     #[test]
-    fn a_cache_keeps_its_account_path_after_selection_changes() {
+    fn saving_an_old_library_keeps_its_original_account_path() {
         let Some(_env) = testenv::isolated() else {
             return;
         };
         let mut cfg = config::Config {
             provider: "apple".into(),
-            user_token: "account-a".into(),
+            user_token: "old-token".into(),
             ..Default::default()
         };
         cfg.save().unwrap();
+        let old_dir = config::session_cache_dir();
         let old = Library::load();
         old.set_items(
-            "albums",
+            "playlists",
             vec![Item {
-                id: "only-a".into(),
+                id: "old-playlist".into(),
                 ..Default::default()
             }],
         );
-        cfg.user_token = "account-b".into();
+        cfg.user_token = "new-token".into();
         cfg.save().unwrap();
         old.save().unwrap();
-        assert!(
-            Library::load().items("albums").is_none(),
-            "late writes must not enter account B"
+        assert!(!path().exists());
+        assert!(Library::load().items("playlists").is_none());
+        assert_eq!(
+            Library::load_at(old_dir).items("playlists").unwrap()[0].id,
+            "old-playlist"
         );
-        cfg.user_token = "account-a".into();
-        cfg.save().unwrap();
-        assert_eq!(Library::load().items("albums").unwrap()[0].id, "only-a");
     }
 
     #[test]

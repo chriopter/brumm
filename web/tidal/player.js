@@ -93,10 +93,18 @@ B.playIds = (ids, startId, source, pos=0) => {
     await start(index,pos,gen);
   });
 };
-B.queue = n => JSON.stringify({pos:index,items:queue.slice(Math.max(0,index),Math.max(0,index)+Math.max(0,n))});
+B.queue = async n => {
+  const gen = generation, at = index;
+  const items = queue.slice(Math.max(0,at),Math.max(0,at)+Math.min(500,Math.max(0,n)));
+  await metadata(items.map(t=>t.id));
+  if (gen !== generation || at !== index) return B.queue(n);
+  const tracks = items.map(t=>cache.get(t.id) || t);
+  for (let i=0;i<tracks.length;i++) queue[Math.max(0,at)+i] = tracks[i];
+  return JSON.stringify({pos:at,items:tracks});
+};
 B.jump = i => serial(()=>start(i));
 B.next = () => serial(async()=> { const i=following(); if(i>=0) await start(i); else {await Player.pause();touch();} });
-B.prev = () => serial(()=>start(Math.max(0,index-1)));
+B.prev = () => serial(async()=> { if(Player.getAssetPosition()>3) {await Player.seek(0);touch();} else await start(Math.max(0,index-1)); });
 B.toggle = () => serial(async()=> {if(Player.getPlaybackState()==='PLAYING' || Player.getPlaybackState()==='STALLED') await Player.pause(); else {requireFull();await Player.play();}touch();});
 B.play = () => serial(async()=>{requireFull();await Player.play();touch();});
 B.pause = () => serial(async()=>{await Player.pause();touch();});

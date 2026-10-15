@@ -255,9 +255,20 @@ fn provider_selection_persists_and_switches_without_reusing_stale_requests() {
             .contains("unknown music provider")
     );
     assert!(!e.root.join("config/brumm/config.json").exists());
+    let mut other = Conn::open(&sock);
+    other.ask(json!({"cmd":"subscribe"}));
     let chosen = c.ask(json!({"cmd":"provider","query":"apple"}));
     assert_eq!(chosen["provider"]["selected"], "apple");
     assert_eq!(chosen["provider"]["needsChoice"], false);
+    loop {
+        let mut line = String::new();
+        assert!(other.r.read_line(&mut line).unwrap() > 0);
+        let message: Value = serde_json::from_str(&line).unwrap();
+        if message.get("provider").is_some() {
+            assert_eq!(message["provider"], chosen["provider"]);
+            break;
+        }
+    }
     let saved: Value =
         serde_json::from_slice(&std::fs::read(e.root.join("config/brumm/config.json")).unwrap())
             .unwrap();

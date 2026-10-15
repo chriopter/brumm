@@ -121,7 +121,7 @@ pub fn migrate_session_cache() -> Result<()> {
     if marker.exists() {
         return Ok(());
     }
-    let target = session_cache_dir();
+    let target = session_cache_dir_for(&cfg);
     fs::create_dir_all(&target)?;
     fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
     for name in ["library.json", "resume.json"] {
@@ -294,6 +294,12 @@ pub struct Options {
     /// The visualizer keeps its style instead of moving on each minute.
     #[serde(skip_serializing_if = "is_false")]
     pub no_viz_cycle: bool,
+    /// The visualizer's controls fade out while the mouse rests.
+    #[serde(skip_serializing_if = "is_false")]
+    pub viz_bare: bool,
+    /// The visualizer's style by name, as last shown: f opens on it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub viz: String,
     /// Fullscreen frames per second: 30 (default), 60, 120, or -1 for the
     /// screen's rate.
     #[serde(skip_serializing_if = "is_zero")]
@@ -358,6 +364,8 @@ impl Options {
         m.insert("always_tips".into(), o.always_tips.into());
         m.insert("no_bar_scroll".into(), o.no_bar_scroll.into());
         m.insert("no_viz_cycle".into(), o.no_viz_cycle.into());
+        m.insert("viz".into(), o.viz.clone().into());
+        m.insert("viz_bare".into(), o.viz_bare.into());
         m.insert("viz_fps".into(), o.viz_fps.into());
         m.insert("bar".into(), o.bar.clone().into());
         m.insert("bar_offered".into(), o.bar_offered.into());

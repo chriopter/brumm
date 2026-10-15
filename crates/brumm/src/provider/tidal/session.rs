@@ -89,7 +89,10 @@ impl Definition for Tidal {
         None
     }
     fn account_key(&self, cfg: &Config) -> String {
-        format!("{:x}", Sha256::digest(cfg.tidal.user_id.as_bytes()))
+        Sha256::digest(cfg.tidal.user_id.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
     fn api(&self, cfg: &Config) -> Result<Arc<dyn Api>> {
         Ok(Arc::new(Client::new(&cfg.tidal)?))
@@ -135,6 +138,28 @@ struct Bridge {
     account: String,
     media_limit: Arc<tokio::sync::Semaphore>,
 }
+
+fn validate_range(range: &str) -> Result<()> {
+    let value = range
+        .strip_prefix("bytes=")
+        .filter(|_| range.len() <= 80)
+        .ok_or(Error::Unsupported)?;
+    let (start, end) = value.split_once('-').ok_or(Error::Unsupported)?;
+    let parse = |part: &str| -> Result<Option<u64>> {
+        if part.is_empty() {
+            return Ok(None);
+        }
+        if !part.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(Error::Unsupported);
+        }
+        part.parse().map(Some).map_err(|_| Error::Unsupported)
+    };
+    match (parse(start)?, parse(end)?) {
+        (Some(start), Some(end)) if start <= end => Ok(()),
+        (Some(_), None) | (None, Some(1..)) => Ok(()),
+        _ => Err(Error::Unsupported),
+    }
+}
 fn media_url(target: &str) -> Result<url::Url> {
     use base64::Engine;
     if target.len() > 16384 {
@@ -179,12 +204,7 @@ impl PlaybackBridge for Bridge {
             owns_session()?;
             let mut request = self.client.http.get(url);
             if let Some(range) = range {
-                if !range.starts_with("bytes=")
-                    || range.len() > 80
-                    || !range[6..].chars().all(|c| c.is_ascii_digit() || c == '-')
-                {
-                    return Err(Error::Unsupported);
-                }
+                validate_range(range)?;
                 request = request.header("Range", range);
             }
             // The SDK owns the signed URL, manifest, decoding, DRM and queue.
@@ -261,6 +281,24 @@ impl PlaybackBridge for Bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_ranges_are_single_valid_byte_ranges() {
+        for range in ["bytes=0-1023", "bytes=100-", "bytes=-500"] {
+            assert!(validate_range(range).is_ok(), "{range}");
+        }
+        for range in [
+            "bytes=-",
+            "bytes=-0",
+            "bytes=10-9",
+            "bytes=1--2",
+            "bytes=0-1,4-5",
+            "bytes=+1-2",
+            "items=0-1",
+            "bytes=18446744073709551616-",
+        ] {
+            assert!(validate_range(range).is_err(), "{range}");
+        }
+    }
     #[test]
     fn native_media_transport_is_restricted_to_the_verified_https_cdn() {
         use base64::Engine;

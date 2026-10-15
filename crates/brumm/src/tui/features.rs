@@ -20,7 +20,39 @@ pub struct FeatureForm {
 impl Model {
     pub fn provider_key(&mut self, key: &str) {
         match key {
-            "esc" if self.provider_picker_open => self.provider_picker_open = false,
+            "esc"
+                if self.provider_picker_open
+                    && self.provider_choices.iter().any(|p| p.configured) =>
+            {
+                if !self
+                    .provider_choices
+                    .iter()
+                    .any(|p| p.configured && p.id == self.provider_id)
+                {
+                    let id = self
+                        .provider_choices
+                        .iter()
+                        .find(|p| p.configured)
+                        .unwrap()
+                        .id
+                        .clone();
+                    self.ask(
+                        Request {
+                            cmd: ipc::CMD_PROVIDER.into(),
+                            query: id,
+                            ..Default::default()
+                        },
+                        |reply| {
+                            Some(Msg::ProviderChoices(reply.and_then(|m| {
+                                m.provider
+                                    .ok_or_else(|| "missing provider selection".into())
+                            })))
+                        },
+                    );
+                }
+                self.provider_picker_open = false;
+                self.provider_setup = false;
+            }
             "q" | "Q" | "ctrl+c" => self.cmds.push(super::model::Cmd::Quit),
             "up" | "down" | "tab" | "k" | "j" => {
                 let n = self.provider_choices.len();
@@ -41,11 +73,16 @@ impl Model {
                     .get(self.provider_index)
                     .filter(|p| p.available)
                 {
-                    self.provider_picker_open = false;
+                    let connect = !p.configured;
+                    let id = p.id.clone();
+                    self.provider_connect = connect.then(|| id.clone());
+                    if !self.provider_setup {
+                        self.provider_picker_open = false;
+                    }
                     self.ask(
                         Request {
                             cmd: ipc::CMD_PROVIDER.into(),
-                            query: p.id.clone(),
+                            query: id,
                             ..Default::default()
                         },
                         |reply| {
@@ -85,14 +122,20 @@ impl Model {
 
     pub fn provider_box(&self) -> Vec<L> {
         let wd = 54.min(self.width - 2 * MARGIN - 4).max(8);
-        let mut lines = vec![one(" Choose your music service", PLAIN)];
+        let mut lines = vec![one(" Connect your music services", PLAIN)];
         for (i, p) in self.provider_choices.iter().enumerate() {
             lines.push(one(
                 format!(
                     " {} {}{}",
                     if i == self.provider_index { ">" } else { " " },
                     p.name,
-                    if p.available { "" } else { " (coming soon)" }
+                    if !p.available {
+                        " (unavailable)"
+                    } else if p.configured {
+                        " · connected"
+                    } else {
+                        " · connect"
+                    }
                 ),
                 if p.available { HERE } else { DIM },
             ));
@@ -100,7 +143,7 @@ impl Model {
         if self.provider_choices.is_empty() {
             lines.push(one(" Loading providers…", DIM));
         }
-        lines.push(one(" enter continue · q close", DIM));
+        lines.push(one(" enter connect / switch · esc done · q close", DIM));
         let h = lines.len() as i64 + 2;
         box_lines("Music provider", false, L::default(), lines, wd, h)
     }

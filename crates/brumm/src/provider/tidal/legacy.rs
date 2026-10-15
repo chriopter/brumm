@@ -1,7 +1,7 @@
 //! Device-client discovery pages. These compatibility endpoints are separate
 //! from the public v2 catalog and are validated before attaching credentials.
-use super::mapping::Document;
 use super::Client;
+use super::mapping::Document;
 use crate::{
     error::{Error, Result, err},
     music::{ExplorePage, Item, Shelf, Track},
@@ -356,7 +356,11 @@ impl Client {
         }
         let mut doc = Document::new(&Value::Null);
         for (kind, ids) in &wanted {
-            let include = if *kind == "artists" { "profileArt" } else { "coverArt" };
+            let include = if *kind == "artists" {
+                "profileArt"
+            } else {
+                "coverArt"
+            };
             for batch in ids.chunks(20) {
                 let route = format!(
                     "{kind}?filter[id]={}&include={include}",

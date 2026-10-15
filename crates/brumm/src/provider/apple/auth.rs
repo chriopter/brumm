@@ -21,7 +21,10 @@ use crate::httpd;
 const PAGE: &str = include_str!("login.html");
 
 /// A fixed port keeps the page's origin stable between logins.
+#[cfg(not(test))]
 const ADDR: &str = "127.0.0.1:7777";
+#[cfg(test)]
+const ADDR: &str = "127.0.0.1:0";
 
 /// The page, with the developer token as a JavaScript string.
 fn page(developer_token: &str) -> String {
@@ -105,12 +108,12 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
     // A secret per login: the page lives at /<secret>/ and posts the token
     // back under it. The origin must be this page's.
     let secret = random_hex(16);
-    let origin = format!("http://{ADDR}");
+    let origin = format!("http://{}", ln.local_addr()?);
     let html = page(cfg.developer());
     let (tx, mut rx) = mpsc::channel::<String>(1);
     let server = {
         let (secret, origin) = (secret.clone(), origin.clone());
-        tokio::spawn(async move {
+        async move {
             loop {
                 let Ok((mut s, _)) = ln.accept().await else {
                     return;
@@ -123,16 +126,8 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
                     }
                 });
             }
-        })
-    };
-    // Aborting authentication closes its private listener rather than leaving port 7777 busy.
-    struct StopServer(tokio::task::JoinHandle<()>);
-    impl Drop for StopServer {
-        fn drop(&mut self) {
-            self.0.abort();
         }
-    }
-    let server = StopServer(server);
+    };
     let url = format!("{origin}/{secret}/");
     report(crate::provider::session::AuthEvent::Prompt(
         crate::provider::session::AuthPrompt {
@@ -152,10 +147,15 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
     {
         status(&format!("open {url} to sign in"));
     }
-    let got = tokio::time::timeout(Duration::from_secs(5 * 60), rx.recv()).await;
-    drop(server);
+    // Own the listener in this future. Dropping a cancelled login releases
+    // the port immediately, before the next login can try to bind it.
+    let got = tokio::select! {
+        token = rx.recv() => token,
+        _ = tokio::time::sleep(Duration::from_secs(5 * 60)) => None,
+        _ = server => None,
+    };
     match got {
-        Ok(Some(tok)) => {
+        Some(tok) => {
             // Retain options/configuration changed while the browser was open.
             Config::update(|cfg| {
                 if cfg.effective_provider() != "apple" {
@@ -173,6 +173,37 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn dropping_login_releases_its_port_before_the_executor_runs_again() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        Config {
+            provider: "apple".into(),
+            developer_token: "fictional".into(),
+            ..Default::default()
+        }
+        .save()
+        .unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut login = Box::pin(run(std::sync::Arc::new(move |event| {
+            if let crate::provider::session::AuthEvent::Prompt(prompt) = event {
+                let _ = tx.try_send(prompt);
+            }
+        })));
+        let prompt = tokio::select! {
+            result = &mut login => panic!("login finished before cancellation: {result:?}"),
+            prompt = rx.recv() => prompt.unwrap(),
+        };
+        let url = url::Url::parse(&prompt.url).unwrap();
+        let address = format!("127.0.0.1:{}", url.port().unwrap());
+        drop(login);
+        let listener = TcpListener::bind(&address)
+            .await
+            .expect("cancelled login kept its port");
+        drop(listener);
+    }
 
     #[tokio::test]
     async fn cancelling_authentication_releases_the_listener_without_saving_credentials() {
@@ -198,12 +229,14 @@ mod tests {
             .unwrap();
         assert_eq!(prompt.kind, "browser");
         assert!(prompt.code.is_none());
+        let url = url::Url::parse(&prompt.url).unwrap();
+        let address = format!("127.0.0.1:{}", url.port().unwrap());
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
         // Abort-on-drop must complete before another login can bind the same port.
         let listener = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let Ok(listener) = TcpListener::bind(ADDR).await {
+                if let Ok(listener) = TcpListener::bind(&address).await {
                     break listener;
                 }
                 tokio::task::yield_now().await;

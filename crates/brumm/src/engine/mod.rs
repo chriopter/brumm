@@ -619,10 +619,13 @@ impl Engine {
 
     pub async fn queue(&self, n: i64) -> Result<Queue> {
         let v = self
-            .eval(&format!(
-                r#"window.brumm && brumm.queue ? brumm.queue({n}) : "{{}}""#
-            ))
-            .await?;
+            .eval_wait(
+                &format!(r#"window.brumm && brumm.queue ? brumm.queue({n}) : "{{}}""#),
+                Duration::from_secs(30),
+                true,
+            )
+            .await
+            .map_err(|e| err(e.to_string()))?;
         Ok(serde_json::from_str(v.as_str().unwrap_or("{}"))?)
     }
 

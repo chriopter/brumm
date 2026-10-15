@@ -20,7 +20,7 @@ Window {
             visibility = beforeFullscreen
         } else {
             beforeFullscreen = visibility
-            if (!store.full) store.vizShow(0, true)
+            if (!store.full) store.vizShow(store.vizLast(), true)
             store.full = true
             store.help = false
             store.vizList = false
@@ -160,7 +160,14 @@ Window {
     Item {
         id: backgroundLayer
         anchors.fill: parent
-    Backdrop { anchors.fill: parent; visible: ui.effects && !(store.full && full.opacity === 1) }
+    RenderSurface { id: backdropSurface; anchors.fill: parent; density: Math.min(1, Screen.devicePixelRatio) * 0.5 }
+    Backdrop {
+        anchors.fill: parent
+        visible: ui.effects && !(store.full && full.opacity === 1)
+        layer.enabled: ui.effects
+        layer.smooth: true
+        layer.textureSize: backdropSurface.textureSize
+    }
     Rectangle {
         anchors.fill: parent
         visible: !ui.effects
@@ -181,7 +188,7 @@ Window {
             const k = win.keyName(e)
             if (!k) return
             const typing = store.searching || store.filtering || (store.pick && store.pick.naming) || !!store.fb
-            if (k === "space" && !typing && !store.upd && !store.pick && !store.menuOpen && !store.barAsk && !store.inspect && !store.prototypeForm && !store.video) {
+            if (k === "space" && !typing && !store.providerChoiceNeeded && !store.upd && !store.pick && !store.menuOpen && !store.barAsk && !store.inspect && !store.prototypeForm && !store.video) {
                 if (!e.isAutoRepeat) store.spacePressed()
                 return
             }
@@ -204,7 +211,7 @@ Window {
         return (v.item && v.item.kind === "artist") ||
             (store.section === store.secExplore && !store.rows.some(r => !!r.track))
     }
-    readonly property bool popup: store.help || !!store.pick || !!store.upd || store.barAsk || !!store.fb || !!store.inspect || !!store.prototypeForm || !!store.video
+    readonly property bool popup: store.providerChoiceNeeded || store.help || !!store.pick || !!store.upd || store.barAsk || !!store.fb || !!store.inspect || !!store.prototypeForm || !!store.video
 
     Item {
         id: body
@@ -287,61 +294,19 @@ Window {
         }
     }
 
+    MorphButton {
+        visible: win.compact && !store.full
+        anchors { left: parent.left; top: parent.top; margins: ui.px(12) }
+        icon: "󰎈"; label: store.providerName + " ▾"; key: "ctrl+o"
+        onClicked: store.openProviderPicker()
+    }
+
     FullStage {
         id: full
         anchors.fill: parent
         opacity: store.full ? 1 : 0
         visible: opacity > 0
         Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-    }
-
-    Dialog {
-        id: providerDialog
-        x: (win.width - width) / 2
-        y: (win.height - height) / 2
-        width: Math.min(ui.px(420), win.width - ui.px(24))
-        title: "Choose your music provider"
-        modal: true
-        visible: store.providerChoiceNeeded
-        closePolicy: Popup.NoAutoClose
-        background: Rectangle { color: ui.deep; radius: ui.px(12); border.color: ui.edge }
-        header: Label { text: providerDialog.title; color: ui.bright; padding: ui.px(16); font.pixelSize: ui.px(20) }
-        contentItem: Column {
-            spacing: ui.px(12)
-            Label { width: parent.width; text: "Choose the service you use for music."; wrapMode: Text.WordWrap; color: ui.fg }
-            Repeater {
-                model: store.providers
-                delegate: Button {
-                    width: providerDialog.availableWidth
-                    text: modelData.name + (modelData.available ? "" : " (coming soon)")
-                    enabled: modelData.available
-                    onClicked: store.chooseProvider(modelData.id)
-                }
-            }
-            Label { visible: store.providers.length === 0; text: "Loading providers…"; color: ui.dim }
-        }
-    }
-
-    Dialog {
-        id: deviceDialog
-        x: (win.width - width) / 2; y: (win.height - height) / 2
-        width: Math.min(ui.px(460), win.width - ui.px(24))
-        modal: true; closePolicy: Popup.NoAutoClose
-        visible: !!store.st.auth && store.st.auth.kind === "device"
-        title: "Connect " + store.providerName
-        background: Rectangle { color: ui.deep; radius: ui.px(12); border.color: ui.edge }
-        header: Label { text: deviceDialog.title; color: ui.bright; padding: ui.px(16); font.pixelSize: ui.px(20) }
-        contentItem: Column {
-            spacing: ui.px(12)
-            Label { width: parent.width; text: "Open Tidal's linking page and approve Brumm with this code:"; color: ui.fg; wrapMode: Text.WordWrap }
-            Label { text: store.st.auth ? store.st.auth.code || "" : ""; color: ui.bright; font.pixelSize: ui.px(28) }
-            Label { width: parent.width; text: store.st.auth ? store.st.auth.url || "" : ""; color: ui.dim; wrapMode: Text.WrapAnywhere }
-            Row {
-                spacing: ui.px(8)
-                Button { text: "Open linking page"; onClicked: { if (store.st.auth) Qt.openUrlExternally(store.st.auth.url) } }
-                Button { text: "Cancel"; onClicked: daemon.send({cmd:"cancel-login"}) }
-            }
-        }
     }
 
     property int contextIndex: -1
@@ -371,10 +336,11 @@ Window {
         readonly property var entry: row ? row.track || row.item : null
         readonly property bool music: !!row && (!!row.track || (row.item && ["album", "playlist"].includes(row.item.kind)))
         ContextAction { text: rowMenu.row && rowMenu.row.track ? "Play" : "Open"; onTriggered: win.rowAction(index => store.activateAt(index)) }
-        ContextAction { text: "Add to Playlist…"; visible: rowMenu.music; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.openPicker()) }
-        ContextAction { text: "Add to Library"; visible: !!(rowMenu.music && rowMenu.row && rowMenu.entry && (rowMenu.row.track ? !rowMenu.row.track.id.startsWith("i.") : rowMenu.entry.catalog)); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.addToLibrary()) }
-        ContextAction { text: "Start Radio"; visible: !!rowMenu.row && (!!rowMenu.row.track || (rowMenu.entry && ["artist", "station"].includes(rowMenu.entry.kind))); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.playStation()) }
-        ContextAction { text: "Suggest Less"; visible: rowMenu.music; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.rate(-1)) }
+        ContextAction { text: "Add to Playlist…"; visible: rowMenu.music && !!store.capabilities.playlistWrite; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.openPicker()) }
+        ContextAction { text: "Add to Library"; visible: !!(store.capabilities.collectionWrite && rowMenu.music && rowMenu.row && rowMenu.entry && (rowMenu.row.track ? !rowMenu.row.track.id.startsWith("i.") : rowMenu.entry.catalog)); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.addToLibrary()) }
+        ContextAction { text: "Favorite"; visible: !!store.capabilities.preference && rowMenu.music; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.rate(1)) }
+        ContextAction { text: "Start Radio"; visible: !!store.capabilities.stations && !!rowMenu.row && (!!rowMenu.row.track || (rowMenu.entry && ["artist", "station"].includes(rowMenu.entry.kind))); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.playStation()) }
+        ContextAction { text: "Suggest Less"; visible: rowMenu.music && !!store.capabilities.dislike; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.rate(-1)) }
         MenuSeparator {}
         ContextAction { text: "Details"; onTriggered: win.rowAction(index => store.inspectAt(index)) }
         padding: ui.px(6)
@@ -385,6 +351,7 @@ Window {
 
     // ── what shows over it ──────────────────────────────────────────────
     Scrim { visible: win.popup }
+    ServicesBox { visible: store.providerChoiceNeeded }
     Box {
         visible: !!store.inspect
         title: store.inspect ? store.inspect.title || store.inspect.name : "Details"
@@ -411,7 +378,7 @@ Window {
             }
         }
         Text {
-            visible: store.capabilities.favorites && !!store.inspect && (prototypeMode || !!store.capabilities.preference || !store.inspect.favorite) && (!!store.inspect.title || (store.capabilities.favoriteKinds || []).includes(store.inspect.kind))
+            visible: !!store.capabilities.favorites && !!store.inspect && (prototypeMode || !!store.capabilities.preference || !store.inspect.favorite) && (!!store.inspect.title || (store.capabilities.favoriteKinds || []).includes(store.inspect.kind))
             text: store.capabilities.preference && store.inspect ? (store.favoriteMark(store.inspect.kind || "song", store.inspect.id) ? "♥ " + store.capabilities.preference.removeLabel : "♡ " + store.capabilities.preference.label) : prototypeMode && store.inspect && store.inspect.favorite ? "♥ Remove favorite" : "♡ Add favorite"
             color: ui.here
             font.pixelSize: ui.px(16)
@@ -468,4 +435,5 @@ Window {
         color: ui.dim
         font { family: ui.sans; pixelSize: ui.px(10) }
     }
+
 }

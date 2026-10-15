@@ -71,12 +71,21 @@ Cache files use a provider and account-derived namespace. Legacy Apple library
 and resume files migrate once into the first namespace and remain in place for
 rollback. The current Apple account key is a digest of the Music User Token,
 not a stable Apple account identifier; signing in again with a rotated token can
-create a fresh cache namespace. Tidal uses a digest of its verified user ID. Signed-out namespaces are separate
-from signed-in accounts. Only Apple imports legacy cache files.
+create a fresh cache namespace. Stable Apple account identity remains future work. Each API session retains its own
+library and fixed cache path; a fresh login replaces the active session and
+rejects late API replies and authorization errors from the previous one.
+Persisted queues also retain the cache path assigned when created or loaded.
+Reloading the same namespace preserves the in-memory library and queue, including
+changes not saved yet. A different namespace saves the outgoing queue and closes
+its player before starting the new session. Late player reports and startups
+cannot replace the new session or write into its queue.
 
 ## Switching and Tidal
 
-Both frontends expose Switch Music Provider (Ctrl+O). The daemon serializes
+On first start, both frontends offer a Music Services screen. Connect Apple
+Music, Tidal, or both, then continue into the player. The service name in the
+GUI header and Music Services (Ctrl+O) reopen this screen to switch or add
+a connection. Service credentials remain saved independently. The daemon serializes
 transitions, waits for dispatched mutations, cancels outgoing background work,
 closes playback and the private SDK bridge, then installs the next account.
 Queued commands keep their original session generation. Replies and asynchronous

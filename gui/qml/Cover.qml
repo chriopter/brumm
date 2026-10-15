@@ -17,10 +17,13 @@ Item {
     // The art itself, two images taking turns, drawn off screen once.
     Item {
         id: art
-        width: c.width
-        height: c.width
+        // Keep the offscreen surface stable while the displayed cover resizes.
+        // Only a new image or its crossfade needs to redraw this texture.
+        width: c.maxSource
+        height: c.maxSource
         visible: false
         layer.enabled: true
+        layer.textureSize: Qt.size(c.maxSource, c.maxSource)
 
         Rectangle {
             anchors.fill: parent
@@ -29,7 +32,7 @@ Item {
                 anchors.centerIn: parent
                 text: "󰀥"
                 color: ui.edge
-                font { family: ui.mono; pixelSize: Math.max(ui.px(24), c.width / 5) }
+                font { family: ui.mono; pixelSize: Math.max(ui.px(24), c.maxSource / 5) }
             }
         }
         // Two images take turns: the new cover loads behind and fades in
@@ -46,15 +49,6 @@ Item {
             Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 320; easing.type: Easing.InOutCubic } } }
     }
 
-    Rectangle {
-        id: mask
-        width: c.width
-        height: c.width
-        radius: c.radius
-        visible: false
-        layer.enabled: true
-    }
-
     // The shadow: drawn from its shape, no image of it made. On a floor
     // that reflects it, none.
     RectangularShadow {
@@ -68,14 +62,14 @@ Item {
         color: ui.shade
     }
 
-    MultiEffect { // the art, its corners rounded
+    ShaderEffect { // rounded directly, without a second texture and mask
         visible: ui.effects
-        source: art
         width: c.width
         height: c.width
-        autoPaddingEnabled: false
-        maskEnabled: true
-        maskSource: mask
+        property var source: art
+        property vector2d size: Qt.vector2d(width, height)
+        property real radius: c.radius
+        fragmentShader: "qrc:/shaders/tile.frag.qsb"
     }
     ShaderEffectSource { // without effects, the art as it is
         visible: !ui.effects
@@ -92,8 +86,8 @@ Item {
         height: c.width * c.reflection
         property var source: ShaderEffectSource {
             sourceItem: art
-            sourceRect: Qt.rect(0, c.width * (1 - c.reflection), c.width, c.width * c.reflection)
-            textureSize: Qt.size(Math.max(1, Math.round(c.width / 2)), Math.max(1, Math.round(c.width * c.reflection / 2)))
+            sourceRect: Qt.rect(0, c.maxSource * (1 - c.reflection), c.maxSource, c.maxSource * c.reflection)
+            textureSize: Qt.size(Math.max(1, Math.round(c.maxSource / 2)), Math.max(1, Math.round(c.maxSource * c.reflection / 2)))
         }
         property real strength: theme.dark ? 0.22 : 0.35
         fragmentShader: "qrc:/shaders/reflect.frag.qsb"

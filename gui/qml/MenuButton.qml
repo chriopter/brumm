@@ -97,11 +97,12 @@ Item {
                     required property var modelData
                     readonly property bool pickable: store.menuPickable(modelData)
                     readonly property bool option: modelData.option !== undefined
+                    readonly property bool fold: !!modelData.fold
                     readonly property bool colors: modelData.option === "cover_colors"
                     readonly property bool on: { daemon.options; return option && store.optionOn(modelData.option) }
                     readonly property bool picked: pickable && (store.menuSel === index || rowHover.hovered)
                     width: list.width
-                    height: modelData.sep ? ui.px(11) : modelData.heading ? ui.px(28) : ui.px(32)
+                    height: modelData.sep ? ui.px(11) : modelData.heading ? ui.px(fold ? 32 : 28) : ui.px(32)
                     onPickedChanged: if (picked && option) f.hint = modelData.hint || ""
                                      else if (!picked && f.hint === (modelData.hint || "")) f.hint = ""
 
@@ -120,7 +121,7 @@ Item {
                     // A heading, as the list's shelves have.
                     Text {
                         visible: !!row.modelData.heading
-                        anchors { left: parent.left; leftMargin: ui.px(12); bottom: parent.bottom; bottomMargin: ui.px(6) }
+                        anchors { left: parent.left; leftMargin: ui.px(12); bottom: parent.bottom; bottomMargin: ui.px(row.fold ? 10 : 6) }
                         text: (row.modelData.heading || "").toUpperCase()
                         color: ui.here
                         font { family: ui.sans; pixelSize: ui.px(10); weight: Font.Bold; letterSpacing: 1.6 }
@@ -141,7 +142,7 @@ Item {
                     }
                     Column {
                         id: words
-                        visible: row.pickable
+                        visible: row.pickable && !row.fold
                         anchors { left: parent.left; leftMargin: row.option ? ui.px(12) : ui.px(42); right: tail.left; rightMargin: ui.px(10); verticalCenter: parent.verticalCenter }
                         spacing: ui.px(1)
                         Text {
@@ -200,13 +201,13 @@ Item {
                                 }
                             }
                         }
-                        Text { // its key, a note about the row
+                        Text { // its key, a note about the row; a fold's way
                             id: key
-                            visible: row.modelData.act !== undefined
+                            visible: row.modelData.act !== undefined || row.fold
                             anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                            text: row.modelData.act || ""
+                            text: row.fold ? (store.menuOptions ? "▾" : "▸") : (row.modelData.keys || row.modelData.act || "")
                             color: row.picked ? ui.fg : ui.dim
-                            font { family: ui.sans; pixelSize: ui.px(12); weight: Font.DemiBold }
+                            font { family: ui.sans; pixelSize: ui.px(row.fold ? 16 : 12); weight: Font.DemiBold }
                         }
                     }
                     HoverHandler { id: rowHover; enabled: row.pickable; cursorShape: Qt.PointingHandCursor }

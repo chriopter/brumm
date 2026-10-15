@@ -14,6 +14,8 @@ use crate::ipc::Player;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Resume {
+    #[serde(skip, default = "path")]
+    pub(super) cache_path: PathBuf,
     pub ids: Vec<String>,
     /// A station plays instead of ids.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -32,14 +34,23 @@ pub struct Resume {
     pub autoplay: bool,
     #[serde(skip)]
     pub(super) saved_at: Option<Instant>,
-    #[serde(skip)]
-    pub(super) path: Option<PathBuf>,
+}
+
+fn path() -> PathBuf {
+    config::session_cache_dir().join("resume.json")
 }
 
 impl Default for Resume {
     fn default() -> Self {
+        Self::new_at(config::session_cache_dir())
+    }
+}
+
+impl Resume {
+    pub fn new_at(dir: PathBuf) -> Self {
         Self {
-            ids: vec![],
+            cache_path: dir.join("resume.json"),
+            ids: Vec::new(),
             station: String::new(),
             source: String::new(),
             id: String::new(),
@@ -51,32 +62,28 @@ impl Default for Resume {
             artwork: String::new(),
             autoplay: false,
             saved_at: None,
-            path: Some(path()),
         }
     }
-}
 
-fn path() -> PathBuf {
-    config::session_cache_dir().join("resume.json")
-}
-
-impl Resume {
     pub fn load() -> Option<Resume> {
-        let path = path();
-        let b = std::fs::read(&path).ok()?;
+        Self::load_at(config::session_cache_dir())
+    }
+
+    pub fn load_at(dir: PathBuf) -> Option<Resume> {
+        let cache_path = dir.join("resume.json");
+        let b = std::fs::read(&cache_path).ok()?;
         let mut r: Resume = serde_json::from_slice(&b).ok()?;
-        r.path = Some(path);
+        r.cache_path = cache_path;
         r.playable().then_some(r)
     }
 
     pub fn save(&mut self) {
-        let path = self.path.get_or_insert_with(path).clone();
         self.saved_at = Some(Instant::now());
         let Ok(b) = serde_json::to_vec(self) else {
             return;
         };
-        if std::fs::create_dir_all(path.parent().expect("resume parent")).is_ok() {
-            let _ = config::write_private(&path, &b);
+        if std::fs::create_dir_all(self.cache_path.parent().expect("cache directory")).is_ok() {
+            let _ = config::write_private(&self.cache_path, &b);
         }
     }
 
@@ -139,6 +146,34 @@ impl Resume {
 mod tests {
     use super::*;
     use crate::config::testenv;
+
+    #[test]
+    fn saving_an_old_queue_keeps_its_original_account_path() {
+        let Some(_env) = testenv::isolated() else {
+            return;
+        };
+        let mut cfg = config::Config {
+            provider: "apple".into(),
+            user_token: "old-token".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        let old_dir = config::session_cache_dir();
+        let mut old = Resume {
+            id: "old-song".into(),
+            ids: vec!["old-song".into()],
+            ..Default::default()
+        };
+        old.save();
+        let mut loaded = Resume::load().unwrap();
+        cfg.user_token = "new-token".into();
+        cfg.save().unwrap();
+        loaded.pos = 42.0;
+        loaded.save();
+        assert!(Resume::load().is_none());
+        assert!(!path().exists());
+        assert_eq!(Resume::load_at(old_dir).unwrap().pos, 42.0);
+    }
 
     #[test]
     fn resume_follows_and_restores() {

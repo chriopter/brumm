@@ -9,6 +9,8 @@ pub struct ProviderInfo {
     pub id: String,
     pub name: String,
     pub available: bool,
+    #[serde(default)]
+    pub configured: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Selection {
@@ -23,6 +25,8 @@ pub struct Selection {
     pub selected: String,
     #[serde(rename = "needsChoice")]
     pub needs_choice: bool,
+    #[serde(default, rename = "needsSetup")]
+    pub needs_setup: bool,
     pub choices: Vec<ProviderInfo>,
 }
 pub fn choices() -> Vec<ProviderInfo> {
@@ -31,11 +35,13 @@ pub fn choices() -> Vec<ProviderInfo> {
             id: "apple".into(),
             name: "Apple Music".into(),
             available: true,
+            configured: false,
         },
         ProviderInfo {
             id: "tidal".into(),
             name: "Tidal".into(),
             available: true,
+            configured: false,
         },
     ]
 }
@@ -47,6 +53,15 @@ pub fn validate(id: &str) -> Result<()> {
     }
 }
 pub fn selection(cfg: &Config) -> Selection {
+    let choices: Vec<_> = choices()
+        .into_iter()
+        .map(|mut choice| {
+            choice.configured =
+                definition(&choice.id).is_ok_and(|provider| provider.signed_in(cfg));
+            choice
+        })
+        .collect();
+    let needs_setup = !choices.iter().any(|choice| choice.configured);
     Selection {
         generation: 0,
         navigation: definition(cfg.effective_provider())
@@ -58,7 +73,8 @@ pub fn selection(cfg: &Config) -> Selection {
         protocol_version: 1,
         selected: cfg.effective_provider().into(),
         needs_choice: cfg.needs_provider_choice(),
-        choices: choices(),
+        needs_setup,
+        choices,
     }
 }
 

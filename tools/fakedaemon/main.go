@@ -138,9 +138,16 @@ func sound(bands, wave, fps int, stop chan struct{}, send func(Message) error) {
 
 func main() {
 	tidal := os.Getenv("BRUMM_FIXTURE_PROVIDER") == "tidal"
+	selected := "apple"
 	if tidal {
-		providerFixture = tidalProviderFixture
+		selected = "tidal"
 	}
+	configured := map[string]bool{selected: true}
+	if os.Getenv("BRUMM_FIXTURE_FIRST_RUN") != "" {
+		selected = ""
+		configured = map[string]bool{}
+	}
+	generation := int64(1)
 	favorites := make(map[string]bool)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -177,6 +184,10 @@ func main() {
 	st := State{Status: StatusReady, Player: Player{Ready: true, Playing: playing, Title: "Instant Crush", Artist: "Daft Punk",
 		Album: "Random Access Memories", Artwork: art(0), Pos: 97, Dur: 337, Index: 4, Length: 13, ID: "i.0.4",
 		Source: "lib:album:a0", Volume: 0.8, Repeat: 2}}
+	sample := st
+	if selected == "" {
+		st = State{Status: "choose-provider"}
+	}
 	var mu sync.Mutex
 	var opts Options
 	var place json.RawMessage
@@ -218,10 +229,33 @@ func main() {
 						}
 					}
 				case "provider":
-					m.Provider = providerFixture
-				case CmdSubscribe:
-					m.Provider = providerFixture
 					mu.Lock()
+					if r.Query == "apple" || r.Query == "tidal" {
+						selected = r.Query
+						tidal = selected == "tidal"
+						generation++
+						if configured[selected] {
+							st = sample
+						} else {
+							st = State{Status: "logged-out"}
+						}
+					}
+					m.Provider = serviceInfo(selected, configured, generation)
+					snapshot := st
+					m.State = &snapshot
+					mu.Unlock()
+				case "login":
+					mu.Lock()
+					configured[selected] = true
+					generation++
+					st = sample
+					m.Provider = serviceInfo(selected, configured, generation)
+					snapshot := st
+					m.State = &snapshot
+					mu.Unlock()
+				case CmdSubscribe:
+					mu.Lock()
+					m.Provider = serviceInfo(selected, configured, generation)
 					snapshot := st
 					mu.Unlock()
 					m.State = &snapshot
