@@ -112,7 +112,7 @@ Item {
     // x: the controls fade out while the mouse rests, and come back as
     // soon as it moves; with the list of styles open they stay.
     property bool resting: false
-    readonly property bool bare: daemon.options.viz_bare && resting && !store.vizList
+    readonly property bool bare: !!daemon.options.viz_bare && resting && !store.vizList
     Timer { id: rest; interval: 2500; running: fs.shown; onTriggered: fs.resting = true }
     function stir() { resting = false; rest.restart() }
     onShownChanged: stir()

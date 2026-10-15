@@ -1,5 +1,5 @@
 [Unit]
-Description=brumm Apple Music player
+Description=brumm music player
 Documentation=https://github.com/chriopter/brumm
 PartOf=graphical-session.target
 After=graphical-session.target

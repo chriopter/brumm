@@ -645,9 +645,11 @@ async fn paste_opens_links() {
     let Cmd::Task(task) = task else {
         panic!("link was not delegated to the provider")
     };
-    assert!(
-        matches!(task.await, Some(Msg::Open(it,song)) if it.id == "resolved" && song == "song")
-    );
+    let result = match task.await {
+        Some(Msg::Session(_, msg)) => Some(*msg),
+        other => other,
+    };
+    assert!(matches!(result, Some(Msg::Open(it,song)) if it.id == "resolved" && song == "song"));
     server.await.unwrap();
     m.update(Msg::Paste("daft punk".into()));
     assert_eq!(m.query, "daft punk");
@@ -1905,11 +1907,9 @@ fn provider_choice_skips_unavailable_services_and_blocks_normal_navigation() {
     let mut m = model(120, 35);
     m.state.status = ipc::STATUS_CHOOSE_PROVIDER.into();
     m.provider_choices = crate::provider::registry::choices();
+    m.provider_choices[1].available = false; // Future adapters must remain unselectable.
     m.provider_key("down");
-    assert_eq!(
-        m.provider_index, 0,
-        "Tidal is not selectable before its adapter exists"
-    );
+    assert_eq!(m.provider_index, 0, "unavailable adapters are skipped");
     m.provider_key("up");
     assert_eq!(m.provider_index, 0);
     let text = m
@@ -1919,7 +1919,7 @@ fn provider_choice_skips_unavailable_services_and_blocks_normal_navigation() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("Apple Music"));
-    assert!(text.contains("Tidal (coming soon)"));
+    assert!(text.contains("Tidal (unavailable)"));
 }
 
 #[test]

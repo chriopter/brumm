@@ -140,7 +140,9 @@ impl Model {
     /// Asks for Explore's artwork shelves, each group a request of its own,
     /// once its first links are shown.
     pub fn load_explore_visuals(&mut self, id: u64, page: ExplorePage) {
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         let load = LOADS.fetch_add(1, Ordering::Relaxed) + 1;
         let visuals: Vec<_> = page.visuals.clone();
         let Some(v) = self.view_by_id(id) else { return };

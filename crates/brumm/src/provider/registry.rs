@@ -9,9 +9,13 @@ pub struct ProviderInfo {
     pub id: String,
     pub name: String,
     pub available: bool,
+    #[serde(default)]
+    pub configured: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Selection {
+    #[serde(default)]
+    pub generation: i64,
     #[serde(default)]
     pub navigation: Vec<super::session::NavigationEntry>,
     #[serde(default)]
@@ -21,6 +25,8 @@ pub struct Selection {
     pub selected: String,
     #[serde(rename = "needsChoice")]
     pub needs_choice: bool,
+    #[serde(default, rename = "needsSetup")]
+    pub needs_setup: bool,
     pub choices: Vec<ProviderInfo>,
 }
 pub fn choices() -> Vec<ProviderInfo> {
@@ -29,11 +35,13 @@ pub fn choices() -> Vec<ProviderInfo> {
             id: "apple".into(),
             name: "Apple Music".into(),
             available: true,
+            configured: false,
         },
         ProviderInfo {
             id: "tidal".into(),
             name: "Tidal".into(),
-            available: false,
+            available: true,
+            configured: false,
         },
     ]
 }
@@ -45,7 +53,17 @@ pub fn validate(id: &str) -> Result<()> {
     }
 }
 pub fn selection(cfg: &Config) -> Selection {
+    let choices: Vec<_> = choices()
+        .into_iter()
+        .map(|mut choice| {
+            choice.configured =
+                definition(&choice.id).is_ok_and(|provider| provider.signed_in(cfg));
+            choice
+        })
+        .collect();
+    let needs_setup = !choices.iter().any(|choice| choice.configured);
     Selection {
+        generation: 0,
         navigation: definition(cfg.effective_provider())
             .map(|p| super::session::navigation(p.navigation()))
             .unwrap_or_else(|_| super::session::navigation(vec![])),
@@ -55,15 +73,18 @@ pub fn selection(cfg: &Config) -> Selection {
         protocol_version: 1,
         selected: cfg.effective_provider().into(),
         needs_choice: cfg.needs_provider_choice(),
-        choices: choices(),
+        needs_setup,
+        choices,
     }
 }
 
 /// The sole composition point for built-in service implementations.
 pub fn definition(id: &str) -> Result<&'static dyn super::session::Definition> {
     static APPLE: super::apple::session::Apple = super::apple::session::Apple;
+    static TIDAL: super::tidal::session::Tidal = super::tidal::session::Tidal;
     match id {
         "apple" => Ok(&APPLE),
+        "tidal" => Ok(&TIDAL),
         _ => Err(Error::Unsupported),
     }
 }
@@ -81,7 +102,7 @@ mod tests {
         assert_eq!(selection(&cfg).selected, "apple");
         assert!(!selection(&cfg).needs_choice);
         assert!(validate("apple").is_ok());
-        assert_eq!(validate("tidal"), Err(Error::Unsupported));
+        assert!(validate("tidal").is_ok());
         assert!(validate("unknown").is_err());
     }
 }

@@ -60,7 +60,14 @@ impl Model {
             tag = one(format!("{}/{}", st.index + 1, st.length), DIM);
         }
         let mut heading = one(title.clone(), BOLD);
-        if st.preview.is_none() && self.rating.get(&st.id).copied().unwrap_or(0) != 0 {
+        if st.preview.is_none()
+            && (self.rating.get(&st.id).copied().unwrap_or(0) != 0
+                || self
+                    .favorites
+                    .get(&format!("song:{}", st.id))
+                    .copied()
+                    .unwrap_or(false))
+        {
             heading.spans.push(sp("  ", PLAIN));
             heading = cat(heading, self.rating_mark(&st.id));
         }

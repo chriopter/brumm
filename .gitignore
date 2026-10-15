@@ -2,3 +2,5 @@
 /tmp/
 /target/
 *.p8
+
+/web/tidal/node_modules/

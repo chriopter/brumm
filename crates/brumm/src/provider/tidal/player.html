@@ -1,0 +1,9 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>brumm Tidal</title></head>
+<body><script>
+window.BRUMM_CFG=__BRUMM_CFG__;
+// Report failures that occur while evaluating SDK imports, before the adapter runs.
+window.brumm={ready:false,err:"",needsAuth:false,rev:0,wait:function(){return new Promise(resolve=>setTimeout(()=>resolve(this.state()),300));},state:function(){return JSON.stringify({rev:this.rev,ready:false,err:this.err,needsAuth:false});}};
+function bootstrapFailed(error){window.brumm.rev++;window.brumm.err="Tidal player could not start: "+(error.message||"SDK failed to load");}
+import("__BRUMM_SCRIPT__".replace(/sdk\.js$/,"transport.js")).then(()=>import("__BRUMM_SCRIPT__")).catch(bootstrapFailed);
+</script></body></html>

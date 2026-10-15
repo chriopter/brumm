@@ -10,6 +10,8 @@ use tokio::net::TcpStream;
 
 pub struct Request {
     pub method: String,
+    /// Original request target including its query.
+    pub target: String,
     /// The path, without the query.
     pub path: String,
     /// By lowercase name.
@@ -47,6 +49,7 @@ pub async fn read_request(s: &mut TcpStream, max_body: usize) -> Option<Request>
     let mut first = lines.next()?.split(' ');
     let (method, target) = (first.next()?.to_string(), first.next()?);
     let path = target.split('?').next().unwrap_or("").to_string();
+    let target = target.to_string();
     let mut headers = HashMap::new();
     for l in lines {
         if let Some((k, v)) = l.split_once(':') {
@@ -76,6 +79,7 @@ pub async fn read_request(s: &mut TcpStream, max_body: usize) -> Option<Request>
     body.truncate(len);
     Some(Request {
         method,
+        target,
         path,
         headers,
         body,

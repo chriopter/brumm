@@ -139,7 +139,9 @@ impl Model {
     fn add_to_playlist(&mut self, id: String, name: String) {
         let Some(p) = self.pick.take() else { return };
         self.set_flash(&format!("adding to {name}…"));
-        let Some(c) = self.client.clone() else { return };
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
+            return;
+        };
         self.task(async move {
             let ids = match songs_of(&c, &p.what).await {
                 Ok(ids) => ids,

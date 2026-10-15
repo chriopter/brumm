@@ -15,6 +15,72 @@ fn daemon(failure: Option<Error>) -> Arc<Daemon> {
 }
 
 #[tokio::test]
+async fn switching_services_preserves_both_saved_connections() {
+    let Some(_env) = config::testenv::isolated() else {
+        return;
+    };
+    let cfg = Config {
+        provider: "apple".into(),
+        user_token: "saved-apple-account".into(),
+        tidal: crate::provider::tidal::auth::Session {
+            // Invalid client prevents a fixture from sending live requests.
+            client_id: "fixture-client".into(),
+            user_id: "saved-tidal-account".into(),
+            country: "DE".into(),
+            refresh_token: "saved-tidal-refresh".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    cfg.save().unwrap();
+    let d = daemon(None);
+    for id in ["tidal", "apple", "tidal"] {
+        let mut reply = Message::default();
+        tokio::time::timeout(Duration::from_secs(2), d.select_provider(id, &mut reply))
+            .await
+            .unwrap()
+            .unwrap();
+        let selection = reply.provider.unwrap();
+        assert_eq!(selection.selected, id);
+        assert!(!selection.needs_setup);
+        assert!(selection.choices.iter().all(|p| p.configured));
+        let saved = Config::load().unwrap();
+        assert_eq!(saved.user_token, cfg.user_token);
+        assert_eq!(saved.tidal.refresh_token, cfg.tidal.refresh_token);
+    }
+}
+
+#[tokio::test]
+async fn requests_from_an_old_session_never_reach_the_new_provider() {
+    let d = daemon(None);
+    let old = d.session.current();
+    {
+        let _exclusive = d.session.advance().await;
+    }
+    for cmd in [
+        ipc::CMD_SEARCH,
+        ipc::CMD_FAVORITE,
+        ipc::CMD_PLAYLIST,
+        ipc::CMD_PLACE,
+    ] {
+        let r = Request {
+            generation: old,
+            cmd: cmd.into(),
+            ..Default::default()
+        };
+        let mut reply = Message::default();
+        assert!(
+            d.handle(0, &r, &mut reply)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("session changed")
+        );
+        assert!(reply.items.is_empty() && reply.shelves.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn ipc_requests_use_the_injected_provider() {
     let d = daemon(None);
     let requests = [

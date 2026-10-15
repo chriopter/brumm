@@ -2,8 +2,9 @@
 
 <img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
 
-**Apple Music for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
+**Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
+- 🎧 Supported Services: Apple Music by [@chriopter](https://github.com/chriopter), Tidal by [@keylimesoda](https://github.com/keylimesoda)
 - 🎵 Library, catalog, search as you type
 - 🏠 Home: recent, heavy rotation, picks
 - 🧭 Explore: charts, genres, videos, countries
@@ -55,14 +56,17 @@ Visuals
 | <kbd>f</kbd> | visualizer: <kbd>tab</kbd> <kbd>v</kbd> <kbd>a</kbd> <kbd>x</kbd> <kbd>F</kbd> |
 | <kbd>g</kbd> | switch between terminal and window |
 | <kbd>o</kbd> | options |
+| <kbd>Ctrl</kbd>+<kbd>o</kbd> | connect or switch music services |
 | <kbd>U</kbd> | look for an update |
 | <kbd>Q</kbd> / <kbd>q</kbd> | close, keep playing / quit |
 
 Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
+Features vary by service; radio, Replay and playlist folders are Apple Music features.
 
 ## More
 
-- 🔑 Needs an Apple Music subscription; the installer signs you in and starts brumm
+- 🔑 Needs an Apple Music or Tidal subscription. Connect one or both on first start.
+- ⇄ Click the service name or press <kbd>Ctrl</kbd>+<kbd>o</kbd> to switch or add services later.
 - ▶️ Later: `brumm`, the launcher, or the bar widget — whichever face you used last
 - 🔄 Updates: <kbd>U</kbd> when offered, or `brumm update`
 - 🔏 Signed releases (Ed25519) and GitHub-attested builds — check the installer first:
@@ -75,7 +79,7 @@ gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 ## Development
 
 The [music provider guide](docs/providers.md) describes the Rust API boundary
-and the remaining work for adding another service.
+and the Apple Music and Tidal integrations.
 
 The daemon and terminal player use Rust; the window uses Qt Quick/QML
 with Rust for shared calculations. Building needs Rust 1.89 or newer,
@@ -84,6 +88,7 @@ tools.
 
 ```sh
 bin/setup       # build and install from this checkout (the window too, with Qt 6)
+bin/build-tidal # rebuild the bundled Tidal Web SDK adapter after changing web/tidal
 bin/dev         # the daemon in the foreground; bin/dev ui / gui for a player
 bin/gui-shot    # screenshot the window against a stand-in daemon
 bin/viz-thumbs  # picture each visualizer style for the list of styles
@@ -97,11 +102,11 @@ One background service is the core — music, queue, library, options, sign-in, 
 | brumm daemon  |  Rust / Tokio                          |
 | systemd background service                             |
 |                                                        |
-| Apple Music API / library / queue / sign-in / options  |
+| Apple Music / Tidal / library / queue / sign-in / options |
 +--+-----------------------------------------------------+
    |
    +-- playback --> Chrome / Widevine
-   |                MusicKit JS / Web Audio
+   |                MusicKit JS / Tidal Web SDK / Web Audio
    |
    +-- MPRIS -----> Omarchy bar widget
    |

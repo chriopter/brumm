@@ -36,6 +36,10 @@ pub const CMD_SEARCH: &str = "search";
 pub const CMD_HOME: &str = "home";
 /// `refs`: submit typed resources to the provider favorites.
 pub const CMD_FAVORITE: &str = "favorite";
+/// `refs` → favorites keyed by resource kind and ID; missing means unknown.
+pub const CMD_FAVORITES: &str = "favorites";
+/// `refs`, `saved`: set an explicit positive preference/collection state.
+pub const CMD_SET_FAVORITE: &str = "set-favorite";
 /// `list`: folder or playlist; `query`: name; `start`: parent folder.
 pub const CMD_CREATE: &str = "create";
 /// `query`: opaque provider navigation handle → explorer page.
@@ -87,7 +91,7 @@ pub const CMD_RELOAD: &str = "reload";
 /// `options` set (a partial set of Options fields) → options; pushed to
 /// subscribers when they change.
 pub const CMD_OPTIONS: &str = "options";
-/// Open the Apple Music sign-in in the browser; the player reloads once
+/// Start the selected provider's sign-in; the player reloads once
 /// signed in.
 pub const CMD_LOGIN: &str = "login";
 pub const CMD_CANCEL_LOGIN: &str = "cancel-login";
@@ -114,6 +118,19 @@ pub const LIST_ALBUMS: &str = "albums";
 pub const LIST_ARTISTS: &str = "artists";
 pub const LIST_SONGS: &str = "songs";
 
+pub fn session_free(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        CMD_SUBSCRIBE
+            | CMD_PROVIDER
+            | CMD_OPTIONS
+            | CMD_UPDATE
+            | CMD_QUIT
+            | CMD_SHOW
+            | CMD_FEEDBACK
+    )
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -134,6 +151,10 @@ fn some_value<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<Val
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Request {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved: Option<bool>,
+    #[serde(skip_serializing_if = "is_zero_i")]
+    pub generation: i64,
     #[serde(rename = "protocolVersion", skip_serializing_if = "is_zero_i")]
     pub protocol_version: i64,
     pub id: i64,
@@ -204,6 +225,18 @@ pub struct Clip {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Player {
+    #[serde(rename = "requestedQuality", skip_serializing_if = "String::is_empty")]
+    pub requested_quality: String,
+    #[serde(rename = "audioQuality", skip_serializing_if = "String::is_empty")]
+    pub audio_quality: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub codec: String,
+    #[serde(rename = "sampleRate", skip_serializing_if = "is_zero_i")]
+    pub sample_rate: i64,
+    #[serde(rename = "bitDepth", skip_serializing_if = "is_zero_i")]
+    pub bit_depth: i64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub presentation: String,
     pub ready: bool,
     pub err: String,
     #[serde(rename = "needsAuth")]
@@ -253,6 +286,10 @@ pub struct State {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Message {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub favorites: BTreeMap<String, bool>,
+    #[serde(skip_serializing_if = "is_zero_i")]
+    pub generation: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<crate::provider::registry::Selection>,
     #[serde(skip_serializing_if = "is_zero_i")]
@@ -363,6 +400,8 @@ pub struct Client {
     writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
     next: Arc<AtomicI64>,
     pending: Pending,
+    generation: Arc<AtomicI64>,
+    bound_generation: Option<i64>,
 }
 
 impl Client {
@@ -384,13 +423,40 @@ impl Client {
         let pending: Pending = Arc::new(Mutex::new(Some(HashMap::new())));
         let (tx, rx) = mpsc::channel(256);
         let p = pending.clone();
+        let generation = Arc::new(AtomicI64::new(0));
+        let active = generation.clone();
         tokio::spawn(async move {
             let mut r = BufReader::with_capacity(64 << 10, r);
             let mut line = Vec::new();
             while let Ok(true) = read_line(&mut r, &mut line, MAX_LINE).await {
-                let Ok(m) = serde_json::from_slice::<Message>(&line) else {
+                let Ok(mut m) = serde_json::from_slice::<Message>(&line) else {
                     continue;
                 };
+                if let Some(provider) = &m.provider {
+                    // Ignore an older provider reply racing a newer transition push.
+                    if provider.generation != 0
+                        && provider.generation < active.load(Ordering::Acquire)
+                    {
+                        m = Message {
+                            id: m.id,
+                            error: "the music provider session changed; try again".into(),
+                            ..Default::default()
+                        };
+                    } else {
+                        active.store(provider.generation, Ordering::Release);
+                    }
+                }
+                let current = active.load(Ordering::Acquire);
+                if m.generation != 0 && current != 0 && m.generation != current {
+                    if m.id == 0 {
+                        continue;
+                    }
+                    m = Message {
+                        id: m.id,
+                        error: "the music provider session changed; try again".into(),
+                        ..Default::default()
+                    };
+                }
                 if m.id != 0 {
                     let ch = p.lock().unwrap().as_mut().and_then(|w| w.remove(&m.id));
                     if let Some(ch) = ch {
@@ -411,6 +477,8 @@ impl Client {
                 writer: Arc::new(tokio::sync::Mutex::new(w)),
                 next: Arc::new(AtomicI64::new(0)),
                 pending,
+                generation,
+                bound_generation: None,
             },
             rx,
         )
@@ -420,6 +488,9 @@ impl Client {
     /// error is that error.
     pub async fn request(&self, mut r: Request) -> Result<Message> {
         r.protocol_version = PROTOCOL_VERSION;
+        if r.generation == 0 {
+            r.generation = self.bound_generation.unwrap_or_else(|| self.generation());
+        }
         r.id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         match self.pending.lock().unwrap().as_mut() {
@@ -438,6 +509,16 @@ impl Client {
             return Err(Error::Msg(m.error));
         }
         Ok(m)
+    }
+
+    pub fn for_session(&self) -> Self {
+        let mut client = self.clone();
+        client.bound_generation = Some(self.generation());
+        client
+    }
+
+    pub fn generation(&self) -> i64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     /// Ends the connection.
@@ -560,5 +641,98 @@ mod tests {
             .await
             .unwrap();
         assert!(late.is_err());
+    }
+    #[tokio::test]
+    async fn old_replies_after_a_switch_fail_the_waiter_without_leaking_data() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let server = tokio::spawn(async move {
+            let (r, mut w) = b.into_split();
+            let mut provider = crate::provider::registry::selection(&config::Config::default());
+            provider.generation = 1;
+            w.write_all(&encode(&Message {
+                provider: Some(provider.clone()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            let mut r = BufReader::new(r);
+            let mut line = Vec::new();
+            read_line(&mut r, &mut line, MAX_LINE).await.unwrap();
+            let req: Request = serde_json::from_slice(&line).unwrap();
+            assert_eq!(req.generation, 1);
+            provider.generation = 2;
+            w.write_all(&encode(&Message {
+                provider: Some(provider),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            w.write_all(&encode(&Message {
+                id: req.id,
+                generation: 1,
+                link: "old-account-data".into(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        });
+        let (client, mut events) = Client::new(a);
+        events.recv().await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.request(Request::new(CMD_LINK)),
+        )
+        .await
+        .unwrap();
+        assert!(result.unwrap_err().to_string().contains("session changed"));
+        assert_eq!(client.generation(), 2);
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn a_queued_operation_keeps_the_session_it_was_created_for() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let server = tokio::spawn(async move {
+            let (r, mut w) = b.into_split();
+            let mut r = BufReader::new(r);
+            let mut line = Vec::new();
+            let mut provider = crate::provider::registry::selection(&config::Config::default());
+            provider.generation = 1;
+            w.write_all(&encode(&Message {
+                provider: Some(provider.clone()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            read_line(&mut r, &mut line, MAX_LINE).await.unwrap();
+            let trigger: Request = serde_json::from_slice(&line).unwrap();
+            provider.generation = 2;
+            w.write_all(&encode(&Message {
+                id: trigger.id,
+                provider: Some(provider),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+            read_line(&mut r, &mut line, MAX_LINE).await.unwrap();
+            let old: Request = serde_json::from_slice(&line).unwrap();
+            assert_eq!(
+                old.generation, 1,
+                "queued mutations must never acquire the new provider's generation"
+            );
+            w.write_all(&encode(&Message {
+                id: old.id,
+                error: "session changed".into(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        });
+        let (client, mut events) = Client::new(a);
+        events.recv().await.unwrap();
+        let queued = client.for_session();
+        client.request(Request::new(CMD_PROVIDER)).await.unwrap();
+        assert_eq!(client.generation(), 2);
+        assert!(queued.request(Request::new(CMD_FAVORITE)).await.is_err());
+        server.await.unwrap();
     }
 }
