@@ -102,23 +102,27 @@ Item {
     }
     Connections {
         target: store
-        function onVizStyleChanged() { minutely.restart() }
-    }
-    Connections {
-        target: daemon
-        function onOptionsChanged() { minutely.restart() }
+        function onVizStyleChanged() { if (minutely.running) minutely.restart() }
     }
 
     // x: the controls fade out while the mouse rests, and come back as
     // soon as it moves; with the list of styles open they stay.
     property bool resting: false
-    readonly property bool bare: !!daemon.options.viz_bare && resting && !store.vizList
-    Timer { id: rest; interval: 2500; running: fs.shown; onTriggered: fs.resting = true }
-    function stir() { resting = false; rest.restart() }
+    readonly property bool autoHide: !!daemon.options.viz_bare
+    onAutoHideChanged: stir()
+    readonly property bool bare: autoHide && resting && !store.vizList
+    Timer { id: rest; interval: 1000; running: fs.shown; onTriggered: fs.resting = true }
+    function stir() { resting = false; if (shown) rest.restart(); else rest.stop() }
     onShownChanged: stir()
     HoverHandler {
+        property point lastPosition: Qt.point(-1, -1)
         cursorShape: fs.bare ? Qt.BlankCursor : Qt.ArrowCursor
-        onPointChanged: fs.stir()
+        onPointChanged: {
+            const p = point.position
+            if (p.x === lastPosition.x && p.y === lastPosition.y) return
+            lastPosition = p
+            fs.stir()
+        }
     }
 
     // What plays, in a strip along the bottom.
@@ -127,7 +131,7 @@ Item {
         z: 5
         opacity: fs.bare ? 0 : 1
         visible: opacity > 0
-        Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 600; easing.type: Easing.InOutQuad } }
+        Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 150; easing.type: Easing.InOutQuad } }
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: ui.px(92)
         gradient: Gradient {
@@ -168,28 +172,35 @@ Item {
         Controls {
             id: transport
             anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: ui.px(12) }
-            width: win.compact ? Math.max(0, strip.width - ui.px(24)) : Math.min(ui.px(560), strip.width - 2 * ui.px(200)) // clear of the buttons beside it
+            width: win.compact ? Math.max(0, strip.width - ui.px(24)) : Math.max(0, Math.min(ui.px(560), strip.width - 2 * (styleControls.width + ui.gap + ui.px(12)))) // clear of the buttons beside it
         }
         Row {
+            id: styleControls
             visible: !win.compact
             anchors { right: parent.right; rightMargin: ui.gap; verticalCenter: thumb.verticalCenter }
-            spacing: ui.px(2)
+            spacing: ui.px(7)
             Repeater {
-                // In words, not icons: next to the player's buttons, a skip
-                // or a loop would read as the music's. ‹ name › picks the
-                // style, then whether it changes by itself, then out.
-                model: [["‹", "", "shift+tab", "shift+tab"],
-                        ["", store.vizNames[store.vizStyle] || "", "v", "v"],
-                        ["›", "", "tab", "tab"],
-                        ["", daemon.options.no_viz_cycle ? "stays" : "changes each minute", "a", "a"],
-                        ["", daemon.options.viz_bare ? "controls hide" : "controls stay", "x", "x"],
-                        ["✕", "", "f", "f"]]
-                MorphButton {
+                model: [
+                    {icon:"󰅁", tip:"Previous visualizer · Shift+Tab", action:"shift+tab", active:false},
+                    {icon:"󰀻", tip:(store.vizNames[store.vizStyle] || "Visualizer") + " · Choose style (V)", action:"v", active:store.vizList},
+                    {icon:"󰅂", tip:"Next visualizer · Tab", action:"tab", active:false},
+                    {icon:"󰑖", tip:daemon.options.no_viz_cycle ? "Keep this style · Enable auto-change (A)" : "Change style each minute · Disable (A)", action:"a", active:!daemon.options.no_viz_cycle},
+                    {icon:daemon.options.viz_bare ? "󰈉" : "󰈈", tip:daemon.options.viz_bare ? "Auto-hide controls · Keep visible (X)" : "Controls stay visible · Auto-hide (X)", action:"x", active:!daemon.options.viz_bare},
+                    {icon:"󰅖", tip:"Exit visualizer · F", action:"f", active:false}
+                ]
+                Item {
                     required property var modelData
-                    icon: modelData[0]
-                    label: modelData[1]
-                    key: modelData[2]
-                    onClicked: store.dispatch(modelData[3], { text: modelData[3].length === 1 ? modelData[3] : "", modifiers: 0 })
+                    required property int index
+                    width: button.width + (index === 2 || index === 4 ? ui.px(7) : 0)
+                    height: button.height
+                    Orb {
+                        id: button
+                        size: ui.px(34)
+                        icon: modelData.icon
+                        tooltip: modelData.tip
+                        on: modelData.active
+                        onClicked: store.dispatch(modelData.action, { text: modelData.action.length === 1 ? modelData.action : "", modifiers: 0 })
+                    }
                 }
             }
         }

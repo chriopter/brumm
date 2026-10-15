@@ -30,7 +30,7 @@ Item {
         anchors { right: parent.right; verticalCenter: parent.verticalCenter }
         spacing: ui.px(10)
         visible: !store.st.preview && !ctl.tight
-        Orb { size: ui.px(34); icon: "󰐑"; on: store.section === store.secQueue; onClicked: { store.switchTo(store.secQueue); store.sideFocus = false } }
+        Orb { size: ui.px(34); icon: "󰐑"; on: store.section === store.secQueue; onClicked: { store.showPlayer(); store.sideFocus = false } }
         // The volume: click mutes, the wheel turns it and says how loud.
         Orb {
             size: ui.px(34)

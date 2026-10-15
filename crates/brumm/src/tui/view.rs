@@ -431,7 +431,7 @@ impl Model {
                 self.geo.now_playing = Rect::new(tx, y + 1, tx + 13, y + 2);
                 tx += 13 + sep;
             }
-            let active = i == self.section;
+            let active = i == self.section && !self.player_view;
             let name = if icons && !active {
                 navigation_icon(&self.navigation[i].icon)
             } else {
@@ -1041,7 +1041,7 @@ impl Model {
         // viz_bare: the line goes while the mouse rests, the picture takes it
         let bare = self.opts.o.viz_bare
             && !self.viz_list
-            && self.mouse_at.elapsed() > std::time::Duration::from_millis(2500);
+            && self.mouse_at.elapsed() > std::time::Duration::from_secs(1);
         let h = (self.height - if bare { 0 } else { 1 }).max(0) as usize;
         // A new style dissolves in over the old one, block by block.
         let f = self.viz_at.elapsed().as_secs_f64() / super::model::VIZ_FADE.as_secs_f64();

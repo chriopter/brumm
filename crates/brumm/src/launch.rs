@@ -183,7 +183,11 @@ fn preview_command(ui: &str, me: &Path) -> Result<Command> {
 fn open_prototype(ui: &str, me: &Path) -> Result<()> {
     // Command inherits every preview variable, including XDG_DATA_HOME and
     // audio settings. No shell or compositor process can drop that context.
-    detach(preview_command(ui, me)?, "preview.log")
+    let mut command = preview_command(ui, me)?;
+    // Development tools set NO_COLOR for logs; a visual preview needs the
+    // terminal's colors, including the foreground/background pairs in covers.
+    command.env_remove("NO_COLOR");
+    detach(command, "preview.log")
 }
 
 #[cfg(test)]
@@ -258,7 +262,7 @@ mod tests {
         };
         let foot = env.dir.join("bin/foot");
         fs::write(&foot, r##"#!/bin/sh
-printf '%s\n' "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$@" > "$XDG_RUNTIME_DIR/preview-args"
+printf '%s\n' "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "${NO_COLOR-unset}" "$@" > "$XDG_RUNTIME_DIR/preview-args"
 "##).unwrap();
         fs::set_permissions(&foot, fs::Permissions::from_mode(0o755)).unwrap();
         let me = Path::new("/tmp/preview build/brumm");
@@ -274,8 +278,9 @@ printf '%s\n' "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA
         assert_eq!(lines[1], env.dir.join("config").to_str().unwrap());
         assert_eq!(lines[2], env.dir.join("cache").to_str().unwrap());
         assert_eq!(lines[3], env.dir.join("data").to_str().unwrap());
+        assert_eq!(lines[4], "unset", "preview inherited color suppression");
         assert_eq!(
-            &lines[4..],
+            &lines[5..],
             [
                 "--app-id=brumm-prototype",
                 "--title=brumm preview · TUI",

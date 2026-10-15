@@ -5,11 +5,15 @@ import QtQuick.Effects
 
 Item {
     id: orb
+    property string tooltip
     property string icon
     property int size: ui.px(42)
     property bool lit: false
     property bool on: false
     signal clicked()
+    Accessible.role: Accessible.Button
+    Accessible.name: tooltip
+    Accessible.onPressAction: orb.clicked()
 
     width: size
     height: size
@@ -43,6 +47,7 @@ Item {
         color: orb.lit ? (theme.dark ? ui.deep : "white") : orb.on ? ui.bright : hover.hovered ? ui.bright : ui.fg
         font { family: ui.mono; pixelSize: orb.size * 0.44 }
     }
+    GlassToolTip { visible: hover.hovered && orb.tooltip !== ""; text: orb.tooltip }
     HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
     TapHandler { id: tap; onTapped: orb.clicked() }
 }

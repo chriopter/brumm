@@ -58,7 +58,7 @@ Item {
         }
     }
     property bool playerView: false
-    function showPlayer() { jumpToPlaying(); playerView = true }
+    function showPlayer() { switchTo(secQueue); playerView = true }
     property var video: null
     property string resumeVideoSong: ""
     function closeVideo() {
@@ -268,27 +268,28 @@ Item {
         const rows = []
         if (st.status === "logged-out")
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
-        rows.push({ act: "ctrl+o", icon: "󰎈", label: "Music Services…", keys: "Ctrl+O" })
-        rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F" },
-                  { act: "g", icon: "󰆍", label: "TUI" },
-                  { act: "y", icon: "󰌷", label: "Copy Link" },
-                  { sep: true }, { fold: true, heading: "Options" })
+        rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F", hint: "Open the fullscreen visualizer." },
+                  { act: "g", icon: "󰆍", label: "Terminal Player", keys: "g", hint: "Switch to the TUI. Music keeps playing." },
+                  { act: "y", icon: "󰌷", label: "Copy Link", hint: "Copy the current song's link." },
+                  { heading: "Options" },
+                  { act: "ctrl+o", icon: "󰎈", label: "Music Services…", keys: "Ctrl+O", hint: "Connect a service or switch between your accounts." },
+                  { fold: true, icon: "󰒓", label: "Preferences", hint: "Appearance and playback settings." })
         if (menuOptions) {
-            rows.push({ option: "cover_colors", label: "Cover Colors", hint: "Use the cover's colors for the app." },
-                      { option: "autoplay", label: "Autoplay", hint: "Play on after the last song." },
-                      { option: "reduce_motion", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
-                      { option: "wall", label: "Album Wall", hint: "Covers around the cover, not a flow." })
+            rows.push({ option: "cover_colors", icon: "󰏘", label: "Cover Colors", hint: "Use the cover's colors for the app." },
+                      { option: "autoplay", icon: "󰁨", label: "Autoplay", hint: "Play on after the last song." },
+                      { option: "reduce_motion", icon: "󰔗", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
+                      { option: "wall", icon: "󰋩", label: "Album Wall", hint: "Covers around the cover, not a flow." })
             if (daemon.omarchy)
-                rows.push({ option: "bar", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
-                          { option: "music_keys", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
+                rows.push({ option: "bar", icon: "󰍹", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
+                          { option: "music_keys", icon: "󰌌", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
         }
-        rows.push({ sep: true },
+        rows.push({ heading: "Help" },
                   { act: "U", icon: "󰚰", label: st.update ? "Update to " + st.update + "…" : "Check for Updates…" },
                   { act: "?", icon: "󰋖", label: "Keyboard Shortcuts" },
                   { act: "!", icon: "󰍡", label: "Send Feedback…" },
                   { sep: true },
-                  { act: "Q", icon: "󰅖", label: "Close Window" },
-                  { act: "q", icon: "󰐥", label: "Quit brumm" })
+                  { act: "Q", icon: "󰅖", label: "Close Window", hint: "Close this window. Music keeps playing." },
+                  { act: "q", icon: "󰐥", label: "Quit brumm", hint: "Stop playback and quit the player." })
         return rows.filter(row => row.option !== "autoplay" || capabilities.autoplay)
     }
     function menuPickable(r) { return !!r && (r.act !== undefined || r.option !== undefined || !!r.fold) }
@@ -387,6 +388,7 @@ Item {
         const digit = k.length === 1 && k >= "0" && k <= "9" ? (k === "0" ? 9 : parseInt(k) - 1) : -1
         if (vizList) {
             switch (k) {
+            case "g": return false
             case "up": case "k": case "shift+tab": vizSel = (vizSel + n - 1) % n; vizShow(vizSel, true); break
             case "down": case "j": case "tab": vizSel = (vizSel + 1) % n; vizShow(vizSel, true); break
             case "enter": case "space": case "l": case "v": vizList = false; break
@@ -876,6 +878,7 @@ Item {
     function here() {
         const v = cur(), r = v.rows[v.sel]
         return { section: section, sectionId: navigation[section].id, sectionName: sectionNames[section], playerView: playerView, query: query,
+                 full: full, visualizer: full ? vizNames[vizStyle] : "",
                  views: stack().slice(1).filter(x => x.item).map(x => ({ key: x.key, title: x.title, item: x.item })),
                  sel: { id: r ? (r.track ? r.track.id : r.item ? r.item.id : "") : "", index: v.sel } }
     }
@@ -898,6 +901,10 @@ Item {
         const named = stable >= 0 ? stable : sectionNames.indexOf(p.sectionName || "")
         const sec = named >= 0 ? named : Math.max(0, Math.min(p.section | 0, sectionNames.length - 1))
         playerView = !!p.playerView
+        vizList = false
+        const style = vizNames.indexOf(p.visualizer || "")
+        if (p.full && style >= 0) vizShow(style, true)
+        full = !!p.full
         query = p.query || ""
         const q = query.trim()
         if (q.length >= 2) stacks[secSearch] = [newView("Search", "search:" + q)]
@@ -1702,7 +1709,7 @@ Item {
             split = Math.min(0.7, Math.max(0.08, split + (k === "[" ? -0.05 : 0.05)))
             sys.setSetting("split", split)
             return
-        case "c": return jumpToPlaying()
+        case "c": return showPlayer()
         case "o": return openMenu(true) // the options live in the menu
         case "O": return togglePreview()
         case "i": return addToLibrary()
