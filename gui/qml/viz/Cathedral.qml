@@ -30,7 +30,7 @@ VizEffect {
         onTriggered: {
             const a = fx.audio, dt = Math.min(frameTime, 0.1)
             fx.tick += dt * (0.3 + 0.7 * a.live)
-            fx.pan += dt * (0.5 + 0.5 * a.live)
+            fx.pan += dt // the camera keeps a steady pace, independent of the music
             if (a.kicks !== fx.kicks) {
                 if (fx.kicks >= 0) fx.swell = Math.min(fx.swell + 0.35, 0.7)
                 fx.kicks = a.kicks
