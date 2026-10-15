@@ -4,15 +4,43 @@
 
 **Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
-**Supported services**
+- <details>
+  <summary>🎧 Apple Music by <a href="https://github.com/chriopter">@chriopter</a></summary>
 
-| Service | Integration by |
-|---|---|
-| Apple Music | [@chriopter](https://github.com/chriopter) |
-| Tidal | [@keylimesoda](https://github.com/keylimesoda) |
-| Spotify | [@sean-imus](https://github.com/sean-imus) |
+  Requires an Apple Music subscription. Connect through Music Services
+  (<kbd>Ctrl</kbd>+<kbd>o</kbd>).
 
-**Features**
+  Includes radio, Replay and playlist folders. Playlist deletion and renaming,
+  lyrics and lossless playback are not available in brumm.
+
+  </details>
+
+- <details>
+  <summary>🎧 Tidal by <a href="https://github.com/keylimesoda">@keylimesoda</a></summary>
+
+  Requires a Tidal subscription. Connect through Music Services
+  (<kbd>Ctrl</kbd>+<kbd>o</kbd>) and complete the device sign-in.
+
+  Includes library, search, favorites and playlist creation. Advanced playlist
+  edits, Replay, folders, radio, autoplay and video previews are not available.
+
+  </details>
+
+- <details>
+  <summary>🎧 Spotify by <a href="https://github.com/sean-imus">@sean-imus</a></summary>
+
+  Requires Spotify Premium and your own
+  <a href="https://developer.spotify.com/dashboard">developer app</a> with
+  Web API and Web Playback SDK enabled. Register
+  `http://127.0.0.1:7777/spotify/callback` as the redirect URI, then connect
+  through Music Services (<kbd>Ctrl</kbd>+<kbd>o</kbd>) using the Client ID.
+  No client secret is needed.
+
+  Radio, Explore, Replay, folders, autoplay and previews are not available.
+  The visualizer has no access to Spotify's audio spectrum.
+  See the [service setup guide](docs/providers.md#spotify) for details.
+
+  </details>
 
 - ⇄ GUI and TUI: press <kbd>g</kbd> to switch while music keeps playing
 - 🎵 Library, playlists, favorites and search as you type
@@ -58,15 +86,10 @@ Qt 6 Multimedia QML package on other Linux systems.
 Enable <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> to open brumm with
 `brumm keys on`; `brumm keys off` restores the previous music-key behavior.
 
-Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
-Features vary by service; radio, Replay and playlist folders are Apple Music features.
-Spotify needs your own [developer app](https://developer.spotify.com/dashboard) and Premium.
-Its visualizer has no access to the audio. See [service setup and limits](docs/providers.md).
-
 ## More
 
 - 🔑 Needs an Apple Music, Tidal or Spotify Premium subscription. Connect your services on first start.
-- ⇄ Click the service name or press <kbd>Ctrl</kbd>+<kbd>o</kbd> to switch or add services later.
+- ⇄ Open Music Services in the menu or press <kbd>Ctrl</kbd>+<kbd>o</kbd> to switch or add services.
 - ▶️ Later: `brumm`, the launcher, or the bar widget — whichever face you used last
 - 🔄 Updates: <kbd>U</kbd> when offered, or `brumm update`
 - 🔏 Signed releases (Ed25519) and GitHub-attested builds — check the installer first:
@@ -92,22 +115,22 @@ playback pages and controls the audio through Chrome DevTools. See the
 [provider guide](docs/providers.md) for details.
 
 ```text
-  Apple Music           Tidal              Spotify
-       ^                  ^                   ^
-       |                  |                   |
-  Apple provider    Tidal provider    Spotify provider
-       \                  |                  /
-        +-----------------+-----------------+
-                          |
-                   brumm daemon <----> Playback engine
-              Shared provider interface   Chrome / web player
-         Session / Library / Queue / Options
-                          |
-              +-----------+------------+
-              |                        |
-       Unix socket / JSON         MPRIS / D-Bus
-           /       \                   |
-         TUI       GUI           Omarchy widget
++--------------------------------------------------------+
+| brumm daemon - Rust / Tokio                            |
+| systemd background service                             |
+|                                                        |
+| Providers: Apple Music / Tidal / Spotify               |
+| Library / queue / sign-in / options                    |
++--+-----------------------------------------------------+
+   |
+   +-- playback --> Engine: Chrome / Widevine
+   |                MusicKit JS / Tidal SDK / Spotify SDK
+   |
+   +-- socket ----> TUI: Rust / Ratatui
+   |
+   +-- socket ----> GUI: Qt Quick / QML
+   |
+   +-- MPRIS -----> Omarchy widget
 ```
 
 ### Development scripts
