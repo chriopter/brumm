@@ -1,6 +1,6 @@
 # ʕ•ᴥ•ʔ brumm
 
-<img src="docs/bear.webp" alt="brumm's dancing bear" width="180">
+<img src="assets/bear.webp" alt="brumm's dancing bear" width="180">
 
 **Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
@@ -38,7 +38,13 @@
 
   Radio, Explore, Replay, folders, autoplay and previews are not available.
   The visualizer has no access to Spotify's audio spectrum.
-  See the [service setup guide](docs/providers.md#spotify) for details.
+  If another account signs in, add it under User Management in your app's
+  dashboard. Development-mode access follows Spotify's
+  [quota rules](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
+
+  Home shows recent music and top tracks/artists. Followed playlists can play
+  as a whole; only owned or collaborative playlists expose individual tracks.
+  Search returns up to ten results per kind.
 
   </details>
 
@@ -62,9 +68,9 @@ Qt 6 Multimedia QML package on other Linux systems.
 
 | TUI | GUI |
 |:---:|:---:|
-| ![brumm in the terminal](docs/tui.webp) | ![brumm as a window](docs/gui.webp) |
+| ![brumm in the terminal](assets/tui.webp) | ![brumm as a window](assets/gui.webp) |
 | **Explore** | **Visualizer** |
-| ![Explore with covers and the glass player](docs/release-1.0.0.webp) | ![the visualizer, terminal and window](docs/visualizer.webp) |
+| ![Explore with covers and the glass player](assets/release-1.0.0.webp) | ![the visualizer, terminal and window](assets/visualizer.webp) |
 
 ## Keys
 
@@ -133,33 +139,66 @@ Run `brumm keys off` to restore the previous music-key behavior.
 
 </details>
 
-## More
+## Guide
 
-- 🔑 Needs an Apple Music, Tidal or Spotify Premium subscription. Connect your services on first start.
-- ⇄ Open Music Services in the menu or press <kbd>Ctrl</kbd>+<kbd>o</kbd> to switch or add services.
-- ▶️ Later: `brumm`, the launcher, or the bar widget — whichever face you used last
-- 🔄 Updates: <kbd>U</kbd> when offered, or `brumm update`
-- 🔏 Signed releases (Ed25519) and GitHub-attested builds — check the installer first:
+<details>
+<summary>Connect services and switch interfaces</summary>
+
+Choose your services on first start. Open **Music Services** in the menu under
+**Options**, or press <kbd>Ctrl</kbd> + <kbd>O</kbd>, to add or switch a connection
+later. Setup requirements and limitations are in the service entries above.
+
+One service is active at a time. Switching services stops its playback, keeps
+its sign-in and saves its queue. Returning to a service restores its queue
+paused. Accounts and libraries stay separate.
+
+Press <kbd>g</kbd> to switch between GUI and TUI without interrupting playback.
+The visualizer keeps its selected style. Run `brumm`, use the launcher or click
+the bar widget to reopen the last interface.
+
+</details>
+
+<details>
+<summary>Browse, search and inspect music</summary>
+
+Navigation and available actions follow the selected service. **Now Playing**
+shows the queue; <kbd>/</kbd> filters the current view and <kbd>Tab</kbd> switches
+to searching the service.
+
+Apple Music includes Favorites, Replay and playlist folders on Home, plus
+charts, genres, countries and music videos in Explore. Search also supports
+stations, curators, activities and record labels. Artist pages include top
+songs, videos and releases.
+
+Press <kbd>Ctrl</kbd> + <kbd>i</kbd> for item details, or use the GUI context menu.
+Where the service supplies them, details include composers, classical metadata,
+ISRC/UPC identifiers and editorial notes. Apple lookup accepts ISRC, UPC and
+typed IDs such as `songs:123; albums:456`.
+
+Apple Music video previews play in the GUI with Qt Multimedia. Full videos open
+in Apple Music; the TUI opens the video link. Audio-format metadata describes
+the catalog entry and does not enable lossless or Atmos playback.
+
+</details>
+
+<details>
+<summary>Updates and verified installation</summary>
+
+Press <kbd>U</kbd> when an update is offered, or run `brumm update`.
+The installer and updater use the latest stable release. Development builds
+do not update themselves from GitHub.
+
+Releases are signed with Ed25519 and builds have GitHub attestations. To verify
+the installer before running it:
 
 ```sh
 curl -fsSLO https://github.com/chriopter/brumm/releases/latest/download/install.sh
 gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 ```
 
+</details>
+
 ## Development
-
-The daemon and TUI use Rust; the GUI uses Qt Quick/QML and C++.
-Both interfaces share the same daemon and music session.
-
-```text
-crates/brumm/src/
-├── provider/  # Service APIs: sign-in, library, catalog and track metadata
-└── engine/    # Playback: run each service's web player in Chrome
-```
-
-Providers handle Apple Music, Tidal and Spotify. The engine runs their
-playback pages and controls the audio through Chrome DevTools. See the
-[provider guide](docs/providers.md) for details.
 
 ```text
 +--------------------------------------------------------+
@@ -180,25 +219,275 @@ playback pages and controls the audio through Chrome DevTools. See the
    +-- MPRIS -----> Omarchy widget
 ```
 
-### Development scripts
+<details>
+<summary>Build and run</summary>
 
-`bin/` contains the scripts for building, running and previewing brumm.
-Building needs Rust 1.89+, Qt 6 and a C++ compiler; sample-data previews
-also need Go. Rebuilding the Tidal adapter needs Node.js/npm.
+The daemon and TUI use Rust; the GUI uses Qt Quick/QML and C++.
+Building needs Rust 1.89+, Qt 6 and a C++ compiler. Demo data needs Go;
+rebuilding the Tidal adapter needs Node.js/npm. The GUI uses Qt Declarative,
+Shader Tools and Multimedia.
+
+`bin/` contains the development scripts:
 
 ```sh
 bin/setup        # build and install this checkout
 bin/dev          # foreground daemon; add ui or gui to open a player
-bin/preview      # isolated preview with the real account (needs Python 3)
-bin/prototype    # isolated preview with sample music
-bin/gui-shot out.png  # screenshot with sample data
+bin/build-gui    # build the Qt frontend
 bin/build-tidal  # rebuild after changes to the Tidal web adapter
 ```
 
-For fake service setup and switching, run `tools/demo-services`, or
-`tools/demo-services connected` to start with all three connected.
-The [demo](tools/fakedaemon/README.md) needs no account and plays no audio.
-`bin/preview` uses the real account, including actions taken in its UI.
-`bin/setup` installs brumm; `bin/dev` stops an installed brumm user service.
+`bin/setup` installs the program, launcher, user service and widget.
+`bin/dev` stops an installed brumm user service while developing.
+
+Local builds can reuse the Apple Music developer token from the installed
+release. Set `BRUMM_TOKEN_FROM=/path/to/brumm` to use another binary.
+To sign a new token, provide `APPLE_KEY_ID`, `APPLE_TEAM_ID` and
+`APPLE_PRIVATE_KEY` to `bin/setup`; `tools/devtoken` handles signing.
+Keep signing keys and user credentials out of source control.
+
+</details>
+
+<details>
+<summary>Preview and demo</summary>
+
+```sh
+bin/preview                  # isolated preview with the real account
+bin/prototype                # isolated preview with sample music
+bin/gui-shot out.png         # screenshot with sample data
+tools/demo-services          # first start with fake music services
+tools/demo-services connected  # all three services connected
+tools/demo-services tidal    # start with Tidal selected
+tools/demo-services spotify  # start with Spotify selected
+```
+
+The service demo builds the current source and starts `tools/fakedaemon` with
+sample music, generated covers and a simulated playback clock. It needs no
+account and plays no audio. Every run starts fresh. Connect and switch services
+with <kbd>Ctrl</kbd> + <kbd>O</kbd>; <kbd>g</kbd> switches GUI/TUI. A terminal such
+as foot is needed for the TUI. Close the demo windows to end it.
+
+Set `BRUMM_PROTOTYPE_BUILD` to reuse a demo build directory. For standalone
+fixtures, use `BRUMM_FIXTURE_FIRST_RUN`, `BRUMM_FIXTURE_ALL_SERVICES` and
+`BRUMM_FIXTURE_PROVIDER=apple|tidal|spotify`.
+
+`bin/preview` needs Python 3 and an existing Apple Music sign-in. It copies
+credentials into a private temporary configuration, with its own daemon,
+socket and caches. It uses the real account: favorites, playlists and other
+changes in the preview affect that account. The developer token can come from
+the installed release or `BRUMM_TOKEN_FROM`.
+
+</details>
+
+<details>
+<summary>Provider and engine guide</summary>
+
+```text
+crates/brumm/src/
+├── provider/  # Service APIs, sign-in, navigation and track metadata
+└── engine/    # Chrome lifecycle, playback controls and state transport
+```
+
+**Providers** are built into the daemon. Each implements its service API,
+authentication, token refresh and playback page. The registry constructs the
+provider definition, which supplies its stable ID, navigation, capabilities,
+account identity and API client. The **engine** runs that playback page through
+Chrome/CDP and provides the common player lifecycle. The service SDK owns
+media loading, decoding and DRM.
+
+**GUI and TUI** render provider-supplied labels, icons and typed destinations.
+Routes and resource IDs remain opaque: shared UI code must not construct API
+URLs or infer behavior from service-specific ID formats. Search, Now Playing,
+settings and help remain shared. Persist navigation by entry ID, not position.
+
+**The socket** is versioned, newline-delimited JSON over a local Unix socket.
+Requests, replies and subscribed state carry the active session generation;
+incompatible protocol versions produce a visible error. Providers do not add
+separate frontend sockets. Credentials stay inside the daemon and its private
+playback bridge; only public sign-in prompts cross the frontend socket.
+
+**Switching** is serialized. The daemon waits for dispatched mutations, cancels
+outgoing work, closes its player and private bridge, saves the account's queue,
+then activates the next session. Late replies, login completions and player
+events must not update the new session or write to its caches. Refreshing
+credentials must only update their owning account.
+
+**Storage** is scoped by provider and account. Legacy Apple caches migrate once
+and remain available for rollback. Apple's cache identity currently derives
+from its Music User Token, so signing in with a rotated token may create a new
+namespace. Tidal library and resume caches expire after 24 hours; artwork
+expires after 24 hours without use and has a size limit.
+
+**Actions** follow capabilities and resource permissions. Favorite, collection
+membership and negative feedback are distinct concepts. Use explicit desired
+states for writes, preserve unknown states, and only show supported actions.
+Playlist ownership is separate from being saved or followed; only editable
+playlists belong in the add-to-playlist picker. Preserve track order and
+repeated entries. A failed append after successful creation must retain the new
+playlist and report the failure.
+
+**Apple Music** owns MusicKit sign-in, catalog/library mapping and its player
+page. Its separate favorite and library states must remain distinct.
+
+**Tidal** uses device sign-in with the compatibility client from Untidy; this
+is a compatibility dependency, not official application approval. Its bundled
+official SDK adapter lives in `web/tidal/`. Home uses native page modules where
+available and independent personal-mix fallbacks; Explore can use legacy
+editorial pages. History mixes mean most-listened music, not recently played.
+One collection action covers favorites. Owned and favorited playlists are
+combined; playlist creation uses `UNLISTED` visibility.
+
+Tidal pagination and page routes stay on validated API origins. Preserve opaque
+cursors, bound include depth and request sizes, and avoid retrying ambiguous
+playlist writes. Its account-bound loopback bridge checks origin, Host and
+path and exposes finite credential and metadata operations. The native media
+transport allows only the verified `sp-ad-fa.audio.tidal.com` HTTPS host,
+validated single byte ranges, no redirects, cookies or OAuth forwarding,
+at most 32 MiB per response and four concurrent deliveries. Closing the engine
+cancels requests; signed media URLs are not persisted. The SDK still handles
+decoding and DRM. Preview-only playback is rejected; actual and requested
+quality are reported separately. New CDN hosts and higher quality tiers need
+separate verification.
+
+**Spotify** uses the Web Playback SDK and account-bound token refresh, including
+after suspend. Its SDK frame does not expose audio samples to the visualizer.
+Service setup is documented in the Spotify entry at the top of this README.
+
+When adding a provider, implement its definition, auth, API mapping and playback
+page through these boundaries, then register it. Check stale work during
+switching, pagination, partial results, permissions, duplicate queue entries and
+GUI/TUI handoff. Working metadata alone does not prove full-track playback.
+
+References: [Tidal API](https://tidal-music.github.io/tidal-api-reference/),
+[Tidal Web SDK](https://github.com/tidal-music/tidal-sdk-web),
+[Spotify API migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide).
+
+</details>
+
+<details>
+<summary>Validation notes</summary>
+
+Use fictional provider fixtures for sign-in states, capabilities, navigation,
+switching and delayed replies. Run the Rust, QML and SDK adapter suites for the
+parts changed; keep real tokens and personal account data out of fixtures.
+Desktop checks that need isolation can run in omabox, but audible playback needs
+a desktop with audio output.
+
+The Tidal integration checks recorded on 2026-10-14 covered live device sign-in,
+session restoration, collection/search reads, personal mixes and editorial
+Explore. Full-track AAC playback, seeking, next-track transitions, repeated
+queue entries, pause/resume and audible output passed. Native editorial API
+failures required the legacy Explore fallback; CDN rejection of the browser
+Origin required the scoped native transport described above.
+
+Those checks did not validate live favorite/playlist writes, every quality tier
+or Apple/Spotify paid playback. Fixture results and historical checks do not
+replace a current live test before release. Check sign-in, refresh, supported
+writes and Apple → Tidal → Spotify switching with suitable accounts.
+
+</details>
+
+<details>
+<summary>Release history</summary>
+
+These notes describe the releases as shipped; current controls and service
+support are documented above.
+
+<details>
+<summary>1.3: a cathedral visualizer</summary>
+
+### New
+
+- ⛪ A cathedral: sun through stained glass. Press <kbd>f</kbd>, then <kbd>2</kbd>.
+- 🖼️ The list of styles shows a picture of each. Press <kbd>v</kbd>.
+- 🫥 The visualizer controls can hide while the mouse rests. Press <kbd>x</kbd>.
+
+### Changed
+
+- 💾 <kbd>f</kbd> opens the style you saw last.
+- 🔤 The visualizer buttons say what they do in words.
+- 📋 The menu is shorter, and the options fold away.
+
+**Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
+
+</details>
+
+<details>
+<summary>1.2.2: smoother resizing</summary>
+
+### Faster
+
+- 🪟 The GUI follows window resizing more smoothly.
+- ⚡ The terminal scrolls and resizes more smoothly.
+
+### Fixed
+
+- 🧱 The cover wall fills new spaces with loaded covers.
+
+**Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
+
+</details>
+
+<details>
+<summary>1.2: prepare for additional services</summary>
+
+### New
+
+- 🎵 Choose your music service on first start.
+
+### Changed
+
+- 🧩 Apple Music has its own API module for future services.
+- 📦 Dependencies are updated and pinned to exact versions.
+
+**Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
+
+</details>
+
+<details>
+<summary>1.1: Rust core</summary>
+
+### Changed
+
+- 🦀 The daemon and terminal player now run on Rust.
+
+**Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
+
+</details>
+
+<details>
+<summary>1.0.2: GUI starts on Omarchy</summary>
+
+### Fixed
+
+- 🪟 The GUI starts with Qt 6.11. Run `brumm --gui`.
+
+**Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
+
+</details>
+
+<details>
+<summary>1.0.0: Explore, Replay and videos</summary>
+
+![Explore with album covers and the glass player](assets/release-1.0.0.webp)
+
+### New
+
+- 🧭 Explore has charts, genres and music video previews.
+- ❤️ Favorites and Replay are on Home.
+- 📁 Browse playlist folders and create playlists.
+- 🔎 More search results. Press <kbd>Ctrl+i</kbd> for details.
+
+- 🌈 Press <kbd>F</kbd> for the visualizer in full screen.
+
+### Fixed
+
+- 🪟 The GUI starts on Omarchy and keeps small-window controls.
+- 🧱 The cover wall stays responsive. Right-click for actions.
+
+**Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`. Video previews need `qt6-multimedia` on Arch and Omarchy. The installer includes it; existing installs can run `sudo pacman -S --needed qt6-multimedia`.
+
+</details>
+
+</details>
 
 Inspired by [vibez](https://github.com/simonepelosi/vibez).
