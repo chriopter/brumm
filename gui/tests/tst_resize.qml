@@ -39,8 +39,37 @@ TestCase {
         readonly property var stacks: []
         readonly property int rev: 0
         readonly property int secAlbums: 0
+        property var rows: []
+        readonly property int sel: 0
+        readonly property var view: ({ key: "albums:" })
         signal artworkChanged()
+        signal selMoved()
     }
+    Component {
+        id: gridComponent
+        Brumm.DiscoverGrid { width: 600; height: 500; visible: false }
+    }
+    Item { id: browser }
+    Item { id: playbackStage; property real playbackTop: 0 }
+
+    function test_hiddenDiscoveryDoesNotBuildLibraryCards() {
+        const grid = createTemporaryObject(gridComponent, this)
+        verify(grid !== null)
+        const rows = []
+        for (let i = 0; i < 200; ++i)
+            rows.push({ item: { name: "Album " + i, kind: "album" } })
+        store.rows = rows
+        const cards = findChild(grid, "discoveryCards")
+        compare(cards.count, 0)
+        grid.width = 450
+        compare(cards.count, 0)
+        grid.visible = true
+        compare(cards.count, rows.length)
+        grid.visible = false
+        compare(cards.count, 0)
+        store.rows = []
+    }
+
     Component {
         id: wallComponent
         Brumm.CoverWall { width: 1000; height: 700; size: 360; url: "" }
