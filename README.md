@@ -80,68 +80,104 @@ gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 
 ## Development
 
-The [music provider guide](docs/providers.md) describes the Rust API boundary
-and the Apple Music, Tidal and Spotify integrations.
+The Rust daemon owns service connections, playback, the queue and shared
+options. The TUI and GUI talk to it over a local socket, so switching between
+them keeps the same music session. The [provider guide](docs/providers.md)
+explains the API boundary and service integrations.
 
-The daemon and terminal player use Rust; the window uses Qt Quick/QML
-with Rust for shared calculations. Building needs Rust 1.89 or newer,
-Qt 6 and a C++ compiler. Go is used for development fixtures and signing
-tools.
-
-```sh
-bin/setup       # build and install from this checkout (the window too, with Qt 6)
-bin/build-tidal # rebuild the bundled Tidal Web SDK adapter after changing web/tidal
-bin/dev         # the daemon in the foreground; bin/dev ui / gui for a player
-bin/gui-shot    # screenshot the window against a stand-in daemon
-bin/viz-thumbs  # picture each visualizer style for the list of styles
-bin/bench       # what the players cost
-```
-
-One background service is the core — music, queue, library, options, sign-in, where you were. The players only draw, and come and go while the music plays on:
+### Repository layout
 
 ```text
-+--------------------------------------------------------+
-| brumm daemon  |  Rust / Tokio                          |
-| systemd background service                             |
-|                                                        |
-| Apple Music / Tidal / Spotify / library / queue / sign-in / options |
-+--+-----------------------------------------------------+
-   |
-   +-- playback --> Chrome / Widevine
-   |                MusicKit JS / Tidal Web SDK / Web Audio
-   |
-   +-- MPRIS -----> Omarchy bar widget
-   |
-   +-- socket ----> brumm --tui
-   |                Rust / Ratatui / Crossterm
-   |
-   +-- socket ----> brumm --gui
-                    Qt Quick / QML / C++ / GLSL
-                    Rust: cover colors / visualizer analysis
+brumm/
+├── crates/
+│   ├── brumm/                 # Rust application
+│   │   ├── src/
+│   │   │   ├── daemon/        # Background service, sessions, library and queue
+│   │   │   ├── provider/      # Service APIs, authentication and data mapping
+│   │   │   │   ├── apple/     # Apple Music
+│   │   │   │   ├── tidal/     # Tidal
+│   │   │   │   └── spotify/   # Spotify
+│   │   │   ├── engine/        # Browser playback and Chrome DevTools bridge
+│   │   │   ├── chrome/        # Private Chrome download and verification
+│   │   │   ├── tui/           # Terminal UI, input, navigation and visualizers
+│   │   │   ├── art/           # Cover rendering for the terminal
+│   │   │   ├── update/        # Installation, updates and signature checks
+│   │   │   ├── ipc.rs         # Local socket protocol
+│   │   │   ├── config.rs      # Configuration and shared options
+│   │   │   ├── music.rs       # Shared music data types
+│   │   │   ├── mpris.rs       # Desktop media controls
+│   │   │   └── main.rs        # CLI entry point
+│   │   └── tests/             # Daemon integration tests
+│   └── brumm-shared/          # Shared Rust calculations and C interface
+│       └── src/               # Cover colors and audio analysis
+├── gui/
+│   ├── qml/                  # GUI screens, controls and navigation
+│   │   └── viz/              # Visualizer styles and feedback textures
+│   ├── shaders/              # GLSL effects for the GUI and visualizers
+│   ├── src/                  # C++ Qt host, daemon bridge and frame clock
+│   └── tests/                # QML navigation and layout tests
+├── web/
+│   ├── tidal/                # Source and tests for the Tidal Web SDK adapter
+│   └── spotify/              # Tests for the Spotify playback adapter
+├── tools/
+│   ├── demo-services         # Start the fake music-service demo
+│   ├── fakedaemon/           # Sample music, covers and simulated service APIs
+│   ├── devtoken/             # Apple Music developer-token generator
+│   └── sign/                 # Release signing tools
+├── bin/                      # Build, install, preview and benchmark scripts
+├── omarchy/
+│   ├── plugin/               # Bar widget and plugin manifest
+│   ├── brumm.service         # systemd user service
+│   └── brumm.desktop         # Desktop launcher
+├── docs/                     # Provider guides, screenshots and release notes
+├── benchmarks/               # Saved benchmark data
+├── .github/                  # CI, release workflows and repository rules
+├── Cargo.toml                # Rust workspace and build settings
+└── go.mod                    # Go development-tool dependencies
 ```
 
-CPU, share of one core (median of three 8-second fixture runs;
-terminal visualizer at 30 fps, window paced at 60 Hz):
+### Build and run
 
-| | paused | playing | visualizer |
-|---|---|---|---|
-| terminal, before (Go) | 1.25 % | 2.75 % | 7.49 % |
-| terminal, now (Rust) | 0.25 % | 1.00 % | 1.87 % |
-| window, before | 0 % | 5.12 % | 4.62 % |
-| window, now | 0 % | 4.37 % | 4.24 % |
+Building needs Rust 1.89 or newer, a C++ compiler and Qt 6, including Qt Quick,
+Quick Controls and Shader Tools. Video previews also need Qt Multimedia.
+Go is needed for the demo and signing tools, Python 3 for the live preview,
+and Node.js/npm when rebuilding the Tidal Web SDK adapter.
 
-The terminal used 64% less CPU while playing and 75% less with its
-visualizer. The window's ranges overlap; these runs show no clear gain.
+```sh
+bin/setup        # build and install this checkout
+bin/dev          # run the daemon in the foreground
+bin/dev ui       # open the TUI against the daemon
+bin/dev gui      # build and open the GUI against the daemon
+bin/build-tidal  # rebuild the bundled adapter after changing web/tidal
+```
 
-The terminal writes only the cells that changed; the window hands its drawing to the GPU. These process measurements exclude the terminal emulator, Chrome and GPU work.
+`bin/setup` installs the application and desktop integration. `bin/dev` stops
+an installed brumm user service before starting the development daemon.
 
-The [Rust migration measurements](benchmarks/rust-migration/comparison.json)
-include the Go baseline, Rust results and ranges for CPU, RSS, startup and
-local control latency. [bin/bench-compare](bin/bench-compare) compares built
-binaries with the same fixture and isolated configuration; it never uses
-the installed music session. TUI RSS fell from 33–39 MiB to 15–16 MiB;
-the daemon without playback fell from 22 MiB to 7.5 MiB. Apple Music
-search, DRM playback, seeking, pause/resume and the queue were also
-verified with a real account in an isolated session.
+### Preview and demo
+
+```sh
+tools/demo-services            # first start with fake Apple Music, Tidal and Spotify
+tools/demo-services connected  # all three services already connected
+bin/preview                    # isolated player using the existing real account
+bin/gui-shot out.png           # screenshot with sample data
+bin/viz-thumbs                  # regenerate visualizer thumbnails
+```
+
+The service demo needs no account and plays no audio. Its connections and
+changes stay in memory; each run starts fresh. See the
+[demo instructions](tools/fakedaemon/README.md) for individual services.
+`bin/preview` uses private configuration and caches, but playback and actions
+in that preview use the real account.
+
+### Checks
+
+```sh
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+go test ./tools/fakedaemon
+node --test web/tidal/player.test.mjs web/spotify/player.test.mjs
+QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input gui/tests
+```
 
 Inspired by [vibez](https://github.com/simonepelosi/vibez).
