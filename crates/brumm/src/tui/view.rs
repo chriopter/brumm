@@ -152,7 +152,11 @@ impl Model {
         for (y, l) in lines.iter().enumerate() {
             put(buf, 0, y as i64, l);
         }
-        let boxed = if self.state.status == crate::ipc::STATUS_CHOOSE_PROVIDER {
+        let boxed = if self.state.auth.as_ref().is_some_and(|p| p.code.is_some()) {
+            Some(self.auth_box())
+        } else if self.provider_picker_open
+            || self.state.status == crate::ipc::STATUS_CHOOSE_PROVIDER
+        {
             Some(self.provider_box())
         } else if self.feature_form.is_some() {
             Some(self.feature_box())
@@ -678,7 +682,7 @@ impl Model {
             let src = &self.state.player.source;
             let playing = it.key() == *src
                 || (it.kind == KIND_STATION && *src == format!("station:{}", it.id));
-            let mut d = self.rating_mark(&it.id);
+            let mut d = self.rating_mark_for(&it.kind, &it.id);
             if playing && !self.state.player.title.is_empty() {
                 d = cat(line(vec![sp("♪", self.acc.plays), sp(" ", PLAIN)]), d);
             }

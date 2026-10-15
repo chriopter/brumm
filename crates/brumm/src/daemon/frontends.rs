@@ -20,7 +20,7 @@ static OPTIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static PLACE: Mutex<Option<Value>> = Mutex::new(None);
 
 /// One provider selection at a time.
-static PROVIDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static PROVIDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// One sign-in page at a time.
 static LOGIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -46,22 +46,68 @@ impl Daemon {
         reply: &mut Message,
     ) -> Result<()> {
         let _one = PROVIDER.lock().await;
-        let mut cfg = crate::config::Config::load()?;
+        let cfg = crate::config::Config::load()?;
         if !id.is_empty() {
             crate::provider::registry::validate(id)?;
-            let changed = cfg.provider != id;
-            cfg.provider = id.into();
-            if changed {
-                cfg.save()?;
-                self.broadcast(Message {
-                    provider: Some(crate::provider::registry::selection(&cfg)),
-                    ..Default::default()
-                })
-                .await;
-                self.spawn_boot();
+            if id != cfg.effective_provider() {
+                self.cancel_login().await;
+                let _exclusive = self.session.advance().await;
+                crate::config::Config::update(|cfg| {
+                    cfg.provider = id.into();
+                    Ok(())
+                })?;
+                self.install_session().await?;
             }
         }
-        reply.provider = Some(crate::provider::registry::selection(&cfg));
+        reply.provider = Some(self.provider_selection(&crate::config::Config::load()?));
+        Ok(())
+    }
+
+    /// Called under the transition write lease, after outgoing commands finish.
+    pub(super) async fn install_session(self: &Arc<Self>) -> Result<()> {
+        static PLACES: std::sync::LazyLock<
+            Mutex<std::collections::HashMap<std::path::PathBuf, Option<Value>>>,
+        > = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+        let old_key = self.library().directory();
+        let cfg = crate::config::Config::load()?;
+        let provider = crate::provider::registry::definition(cfg.effective_provider())?;
+        crate::config::migrate_session_cache()?;
+        let engine = self.replace_session(&cfg, provider.api(&cfg)?);
+        if let Some(engine) = engine {
+            engine.close().await;
+        }
+        {
+            let mut i = self.lock();
+            i.api = None;
+            i.booted = false;
+            i.booting = false;
+            i.boot_next = false;
+            i.refreshing = false;
+            i.refresh_next = false;
+            i.retry_at = None;
+            i.expires = None;
+            i.expires_in = 0;
+            i.state.status = crate::ipc::STATUS_STARTING.into();
+            i.state.auth = None;
+            i.state.player = crate::ipc::Player::default();
+            if let Some(resume) = i.resume.as_mut() {
+                resume.autoplay = false;
+            }
+        }
+        {
+            let mut places = PLACES.lock().unwrap();
+            let mut current = PLACE.lock().unwrap();
+            places.insert(old_key, current.take());
+            *current = places.get(&self.library().directory()).cloned().flatten();
+        }
+        let state = self.lock().state.clone();
+        self.broadcast(Message {
+            provider: Some(self.provider_selection(&cfg)),
+            state: Some(state),
+            ..Default::default()
+        })
+        .await;
+        self.spawn_boot();
         Ok(())
     }
 
@@ -114,6 +160,7 @@ impl Daemon {
         Fut: std::future::Future<Output = Result<()>> + Send + 'static,
     {
         let Ok(guard) = LOGIN.try_lock() else { return }; // the page is open already
+        let generation = self.session.current();
         let mut inner = self.lock();
         inner.login_serial += 1;
         let serial = inner.login_serial;
@@ -130,11 +177,16 @@ impl Daemon {
             if started.await.is_err() {
                 return;
             }
+            let mut changed = d.session.subscribe();
+            let Ok(lease) = d.session.read(generation).await else {
+                return;
+            };
             let auth = authenticate(report);
             tokio::pin!(auth);
             let result = loop {
                 tokio::select! {
                     result = &mut auth => break result,
+                    _ = changed.changed() => return,
                     Some(event) = received.recv() => {
                         let state = {
                             let mut i = d.lock();
@@ -160,7 +212,10 @@ impl Daemon {
                 i.login_task = None;
             }
             match result {
-                Ok(()) => d.reload().await,
+                Ok(()) => {
+                    drop(lease);
+                    d.reload_for(generation).await;
+                }
                 Err(e) => {
                     eprintln!("login: {e}");
                     // The players say what went wrong: the report carries it.

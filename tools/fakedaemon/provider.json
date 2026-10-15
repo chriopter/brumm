@@ -11,7 +11,7 @@
     {
       "id": "tidal",
       "name": "Tidal",
-      "available": false
+      "available": true
     }
   ],
   "navigation": [

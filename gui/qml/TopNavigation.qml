@@ -32,10 +32,19 @@ Item {
         anchors { left: parent.left; verticalCenter: parent.verticalCenter }
     }
 
+    MorphButton {
+        id: serviceSwitcher
+        anchors { left: menu.right; leftMargin: ui.px(10); verticalCenter: parent.verticalCenter }
+        icon: "󰎈"
+        label: nav.width > ui.px(700) ? store.providerName + " ▾" : ""
+        key: "ctrl+o"
+        onClicked: store.openProviderPicker()
+    }
+
     Flickable {
         id: viewport
         // Leave room inside the clipped viewport for RowLight's spill.
-        anchors { left: menu.right; leftMargin: -ui.px(2); right: searchBox.left; rightMargin: ui.px(8); top: parent.top; topMargin: -ui.px(14); bottom: parent.bottom; bottomMargin: -ui.px(14) }
+        anchors { left: serviceSwitcher.right; leftMargin: -ui.px(2); right: searchBox.left; rightMargin: ui.px(8); top: parent.top; topMargin: -ui.px(14); bottom: parent.bottom; bottomMargin: -ui.px(14) }
         contentWidth: tabs.width + ui.px(32)
         contentHeight: height
         flickableDirection: Flickable.HorizontalFlick
@@ -67,14 +76,14 @@ Item {
                     spacing: ui.px(7)
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: store.sectionIcons[tab.index]
+                        text: store.sectionIcons[tab.index] || ""
                         color: tab.active ? ui.bright : hover.hovered ? ui.fg : ui.dim
                         font { family: ui.mono; pixelSize: ui.px(18) }
                     }
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         text: tab.modelData
-                        visible: nav.namedTabs[tab.index]
+                        visible: !!nav.namedTabs[tab.index]
                         color: tab.active ? ui.bright : hover.hovered ? ui.fg : ui.dim
                         font { family: ui.sans; pixelSize: ui.px(15); weight: tab.active ? Font.DemiBold : Font.Normal }
                     }
@@ -130,7 +139,7 @@ Item {
         Text {
             id: lens
             anchors { left: parent.left; leftMargin: ui.px(10); verticalCenter: parent.verticalCenter }
-            text: store.sectionIcons[store.secSearch]
+            text: store.sectionIcons[store.secSearch] || ""
             color: store.section === store.secSearch ? ui.here : ui.dim
             font { family: ui.mono; pixelSize: ui.px(15) }
         }

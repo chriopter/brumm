@@ -20,13 +20,41 @@ TestCase {
         property bool omarchy: false
         property var options: ({})
         property var asked: []
+        property var favoriteMembership: ({})
+        property string selected: "apple"
+        property var configured: ({apple:true})
+        property int generation: 1
+        signal providerChanged(var info)
+        function info() {
+            return { protocolVersion:1, generation:generation, selected:selected,
+                navigation:selected ? appleNavigation : store.utilityNavigation(),
+                capabilities:selected ? appleCapabilities : {},
+                needsChoice:!selected, needsSetup:!configured.apple && !configured.tidal,
+                choices:[{id:"apple",name:"Apple Music",available:true,configured:!!configured.apple},
+                         {id:"tidal",name:"Tidal",available:true,configured:!!configured.tidal}] }
+        }
         signal state(var value)
         signal library()
-        function send(request) { asked.push(request) }
+        function send(request) {
+            asked.push(request)
+            if (request.cmd === "login") {
+                configured = Object.assign({}, configured, {[selected]:true}); generation++
+                providerChanged(info()); state({status:"ready"})
+            }
+        }
         function request(request, callback) {
             asked.push(request)
-            if (request.cmd === "provider")
-                callback("", { provider: { protocolVersion: 1, navigation: request.query ? appleNavigation : store.utilityNavigation(), capabilities: request.query ? appleCapabilities : {}, choices: [{ id: "apple", name: "Apple Music", available: true }, { id: "tidal", name: "Tidal", available: false }], selected: request.query || "", needsChoice: !request.query } })
+            if (request.cmd === "provider") {
+                if (request.query) { selected = request.query; generation++ }
+                callback("", {provider:info()})
+            } else if (request.cmd === "favorites") {
+                const states = {}
+                for (const ref of request.refs) states[ref.kind + ":" + ref.id] = favoriteMembership[ref.kind + ":" + ref.id] === true
+                callback("", {favorites:states})
+            } else if (request.cmd === "set-favorite") {
+                for (const ref of request.refs) favoriteMembership[ref.kind + ":" + ref.id] = request.saved
+                callback("", {})
+            }
             else if (request.cmd === "home")
                 callback("", { shelves: [{ title: "Recently played", route: "provider:recent", items: [{ kind: "album", id: "recent", name: "Recent", artwork: "cover" }] }] })
             else if (request.cmd === "explore")
@@ -39,10 +67,12 @@ TestCase {
     }
 
     Brumm.Store { id: store }
+    Component { id: freshStore; Brumm.Store {} }
 
     function initTestCase() {
         // Exercise the untouched Store before init configures an Apple session.
         verify(Array.isArray(store.stacks[0]))
+        fakeDaemon.selected = ""; fakeDaemon.configured = {}
         store.st = { status: "choose-provider" }
         store.askProviders()
         compare(store.selectedProvider, "")
@@ -53,7 +83,21 @@ TestCase {
         compare(store.cur().key, "home:")
     }
 
-    function init() { fakeDaemon.asked = []; store.st = { status: "starting" }; store.providerRequested = false; store.configureProvider({ selected: "apple", protocolVersion: 1, navigation: appleNavigation, capabilities: appleCapabilities }) }
+    function init() {
+        fakeDaemon.asked = []; fakeDaemon.selected = "apple"; fakeDaemon.configured = {apple:true}
+        store.st = {status:"starting"}; store.providerRequested = false
+        store.configureProvider(fakeDaemon.info())
+        store.setupMode = false; store.providerPickerOpen = false; store.connectingProvider = ""
+    }
+
+    function test_initialStacksAreArraysBeforeProviderReply() {
+        const fresh = freshStore.createObject(this)
+        verify(Array.isArray(fresh.stack()))
+        compare(fresh.stack().length, 1)
+        verify(!!fresh.cur())
+        verify(Array.isArray(fresh.cur().rows))
+        fresh.destroy()
+    }
 
     function test_exploreUsesProviderHandles() {
         store.section = store.secExplore
@@ -93,17 +137,24 @@ TestCase {
         compare(store.section, store.secAlbums)
         compare(store.cur().item.id, "resolved")
     }
-    function test_firstRunProviderChoice() {
-        store.st = { status: "choose-provider" }
-        store.askProviders()
-        compare(store.providers.length, 2)
-        store.providerKey("down")
-        compare(store.providerIndex, 0)
-        store.chooseProvider("tidal")
-        compare(fakeDaemon.asked.filter(r => r.query === "tidal").length, 0)
-        store.providerKey("enter")
-        const chosen = fakeDaemon.asked.find(r => r.cmd === "provider" && r.query === "apple")
-        verify(chosen !== undefined)
+    function test_firstRunCanConnectBothServices() {
+        fakeDaemon.selected = ""; fakeDaemon.configured = {}; fakeDaemon.generation++
+        store.configureProvider(fakeDaemon.info())
+        store.st = {status:"choose-provider"}
+        verify(store.needsSetup)
+        store.connectProvider("apple")
+        verify(store.providerChoiceNeeded)
+        compare(store.connectedProviders.length, 1)
+        store.connectProvider("tidal")
+        compare(store.connectedProviders.length, 2)
+        verify(fakeDaemon.configured.apple)
+        verify(fakeDaemon.configured.tidal)
+        store.finishServices()
+        verify(!store.providerChoiceNeeded)
+        store.openProviderPicker()
+        store.chooseProvider("apple", false)
+        compare(store.selectedProvider, "apple")
+        compare(store.connectedProviders.length, 2)
     }
 
     function test_navigationCanReorderRenameAndOmit() {
@@ -113,7 +164,7 @@ TestCase {
         entries.unshift(artists)
         store.section = store.secAlbums
         const place = store.here()
-        store.configureProvider({ selected: "apple", protocolVersion: 1, navigation: entries, capabilities: appleCapabilities })
+        store.configureProvider({ selected: "apple", generation:store.providerGeneration, protocolVersion: 1, navigation: entries, capabilities: appleCapabilities })
         compare(store.sectionNames[0], "My Artists")
         compare(store.navigation[store.section].id, "albums")
         compare(store.navigation.length, 8)
@@ -129,6 +180,12 @@ TestCase {
         store.ratePlaying(1)
         store.radioPlaying()
         store.libraryPlaying()
+        store.cur().rows = [{track:{id:"song",title:"Song"}}]
+        store.cur().sel = 0
+        store.spaceDown = true
+        store.hold()
+        store.togglePreview()
+        store.spaceDown = false
         compare(fakeDaemon.asked.length, 0)
     }
 
@@ -137,6 +194,41 @@ TestCase {
         store.configureProvider({ selected: "apple", protocolVersion: 99, navigation: appleNavigation })
         compare(store.navigation, before)
         verify(store.flash.includes("daemon and frontends"))
+    }
+
+    function test_newSessionClearsDataForTheSameProvider() {
+        store.configureProvider({selected:"apple", generation:1, protocolVersion:1, navigation:appleNavigation, capabilities:appleCapabilities})
+        store.st = {status:"ready", title:"Old session"}
+        store.recent = [{id:"old-track"}]
+        store.upNext = [{id:"old-next"}]
+        store.configureProvider({selected:"apple", generation:2, protocolVersion:1, navigation:appleNavigation, capabilities:appleCapabilities})
+        compare(store.st.title, undefined)
+        compare(store.recent.length, 0)
+        compare(store.upNext.length, 0)
+    }
+
+    function test_collectionPreferenceUsesDesiredStateAndOneAction() {
+        const caps = {favorites:true, favoriteKinds:["song","album","artist","playlist"], playlistWrite:true,
+            preference:{label:"Favorite",removeLabel:"Remove from My Collection",collectionEquivalent:true,removable:true}}
+        store.configureProvider({selected:"tidal",generation:4,protocolVersion:1,navigation:appleNavigation,capabilities:caps})
+        fakeDaemon.favoriteMembership = {}
+        fakeDaemon.asked = []
+        store.st = {status:"ready",id:"tidal-track",title:"Track"}
+        store.ratePlaying(1)
+        compare(store.favoriteMark("song","tidal-track"), true)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "set-favorite")[0].saved, true)
+        store.ratePlaying(1)
+        compare(store.favoriteMark("song","tidal-track"), false)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "set-favorite")[1].saved, false)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "rate" || r.cmd === "add").length, 0)
+    }
+
+    function test_providerPickerCanBeOpenedDuringPlayback() {
+        store.st = {status:"ready",playing:true}
+        store.openProviderPicker()
+        compare(store.providerChoiceNeeded,true)
+        store.providerKey("esc")
+        compare(store.providerPickerOpen,false)
     }
 
 }

@@ -140,17 +140,33 @@ fn page_html(developer_token: &str, user_token: &str, version: &str) -> String {
 const PAGE: &str = include_str!("../provider/apple/player.html");
 
 /// Serves html at path to requests addressed to host, nothing else.
-async fn serve_page(ln: TcpListener, host: String, path: String, html: Arc<String>) {
+async fn serve_page(
+    ln: TcpListener,
+    host: String,
+    path: String,
+    html: Arc<String>,
+    resources: crate::provider::session::PlaybackResources,
+) {
+    // Aborting the server drops the set and cancels every private SDK request.
+    let mut requests = tokio::task::JoinSet::new();
     loop {
-        let Ok((mut s, _)) = ln.accept().await else {
-            return;
+        let accepted = tokio::select! {
+            accepted = ln.accept() => accepted,
+            _ = requests.join_next(), if !requests.is_empty() => continue,
         };
-        let (host, path, html) = (host.clone(), path.clone(), html.clone());
-        tokio::spawn(async move {
-            let Some(r) = httpd::read_request(&mut s, 0).await else {
+        let Ok((mut s, _)) = accepted else { return };
+        if requests.len() >= 32 {
+            continue;
+        }
+        let (host, path, html, resources) =
+            (host.clone(), path.clone(), html.clone(), resources.clone());
+        requests.spawn(async move {
+            let Some(r) = httpd::read_request(&mut s, 128 << 10).await else {
                 return;
             };
-            if r.path != path || r.headers.get("host").map(String::as_str) != Some(host.as_str()) {
+            if r.target != r.path
+                || r.headers.get("host").map(String::as_str) != Some(host.as_str())
+            {
                 httpd::respond(
                     &mut s,
                     404,
@@ -165,7 +181,97 @@ async fn serve_page(ln: TcpListener, host: String, path: String, html: Arc<Strin
                 ("Cache-Control", "no-store"),
                 ("Referrer-Policy", "no-referrer"),
             ];
-            httpd::respond(&mut s, 200, &headers, html.as_bytes()).await;
+            if r.path == path && r.method == "GET" {
+                httpd::respond(&mut s, 200, &headers, html.as_bytes()).await;
+                return;
+            }
+            let Some(route) = r.path.strip_prefix(&format!("{path}/")) else {
+                httpd::respond(&mut s, 404, &headers, b"not found").await;
+                return;
+            };
+            if r.method == "GET"
+                && let Some(asset) = resources.assets.iter().find(|asset| asset.name == route)
+            {
+                httpd::respond(
+                    &mut s,
+                    200,
+                    &[("Content-Type", asset.content_type), headers[1], headers[2]],
+                    asset.body,
+                )
+                .await;
+                return;
+            }
+            if let Some(bridge) = resources.bridge {
+                if r.method == "GET"
+                    && let Some(target) = route.strip_prefix("media/")
+                {
+                    let same_origin = r
+                        .headers
+                        .get("origin")
+                        .is_none_or(|origin| origin == &format!("http://{host}"))
+                        && r.headers.get("sec-fetch-site").map(String::as_str)
+                            == Some("same-origin");
+                    if !same_origin {
+                        httpd::respond(&mut s, 403, &headers[1..], b"forbidden").await;
+                        return;
+                    }
+                    match bridge
+                        .media(target, r.headers.get("range").map(String::as_str))
+                        .await
+                    {
+                        Ok(media) => {
+                            let mut response_headers = vec![
+                                ("Content-Type", media.content_type.as_str()),
+                                headers[1],
+                                headers[2],
+                                ("Accept-Ranges", "bytes"),
+                            ];
+                            if let Some(range) = &media.content_range {
+                                response_headers.push(("Content-Range", range));
+                            }
+                            httpd::respond(&mut s, media.status, &response_headers, &media.body)
+                                .await;
+                        }
+                        Err(_) => {
+                            httpd::respond(&mut s, 502, &headers[1..], b"media delivery failed")
+                                .await
+                        }
+                    }
+                    return;
+                }
+                if r.method != "POST"
+                    || r.headers.get("origin") != Some(&format!("http://{host}"))
+                    || r.headers
+                        .get("content-type")
+                        .map(|s| s.split(';').next().unwrap_or("").trim())
+                        != Some("application/json")
+                {
+                    httpd::respond(&mut s, 403, &headers[1..], b"forbidden").await;
+                    return;
+                }
+                let Ok(body) = serde_json::from_slice(&r.body) else {
+                    httpd::respond(&mut s, 400, &headers[1..], b"invalid JSON").await;
+                    return;
+                };
+                let (code, body) = match bridge.request(route, body).await {
+                    Ok(value) => (200, serde_json::to_vec(&value).unwrap_or_default()),
+                    Err(Error::Unauthorized) => (401, b"{}".to_vec()),
+                    Err(Error::Unsupported) => (404, b"{}".to_vec()),
+                    Err(error) => (
+                        502,
+                        serde_json::to_vec(&json!({"error":error.to_string()})).unwrap_or_default(),
+                    ),
+                };
+                httpd::respond(
+                    &mut s,
+                    code,
+                    &[("Content-Type", "application/json"), headers[1], headers[2]],
+                    &body,
+                )
+                .await;
+                return;
+            }
+            httpd::respond(&mut s, 404, &headers[1..], b"not found").await;
         });
     }
 }
@@ -174,14 +280,22 @@ impl Engine {
     /// Launches Chrome on the playback page. Chrome dies with the daemon
     /// (PR_SET_PDEATHSIG), so a killed daemon leaves no orphaned browser.
     pub async fn start(page: crate::provider::session::PlaybackPage) -> Result<Arc<Engine>> {
-        let html = Arc::new(page.html);
+        let resources = page.resources;
+        let raw_html = page.html;
         let ln = TcpListener::bind("127.0.0.1:0").await?;
         // The page carries private provider credentials. It is served only
         // at an unguessable path and only to requests addressed to this
         // loopback port, so other local users cannot read it.
         let page_path = format!("/{}", random_hex(16));
         let host = ln.local_addr()?.to_string();
-        let server = tokio::spawn(serve_page(ln, host.clone(), page_path.clone(), html));
+        let html = Arc::new(raw_html.replace("__BRUMM_SCRIPT__", &format!("{page_path}/sdk.js")));
+        let server = tokio::spawn(serve_page(
+            ln,
+            host.clone(),
+            page_path.clone(),
+            html,
+            resources,
+        ));
 
         let profile = match private_temp_dir(&profile_root(), "brumm-chrome-") {
             Ok(p) => p,
@@ -505,10 +619,13 @@ impl Engine {
 
     pub async fn queue(&self, n: i64) -> Result<Queue> {
         let v = self
-            .eval(&format!(
-                r#"window.brumm && brumm.queue ? brumm.queue({n}) : "{{}}""#
-            ))
-            .await?;
+            .eval_wait(
+                &format!(r#"window.brumm && brumm.queue ? brumm.queue({n}) : "{{}}""#),
+                Duration::from_secs(30),
+                true,
+            )
+            .await
+            .map_err(|e| err(e.to_string()))?;
         Ok(serde_json::from_str(v.as_str().unwrap_or("{}"))?)
     }
 
@@ -676,6 +793,7 @@ mod tests {
             host.clone(),
             "/secret".into(),
             Arc::new("<html>".into()),
+            Default::default(),
         ));
         let get = |path: &str, h: &str| {
             let (host, path, h) = (host.clone(), path.to_string(), h.to_string());
@@ -702,5 +820,123 @@ mod tests {
                 .starts_with("HTTP/1.1 404"),
             "a rebinding host got the page"
         );
+    }
+    struct BridgeFixture {
+        started: Arc<tokio::sync::Notify>,
+        dropped: Arc<tokio::sync::Notify>,
+    }
+    impl crate::provider::session::PlaybackBridge for BridgeFixture {
+        fn media<'a>(
+            &'a self,
+            target: &'a str,
+            range: Option<&'a str>,
+        ) -> crate::provider::Reply<'a, Result<crate::provider::session::PlaybackMedia>> {
+            Box::pin(async move {
+                assert_eq!(target, "fixture");
+                assert_eq!(range, Some("bytes=0-1"));
+                Ok(crate::provider::session::PlaybackMedia {
+                    status: 206,
+                    content_type: "audio/mp4".into(),
+                    content_range: Some("bytes 0-1/100".into()),
+                    body: b"ab".to_vec(),
+                })
+            })
+        }
+        fn request<'a>(
+            &'a self,
+            route: &'a str,
+            _body: Value,
+        ) -> crate::provider::Reply<'a, Result<Value>> {
+            Box::pin(async move {
+                if route == "credentials" {
+                    return Ok(json!({"token":"fictional-sdk-token"}));
+                }
+                if route == "wait" {
+                    struct Cancelled(Arc<tokio::sync::Notify>);
+                    impl Drop for Cancelled {
+                        fn drop(&mut self) {
+                            self.0.notify_one();
+                        }
+                    }
+                    let _cancelled = Cancelled(self.dropped.clone());
+                    self.started.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                Err(Error::Unsupported)
+            })
+        }
+    }
+    #[tokio::test]
+    async fn private_sdk_bridge_requires_same_origin_and_closes_inflight_requests() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let ln = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = ln.local_addr().unwrap().to_string();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(tokio::sync::Notify::new());
+        let server = tokio::spawn(serve_page(
+            ln,
+            host.clone(),
+            "/private".into(),
+            Arc::new("page".into()),
+            crate::provider::session::PlaybackResources {
+                bridge: Some(Arc::new(BridgeFixture {
+                    started: started.clone(),
+                    dropped: dropped.clone(),
+                })),
+                ..Default::default()
+            },
+        ));
+        let post = |origin: String, route: String| {
+            let host = host.clone();
+            async move {
+                for (site, origin, expected) in [
+                    ("cross-site", "", 403),
+                    ("same-origin", "Origin: https://evil.example\r\n", 403),
+                    ("same-origin", "", 206),
+                ] {
+                    let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
+                    stream.write_all(format!("GET /private/media/fixture HTTP/1.1\r\nHost: {host}\r\nSec-Fetch-Site: {site}\r\n{origin}Range: bytes=0-1\r\n\r\n").as_bytes()).await.unwrap();
+                    let mut response = String::new();
+                    stream.read_to_string(&mut response).await.unwrap();
+                    assert!(response.starts_with(&format!("HTTP/1.1 {expected}")));
+                    if expected == 206 {
+                        assert!(response.contains("Content-Range: bytes 0-1/100"));
+                        assert!(response.contains("no-store"));
+                        assert!(response.ends_with("ab"));
+                    }
+                }
+                let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
+                stream.write_all(format!("POST /private/{route} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}").as_bytes()).await.unwrap();
+                let mut response = String::new();
+                stream.read_to_string(&mut response).await.unwrap();
+                response
+            }
+        };
+        assert!(
+            post("https://evil.example".into(), "credentials".into())
+                .await
+                .starts_with("HTTP/1.1 403")
+        );
+        let response = post(format!("http://{host}"), "credentials".into()).await;
+        assert!(
+            response.starts_with("HTTP/1.1 200")
+                && response.contains("fictional-sdk-token")
+                && response.contains("no-store")
+        );
+        assert!(
+            post(format!("http://{host}"), "arbitrary-url".into())
+                .await
+                .starts_with("HTTP/1.1 404")
+        );
+        let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
+        stream.write_all(format!("POST /private/wait HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}").as_bytes()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        server.abort();
+        let _ = server.await;
+        tokio::time::timeout(Duration::from_secs(2), dropped.notified())
+            .await
+            .unwrap();
     }
 }

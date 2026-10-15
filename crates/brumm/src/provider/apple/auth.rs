@@ -21,7 +21,10 @@ use crate::httpd;
 const PAGE: &str = include_str!("login.html");
 
 /// A fixed port keeps the page's origin stable between logins.
+#[cfg(not(test))]
 const ADDR: &str = "127.0.0.1:7777";
+#[cfg(test)]
+const ADDR: &str = "127.0.0.1:0";
 
 /// The page, with the developer token as a JavaScript string.
 fn page(developer_token: &str) -> String {
@@ -94,7 +97,7 @@ async fn answer(
 /// Opens the login page and waits until a token arrives (five minutes at
 /// most). The token is saved to the config.
 pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
-    let mut cfg = Config::load()?;
+    let cfg = Config::load()?;
     let status = |text: &str| report(crate::provider::session::AuthEvent::Progress(text.into()));
     if cfg.developer().is_empty() {
         return Err(err("no Apple Music developer token in this build"));
@@ -105,7 +108,7 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
     // A secret per login: the page lives at /<secret>/ and posts the token
     // back under it. The origin must be this page's.
     let secret = random_hex(16);
-    let origin = format!("http://{ADDR}");
+    let origin = format!("http://{}", ln.local_addr()?);
     let html = page(cfg.developer());
     let (tx, mut rx) = mpsc::channel::<String>(1);
     let server = {
@@ -154,12 +157,13 @@ pub async fn run(report: crate::provider::session::AuthReporter) -> Result<()> {
     match got {
         Some(tok) => {
             // Retain options/configuration changed while the browser was open.
-            cfg = Config::load()?;
-            if cfg.effective_provider() != "apple" {
-                return Err(err("provider changed during sign-in"));
-            }
-            cfg.user_token = tok;
-            cfg.save()
+            Config::update(|cfg| {
+                if cfg.effective_provider() != "apple" {
+                    return Err(err("provider changed during sign-in"));
+                }
+                cfg.user_token = tok;
+                Ok(())
+            })
         }
         _ => Err(err("login timed out")),
     }
@@ -188,12 +192,14 @@ mod tests {
                 let _ = tx.try_send(prompt);
             }
         })));
-        tokio::select! {
+        let prompt = tokio::select! {
             result = &mut login => panic!("login finished before cancellation: {result:?}"),
-            prompt = rx.recv() => assert!(prompt.is_some()),
-        }
+            prompt = rx.recv() => prompt.unwrap(),
+        };
+        let url = url::Url::parse(&prompt.url).unwrap();
+        let address = format!("127.0.0.1:{}", url.port().unwrap());
         drop(login);
-        let listener = TcpListener::bind(ADDR)
+        let listener = TcpListener::bind(&address)
             .await
             .expect("cancelled login kept its port");
         drop(listener);
@@ -223,12 +229,14 @@ mod tests {
             .unwrap();
         assert_eq!(prompt.kind, "browser");
         assert!(prompt.code.is_none());
+        let url = url::Url::parse(&prompt.url).unwrap();
+        let address = format!("127.0.0.1:{}", url.port().unwrap());
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
         // Abort-on-drop must complete before another login can bind the same port.
         let listener = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let Ok(listener) = TcpListener::bind(ADDR).await {
+                if let Ok(listener) = TcpListener::bind(&address).await {
                     break listener;
                 }
                 tokio::task::yield_now().await;

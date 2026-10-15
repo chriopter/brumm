@@ -177,6 +177,7 @@ impl Model {
     /// The top bar's rows only where omarchy can switch them.
     pub fn opt_shown(&self, i: usize) -> bool {
         match i {
+            OPT_AUTOPLAY => self.capabilities.autoplay,
             OPT_BAR => self.has_omarchy,
             OPT_MUSIC_KEYS => self.has_omarchy && crate::update::can_music_keys(),
             _ => true,
@@ -196,7 +197,7 @@ impl Model {
     /// Keeps the options: the daemon saves them and tells every player;
     /// without one they go to the file here.
     pub fn save_options(&mut self) {
-        let Some(c) = self.client.clone() else {
+        let Some(c) = self.client.as_ref().map(|c| c.for_session()) else {
             let _ = self.opts.o.save();
             return;
         };
@@ -254,6 +255,7 @@ impl Model {
     /// menu.
     pub fn options_key(&mut self, k: &str) {
         match k {
+            "ctrl+o" => self.open_provider_picker(),
             "up" | "k" | "shift+tab" => self.step_option(-1),
             "down" | "j" | "tab" => self.step_option(1),
             "space" | " " | "enter" => self.change_option(self.opt_sel, 1),
@@ -278,7 +280,11 @@ impl Model {
         }
         self.opts.o.start = launch::GUI.into();
         self.set_flash("opening the gui…");
-        let (client, o, here) = (self.client.clone(), self.opts.o.clone(), self.here());
+        let (client, o, here) = (
+            self.client.as_ref().map(|c| c.for_session()),
+            self.opts.o.clone(),
+            self.here(),
+        );
         self.task(async move {
             super::place::leave_place(client.as_ref(), &here).await; // the window opens where this was
             match &client {
@@ -385,7 +391,7 @@ impl Model {
             sp("space", KEY),
             sp(" change   ", DIM),
             sp("esc", KEY),
-            sp(" close", DIM),
+            sp(" close   ctrl+o provider", DIM),
         ]);
         let mut wd = w(&keys) as i64;
         for (i, v) in values.iter().enumerate() {

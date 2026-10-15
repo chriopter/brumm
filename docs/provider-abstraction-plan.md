@@ -2,8 +2,15 @@
 
 Status: implementation roadmap, updated 2026-10-14. Phase 0 is complete and
 the Apple portion of phase 1 is implemented on branch `apple-provider-refactor`.
-Tidal support and provider switching are future phases; this document does not
-claim those are complete.
+On `tidal-provider`, shared switching and a Tidal implementation now exist;
+`providers.md` records fixture evidence and outstanding live checks. This roadmap
+retains the sequence and does not claim live subscription playback is verified.
+
+The accepted Tidal decisions, endpoint access tiers, remaining shared-contract
+work and implementation sequence are in
+[`tidal-provider-spec.md`](tidal-provider-spec.md). Read both documents after
+resuming work; the Tidal specification supersedes the earlier tentative menu
+mapping and authentication alternatives.
 
 Baseline: author commit `cde360165a239c3f6d9c19189b42f15f9cc49980`
 (“Separate Rust music providers and add first-run selection”).
@@ -125,23 +132,24 @@ Both frontends build navigation stacks from these entries. Selecting a page
 sends its opaque route to the daemon. Neither frontend constructs service API
 URLs or infers behavior from an ID prefix.
 
-Apple describes its existing navigation first. Tidal then describes its own
-navigation through the same contract. The proposed Tidal arrangement below is
-input to the later mapping phase, not a constraint built into shared code:
+Apple describes its existing navigation first. Tidal describes its own navigation
+through the same contract. The user approved direct access to collection
+categories and Tidal-native Home/Explore organization:
 
-| Entry | Proposed contents |
+| Entry | Accepted contents |
 | --- | --- |
-| Home | Recently Played, My Daily Discovery |
-| Explore | My New Arrivals, Daily Mixes |
+| Home | Native personal surfaces, with endpoint access verified individually |
+| Explore | Native editorial/discovery surfaces, when accessible to this client |
 | Playlists | My Playlists |
 | Albums | My Albums |
 | Artists | My Artists |
-| Songs | My Songs |
+| Tracks | Favorite tracks; shared library destination remains `songs` |
 
-Tidal account-wide Recently Played remains an API investigation. A local Brumm
-history must be identified as local if used; it must not imply cross-device
-history. Owned and saved playlists, folders, freshness and pagination need an
-explicit mapping during that phase.
+Tidal account-wide Recently Played remains an API investigation. Your History
+contains most-listened mixes and must retain that meaning. Collection categories
+are directly accessible; My Mix can be linked from Home when there is no Collection
+landing page. Folders and advanced playlist edits are deferred. The specification
+records the precise destination and action mappings.
 
 ## 6. Shared primitives and capabilities
 
@@ -233,11 +241,12 @@ The shared auth surface reports a small state machine:
 states. Refresh occurs inside the provider session. An expired or revoked session
 returns to authentication without discarding the other provider's saved account.
 
-Apple retains its existing sign-in flow. Tidal supplies device linking for the
-current candidate, with registered-client PKCE as an optional path. The current
-prototype's compatibility client is not a registered Brumm application; its
-long-term authentication and playback suitability must be explicitly resolved
-and documented before claiming release readiness.
+Apple retains its existing sign-in flow. Tidal uses the working device-linking
+approach from Untidy and the preserved prototype. The user confirmed reuse of
+this approach; device login is settled for this implementation. Do not request
+a registered-client ID or redirect URI as a prerequisite. Record the compatibility
+client dependency and verify refresh, endpoint access and playback behavior as
+part of implementation and release evidence.
 
 The common authentication prompt supports browser approval and device linking.
 It provides public display data, expiry where applicable and cancellation. Each
@@ -306,7 +315,8 @@ library under the new provider's name.
 
 ### Phase 1: shared contracts, implemented by Apple
 
-- Introduce navigation, capabilities, auth progress and session generation types.
+- Introduce navigation, capabilities and auth progress types. Session generations
+  remain phase 2 work.
 - Extract the provider composition/auth/playback boundaries.
 - Describe Apple's existing navigation and behavior through those contracts.
 - Refactor both frontends to render entries and use stable IDs.
@@ -372,10 +382,13 @@ credentials, IDs, cached results or playback between sessions.
 ## 13. Questions to settle during implementation
 
 - Can Tidal expose account-wide Recently Played through a usable endpoint?
-- Does the chosen Tidal authentication client support the required playback and
-  account operations reliably enough for distribution?
-- Which favorite/collection operations are equivalent for each resource kind?
-- How should saved and owned playlists and folders appear in each provider?
+- Which native Home/Explore endpoints can the chosen device client access? The
+  inspected dynamic-page and feed endpoints are marked INTERNAL in the schema.
+- Does the playback SDK deliver full tracks for this client/account, and which
+  quality levels work on Linux?
+- Can favorite state and owned/favorited playlist lists be read and changed
+  reliably through the selected session? One positive collection action is the
+  approved Tidal mapping; advanced playlist edits/folders are deferred.
 - Which compatibility shim is needed for old saved navigation and GUI builds?
 
 These questions affect adapters and migration details. They should not force

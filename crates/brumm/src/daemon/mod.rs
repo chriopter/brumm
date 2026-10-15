@@ -9,6 +9,7 @@ mod playback;
 mod providers;
 mod resume;
 mod selfupdate;
+mod session;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -159,6 +160,7 @@ struct Inner {
 pub struct Daemon {
     version: String,
     mpris: OnceLock<mpris::Server>,
+    session: session::SessionGate,
     inner: Mutex<Inner>,
     /// True once the daemon is to stop.
     quit: tokio::sync::watch::Sender<bool>,
@@ -189,6 +191,7 @@ fn same(a: &Option<Arc<Engine>>, b: &Arc<Engine>) -> bool {
 pub async fn run(version: &str) -> Result<()> {
     let ln = listen().await?;
     engine::sweep_profiles(); // left behind by crashes
+    config::expire_session_files();
     config::migrate_session_cache()?;
     let cfg = Config::load()?;
     let authenticated = crate::provider::registry::definition(cfg.effective_provider())
@@ -293,6 +296,7 @@ impl Daemon {
         Daemon {
             version: version.to_string(),
             mpris: OnceLock::new(),
+            session: session::SessionGate::default(),
             inner: Mutex::new(Inner {
                 lib: Arc::new(lib),
                 state: State {
@@ -343,6 +347,15 @@ impl Daemon {
     /// Chrome is still being installed — then starts playback. Only one
     /// boot runs at a time.
     async fn boot(self: Arc<Self>) {
+        let generation = self.session.current();
+        self.boot_for(generation).await;
+    }
+
+    async fn boot_for(self: Arc<Self>, generation: i64) {
+        let mut changed = self.session.subscribe();
+        let Ok(_lease) = self.session.read(generation).await else {
+            return;
+        };
         {
             let mut i = self.lock();
             if i.booting {
@@ -352,7 +365,10 @@ impl Daemon {
             i.booting = true;
         }
         loop {
-            self.clone().boot_once().await;
+            tokio::select! {
+                _ = self.clone().boot_once() => {},
+                _ = changed.changed() => { self.lock().booting = false; return; }
+            }
             let mut i = self.lock();
             if !std::mem::take(&mut i.boot_next) {
                 i.booting = false;
@@ -412,10 +428,15 @@ impl Daemon {
             self.spawn_refresh();
         }
         let progress = {
+            let generation = self.session.current();
             let d = self.clone();
             move |m: &str| {
                 let (d, m) = (d.clone(), m.to_string());
-                tokio::spawn(async move { d.set_status(ipc::STATUS_STARTING, &m).await });
+                tokio::spawn(async move {
+                    if let Ok(_lease) = d.session.read(generation).await {
+                        d.set_status(ipc::STATUS_STARTING, &m).await;
+                    }
+                });
             }
         };
         if let Err(e) = chrome::ensure(progress).await {
@@ -498,13 +519,15 @@ impl Daemon {
 
     pub(super) fn spawn_boot(self: &Arc<Self>) {
         let d = self.clone();
-        let task: Task = Box::pin(async move { d.boot().await });
+        let generation = self.session.current();
+        let task: Task = Box::pin(async move { d.boot_for(generation).await });
         tokio::spawn(task);
     }
 
     fn spawn_refresh(self: &Arc<Self>) {
         let d = self.clone();
-        let task: Task = Box::pin(async move { d.refresh().await });
+        let generation = self.session.current();
+        let task: Task = Box::pin(async move { d.refresh_for(generation).await });
         tokio::spawn(task);
     }
 
@@ -527,7 +550,13 @@ impl Daemon {
             } else {
                 HEART_PAUSE
             };
-            let r = eng.watch(rev, heart).await;
+            let generation = self.session.current();
+            let mut changed = self.session.subscribe();
+            let Ok(_lease) = self.session.read(generation).await else {
+                return;
+            };
+            let r =
+                tokio::select! { r = eng.watch(rev, heart) => r, _ = changed.changed() => return };
             if !same(&self.lock().eng, &eng) {
                 return;
             }
@@ -629,7 +658,11 @@ impl Daemon {
                 _ = self.nudge.notified() => {}
                 _ = tokio::time::sleep(wait) => {}
             }
-            wait = self.step().await;
+            let generation = self.session.current();
+            let mut changed = self.session.subscribe();
+            if let Ok(_lease) = self.session.read(generation).await {
+                wait = tokio::select! { wait = self.step() => wait, _ = changed.changed() => IDLE_WAKE };
+            }
         }
     }
 
@@ -685,7 +718,7 @@ impl Daemon {
         } else if es.ready {
             (ipc::STATUS_READY, String::new())
         } else {
-            (ipc::STATUS_STARTING, "loading Apple Music".to_string())
+            (ipc::STATUS_STARTING, "loading music".to_string())
         };
         let (next, changed, started) = {
             let mut i = self.lock();
@@ -756,7 +789,12 @@ impl Daemon {
 
     /// Pushes to subscribers; spectrum frames only to those that want
     /// them. A player that cannot keep up is disconnected.
-    async fn broadcast(&self, m: Message) {
+    async fn broadcast(&self, mut m: Message) {
+        if m.generation == 0
+            && (m.state.is_some() || m.library || !m.spectrum.is_empty() || !m.wave.is_empty())
+        {
+            m.generation = self.session.current();
+        }
         let targets: Vec<Arc<ConnOut>> = {
             let i = self.lock();
             i.conns
@@ -808,9 +846,12 @@ impl Daemon {
             if !matches!(got, Ok(true)) {
                 break;
             }
-            let Ok(req) = serde_json::from_slice::<Request>(&line) else {
+            let Ok(mut req) = serde_json::from_slice::<Request>(&line) else {
                 continue;
             };
+            if req.generation == 0 {
+                req.generation = self.session.current();
+            }
             // Requests may be slow (network); answer them side by side so a
             // search does not hold up a pause.
             let Ok(permit) = busy.clone().acquire_owned().await else {
@@ -835,6 +876,29 @@ impl Daemon {
     }
 
     async fn handle(self: &Arc<Self>, conn: u64, r: &Request, reply: &mut Message) -> Result<()> {
+        let generation = if r.generation == 0 {
+            self.session.current()
+        } else {
+            r.generation
+        };
+        let _lease = if ipc::session_free(&r.cmd) {
+            None
+        } else {
+            Some(self.session.read(generation).await?)
+        };
+        if !ipc::session_free(&r.cmd) {
+            reply.generation = generation;
+        }
+        self.dispatch(conn, r, reply).await
+    }
+
+    fn provider_selection(&self, cfg: &Config) -> crate::provider::registry::Selection {
+        let mut selection = crate::provider::registry::selection(cfg);
+        selection.generation = self.session.current();
+        selection
+    }
+
+    async fn dispatch(self: &Arc<Self>, conn: u64, r: &Request, reply: &mut Message) -> Result<()> {
         if r.protocol_version != 0 && r.protocol_version != ipc::PROTOCOL_VERSION {
             return Err(err(
                 "unsupported socket protocol; update Brumm's daemon and frontends together",
@@ -853,6 +917,7 @@ impl Daemon {
         }
         match r.cmd.as_str() {
             ipc::CMD_SUBSCRIBE => {
+                let _snapshot = self.session.snapshot().await;
                 let st = {
                     let mut i = self.lock();
                     if let Some(c) = i.conns.get_mut(&conn) {
@@ -869,7 +934,7 @@ impl Daemon {
                 };
                 self.poke();
                 reply.state = Some(st);
-                reply.provider = Some(crate::provider::registry::selection(&Config::load()?));
+                reply.provider = Some(self.provider_selection(&Config::load()?));
                 return Ok(());
             }
             ipc::CMD_CANCEL_LOGIN => {
@@ -893,6 +958,24 @@ impl Daemon {
                 self.spawn_refresh();
                 return Ok(());
             }
+            ipc::CMD_FAVORITES => {
+                let api = self.client()?;
+                reply.favorites = self.auth_check(&api, api.favorites(&r.refs).await).await?;
+                return Ok(());
+            }
+            ipc::CMD_SET_FAVORITE => {
+                let saved = r
+                    .saved
+                    .ok_or_else(|| err("set-favorite: desired state is required"))?;
+                if r.refs.is_empty() {
+                    return Err(err("set-favorite: nothing named"));
+                }
+                let api = self.client()?;
+                self.auth_check(&api, api.set_favorite(&r.refs, saved).await)
+                    .await?;
+                self.spawn_refresh();
+                return Ok(());
+            }
             ipc::CMD_CREATE => {
                 let api = self.client()?;
                 let it = self
@@ -912,7 +995,13 @@ impl Daemon {
                 return Ok(());
             }
             ipc::CMD_STATION => return self.station(r, reply).await,
-            ipc::CMD_PLAYLIST => return self.add_to_playlist(r, reply).await,
+            ipc::CMD_PLAYLIST => {
+                let result = self.add_to_playlist(r, reply).await;
+                if result.is_err() {
+                    self.spawn_refresh();
+                }
+                return result;
+            }
             ipc::CMD_ALBUM => {
                 let api = self.client()?;
                 reply.items = vec![self.auth_check(&api, api.album_of(&r.start).await).await?];
@@ -935,9 +1024,10 @@ impl Daemon {
                 self.auth_check(&api, api.add_to_library(&r.list, &r.ids).await)
                     .await?;
                 let d = self.clone();
+                let generation = self.session.current();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(5)).await; // Apple adds in the background
-                    d.refresh().await;
+                    d.refresh_for(generation).await;
                 });
                 return Ok(());
             }
@@ -1265,9 +1355,10 @@ impl Daemon {
                 .await?;
         }
         let d = self.clone();
+        let generation = self.session.current();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(3)).await; // Apple saves in the background
-            d.refresh().await;
+            d.refresh_for(generation).await;
         });
         Ok(())
     }
@@ -1312,45 +1403,40 @@ impl Daemon {
     /// Picks up a fresh login: hot-swaps the token into a running page, or
     /// starts the player if it never ran.
     async fn reload(self: Arc<Self>) {
-        let cfg = match Config::load() {
-            Ok(c)
-                if crate::provider::registry::definition(c.effective_provider())
-                    .is_ok_and(|p| p.signed_in(&c)) =>
-            {
-                c
-            }
-            _ => return,
-        };
-        let api = match new_api(&cfg) {
-            Ok(api) => api,
-            Err(e) => {
-                self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
-                return;
-            }
-        };
-        if let Err(e) = config::migrate_session_cache() {
-            self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
+        let generation = self.session.current();
+        self.reload_for(generation).await;
+    }
+
+    async fn reload_for(self: Arc<Self>, generation: i64) {
+        let _one = frontends::PROVIDER.lock().await;
+        if self.session.current() != generation {
             return;
         }
-        let old = self.replace_session(&cfg, api);
-        if let Some(old) = old {
-            old.close().await;
-        }
-        let eng = self.engine();
-        let page = crate::provider::registry::definition(cfg.effective_provider())
-            .and_then(|p| p.playback(&cfg, &self.version));
-        if let (Some(eng), Ok(page)) = (eng, page)
-            && eng.refresh_session(page).await.is_ok()
+        let _exclusive = self.session.advance().await;
+        if let Ok(cfg) = Config::load()
+            && config::session_cache_dir_for(&cfg) == self.library().directory()
+            && let Some(engine) = self.engine()
+            && let Ok(provider) = crate::provider::registry::definition(cfg.effective_provider())
+            && provider.signed_in(&cfg)
+            && let (Ok(api), Ok(page)) =
+                (provider.api(&cfg), provider.playback(&cfg, &self.version))
+            && engine.refresh_session(page).await.is_ok()
         {
+            self.replace_session(&cfg, api);
+            let state = self.lock().state.clone();
+            self.broadcast(Message {
+                provider: Some(self.provider_selection(&cfg)),
+                state: Some(state),
+                ..Default::default()
+            })
+            .await;
+            self.spawn_watch(engine);
             self.spawn_refresh();
             return;
         }
-        {
-            let mut i = self.lock();
-            i.booted = false; // a new sign-in: load the library again
-            i.retry_at = None;
+        if let Err(e) = self.install_session().await {
+            self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
         }
-        self.boot().await;
     }
 
     /// Keep live, possibly unsaved data for the same namespace. A different
@@ -1384,7 +1470,11 @@ impl Daemon {
 
     /// Re-reads the library from Apple Music — the lists first, then every
     /// playlist's tracks — saving and telling players after each step.
-    async fn refresh(self: Arc<Self>) {
+    async fn refresh_for(self: Arc<Self>, generation: i64) {
+        let mut changed = self.session.subscribe();
+        let Ok(_lease) = self.session.read(generation).await else {
+            return;
+        };
         let api = {
             let mut i = self.lock();
             if i.refreshing {
@@ -1395,7 +1485,7 @@ impl Daemon {
             i.refreshing = true;
             api
         };
-        self.refresh_with(&api).await;
+        tokio::select! { _ = self.refresh_with(&api) => {}, _ = changed.changed() => {} }
         let again = {
             let mut i = self.lock();
             let again = i.refresh_next;

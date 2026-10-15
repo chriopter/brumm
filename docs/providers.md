@@ -2,9 +2,10 @@
 
 Brumm keeps the existing Rust core, Unix socket, Qt frontend, terminal
 frontend, and shared player. Provider implementations are built in and run
-inside the daemon. The current branch makes Apple Music use the provider
-contract end to end; Tidal remains unavailable pending its own authentication,
-API, and playback implementation.
+inside the daemon. Apple Music and Tidal use the provider
+contract end to end. Tidal is selectable on this development branch. Live
+sign-in, browsing and full-track playback state pass. Audible full-track
+playback passed on a live desktop session.
 
 ## Boundaries in this branch
 
@@ -13,6 +14,12 @@ crates/brumm/src/
 ├── provider/
 │   ├── session.rs          Provider definition, navigation and capabilities
 │   ├── registry.rs         Built-in choices and selection payload
+│   ├── tidal/
+│   │   ├── session.rs      Definition, private SDK bridge and account identity
+│   │   ├── auth.rs         Device login and serialized token refresh
+│   │   ├── mod.rs          Catalog, collections and explicit preference writes
+│   │   ├── features.rs     Native pages and independently loaded mix fallback
+│   │   └── player.html     Bundled official Web SDK adapter
 │   └── apple/
 │       ├── session.rs      Apple provider definition and playback page
 │       ├── auth.rs         Apple sign-in flow
@@ -41,7 +48,7 @@ Apple ID prefixes.
 
 The socket remains the GUI/TUI-to-daemon boundary. Provider implementations do
 not expose another socket. The provider selection response includes a protocol
-version, navigation, capabilities, and the existing provider choices. Unknown
+version, session generation, navigation, capabilities, and provider choices. Unknown
 or incompatible protocol versions produce a visible error. Apple keeps its
 legacy Home command while other typed destinations use shared browse commands.
 
@@ -64,8 +71,7 @@ Cache files use a provider and account-derived namespace. Legacy Apple library
 and resume files migrate once into the first namespace and remain in place for
 rollback. The current Apple account key is a digest of the Music User Token,
 not a stable Apple account identifier; signing in again with a rotated token can
-create a fresh cache namespace. Stable account identity and a full provider
-switch lifecycle belong to the next phase. Each API session retains its own
+create a fresh cache namespace. Stable Apple account identity remains future work. Each API session retains its own
 library and fixed cache path; a fresh login replaces the active session and
 rejects late API replies and authorization errors from the previous one.
 Persisted queues also retain the cache path assigned when created or loaded.
@@ -74,23 +80,104 @@ changes not saved yet. A different namespace saves the outgoing queue and closes
 its player before starting the new session. Late player reports and startups
 cannot replace the new session or write into its queue.
 
-## Next steps
+## Switching and Tidal
 
-1. Complete and review provider switching, including stale request and callback
-   handling, session restoration, and account identity.
-2. Add Tidal authentication, API mapping, navigation, capabilities, and a
-   playback backend behind the same contracts.
-3. Validate live sign-in and audible playback with eligible accounts, then
-   prepare the upstream pull request.
+On first start, both frontends offer a Music Services screen. Connect Apple
+Music, Tidal, or both, then continue into the player. The service name in the
+GUI header and Music Services (Ctrl+O) reopen this screen to switch or add
+a connection. Service credentials remain saved independently. The daemon serializes
+transitions, waits for dispatched mutations, cancels outgoing background work,
+closes playback and the private SDK bridge, then installs the next account.
+Queued commands keep their original session generation. Replies and asynchronous
+UI results from an obsolete session cannot update the new provider's view.
+Switching retains saved credentials and restores each account's queue paused.
+
+Tidal supplies Home, Explore, Playlists, Albums, Artists and Tracks. Search and
+Queue remain shared. Home first requests native modules, with independent
+personal mix fallbacks; inaccessible editorial discovery returns an informative
+Explore page. Internal endpoint access remains a live validation question.
+
+Tidal exposes one collection preference, with explicit desired-state writes and
+membership reads. Owned and favorited playlists are combined without treating
+favorites as editable. Playlist create and append preserve order and duplicates;
+a failed append reports the created playlist for recovery. Advanced edits,
+folders, radio, autoplay and previews are not advertised.
+
+Device login reuses the approved compatibility client from Untidy. This is a
+service compatibility dependency, not a claim of Tidal application approval.
+The official Web SDK and its locked dependencies are bundled from `web/tidal/`;
+rebuild with `bin/build-tidal`. The private loopback transport exposes finite,
+account-bound credential and metadata operations with origin/Host/path checks,
+request limits and no-store responses. Private credentials never enter the
+frontend socket. Preview-only playback is rejected and actual presentation and
+quality are reported separately from the requested quality.
+
+Tidal library and resume caches expire after 24 hours. Shared artwork cache
+entries expire after 24 hours without use and retain the existing size bound.
+Personal tokens and real account data are excluded from fixtures and commits.
 
 Apple's catalog token and fixture-backed browsing can be checked without a
 subscription. This branch has not verified Apple Music subscription playback;
 the available environment has no Apple Music subscription. The clean
 architecture plan and phase roadmap are in
 [`provider-abstraction-plan.md`](provider-abstraction-plan.md).
+The accepted Tidal product decisions and implementation details are in
+[`tidal-provider-spec.md`](tidal-provider-spec.md).
 
 ## Development checks
 
 Run Rust and QML tests in the Omarchy test box when they may touch the desktop
 session. Build the Qt frontend with `bin/build-gui`. `tools/fakedaemon` supplies
 fictional provider data and does not require personal credentials.
+
+### Current implementation evidence (2026-10-14)
+
+- 170 Rust core unit tests, 5 shared-library tests and 3 daemon integration tests pass.
+- 13 QML checks and 10 SDK adapter checks pass.
+- Rust formatting, Clippy with warnings denied, Qt build and diff whitespace checks pass.
+- A fictional Tidal desktop fixture renders the approved navigation and unified heart.
+- Live device login completes and survives restarts and Apple → Tidal switching.
+- Live albums, owned/favorited playlists, artists, tracks, search and all three
+  personal mix endpoints return content. Favorite membership reads pass for all
+  four resource kinds. Tidal's API-root-relative cursor links omit `/v2`; the
+  adapter normalizes them while retaining the fixed origin and opaque cursor.
+- Native HOME_STATIC/HOME_EDITORIAL requests require `clientVersion` in addition
+  to device/system/subject. Corrected requests return HTTP 500 for this client;
+  Home uses its personal mix fallback and Explore explains unavailability.
+- The live SDK reports FULL presentation, HIGH quality, AAC at 44.1 kHz, and
+  320.403-second duration. Position advances past 32 seconds without an error.
+  Seeking near the end automatically transitions to the next track. Duplicate
+  queue entries, manual next, pause and resume pass live checks in silent omabox.
+- The media CDN returns HTTP 403 for the loopback browser Origin, while the same
+  signed byte request without Origin succeeds with HTTP 206. The SDK now uses a
+  provider-owned native byte transport for the verified
+  `sp-ad-fa.audio.tidal.com` HTTPS origin. Other hosts retain normal browser
+  networking. The SDK still owns manifests, decoding, DRM and queue events.
+- The transport is account-bound, accepts only same-origin SDK requests, forwards
+  only a validated single byte Range, follows no redirects, sends no cookies or
+  OAuth tokens, and buffers at most 32 MiB per response with four concurrent
+  deliveries. Responses are no-store; closing the engine cancels active requests.
+  No signed media URLs are persisted or sent to frontends. New CDN hosts and
+  larger quality tiers need separate verification before expanding this allowlist.
+- Audible full-track playback passed on the user's desktop session; the
+  omabox boxes used for GUI checks have no audio output.
+- Live favorite/playlist mutations were not performed on the user's account;
+  deterministic fixtures cover them. Apple paid playback remains unverified.
+- Live testing exposed and fixed a nested heartbeat payload that had hidden SDK
+  readiness. The adapter now emits the shared flat player/revision document;
+  an SDK test guards both immediate and heartbeat responses.
+- Live playback exposed a batch-metadata failure: `GET /v2/tracks?filter[id]=<ids>`
+  answers 400 "Must be a positive integer" when commas are percent-encoded under
+  a raw-bracket key. The client now re-serializes query pairs, so the wire form
+  is `filter%5Bid%5D=…%2C…`, which returns 200 live; a fixture test pins the
+  encoding and duplicate order.
+- Native HOME_EDITORIAL Explore still fails for this client, so Explore falls
+  back to the legacy device-client pages under `api.tidal.com/v1/pages/`. Live
+  Explore returns Featured, Genres, Moods & Activities and Decades shelves, and
+  shelf continuation routes (`tidal:page:…`) resolve live. Opening a catalog
+  playlist that previously failed now returns all ten tracks through the daemon
+  socket.
+
+For a fictional Tidal preview, run `tmp/fakedaemon` with
+`BRUMM_FIXTURE_PROVIDER=tidal` inside omabox, then launch the Qt frontend in the
+same box. The default fixture remains Apple.

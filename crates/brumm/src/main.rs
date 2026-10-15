@@ -1,4 +1,4 @@
-//! brumm is an Apple Music player for Omarchy.
+//! brumm is a music player for Omarchy and Linux.
 //!
 //! ```text
 //! brumm          open the player as picked in its options: tui (default) or gui
@@ -121,6 +121,13 @@ fn main() {
 /// the music.
 fn login() -> Result<()> {
     let rt = runtime(2);
+    if config::Config::load()?.needs_provider_choice() {
+        return if terminal() {
+            tui::run(&rt)
+        } else {
+            launch::open("")
+        };
+    }
     rt.block_on(login::run(|s| println!("{s}")))?;
     println!("signed in");
     rt.block_on(async {

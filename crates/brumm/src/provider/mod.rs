@@ -31,6 +31,18 @@ pub trait Library: Send + Sync {
 /// Catalog and Library are required. Optional operations explicitly report
 /// Unsupported until a provider implements them. No Apple fallback is used.
 pub trait Api: Catalog + Library {
+    fn favorites<'a>(&'a self, _refs: &'a [Ref]) -> Reply<'a, Result<BTreeMap<String, bool>>> {
+        Box::pin(async { Err(Error::Unsupported) })
+    }
+    fn set_favorite<'a>(&'a self, refs: &'a [Ref], saved: bool) -> Reply<'a, Result<()>> {
+        Box::pin(async move {
+            if saved {
+                self.favorite(refs).await
+            } else {
+                Err(Error::Unsupported)
+            }
+        })
+    }
     fn home<'a>(&'a self) -> Reply<'a, Result<Vec<Shelf>>> {
         Box::pin(async { Err(Error::Unsupported) })
     }
@@ -79,6 +91,7 @@ pub trait Api: Catalog + Library {
 }
 
 pub mod apple;
+pub mod tidal;
 
 #[cfg(test)]
 pub(crate) mod tests;

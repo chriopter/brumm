@@ -154,7 +154,9 @@ impl Model {
                 ));
             }
             if let Some(it) = &r.item
-                && self.capabilities.rating_kinds.contains(&it.kind)
+                && (self.capabilities.rating_kinds.contains(&it.kind)
+                    || (self.capabilities.preference.is_some()
+                        && self.capabilities.favorite_kinds.contains(&it.kind)))
             {
                 return Some((
                     Ref {
@@ -179,7 +181,60 @@ impl Model {
     }
 
     /// Toggles a love (LOVE) or a dislike (DISLIKE).
+    pub fn toggle_favorite(&mut self, resource: Ref, name: String) {
+        if !self.capabilities.favorite_kinds.contains(&resource.kind) || resource.id.is_empty() {
+            return;
+        }
+        let key = format!("{}:{}", resource.kind, resource.id);
+        if self.favorite_pending.contains_key(&key) {
+            return;
+        }
+        self.favorite_pending.insert(key.clone(), true);
+        let Some(client) = self.client.as_ref().map(|c| c.for_session()) else {
+            self.favorite_pending.remove(&key);
+            return;
+        };
+        self.task(async move {
+            let result = async {
+                let membership = client
+                    .request(Request {
+                        cmd: "favorites".into(),
+                        refs: vec![resource.clone()],
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let saved = !membership
+                    .favorites
+                    .get(&key)
+                    .ok_or_else(|| "Favorite state is unavailable".to_string())?;
+                client
+                    .request(Request {
+                        cmd: "set-favorite".into(),
+                        refs: vec![resource.clone()],
+                        saved: Some(saved),
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(saved)
+            }
+            .await;
+            Some(Msg::FavoriteResult {
+                resource,
+                name,
+                result,
+            })
+        });
+    }
+
     pub fn rate(&mut self, value: i64) {
+        if self.capabilities.preference.is_some() && value == 1 {
+            if let Some((r, name)) = self.rateable() {
+                self.toggle_favorite(r, name);
+            }
+            return;
+        }
         if !self.capabilities.ratings || (value == -1 && !self.capabilities.dislike) {
             return;
         }
@@ -213,10 +268,15 @@ impl Model {
     /// Asks which songs and albums, playlists and stations of a view are
     /// loved or disliked.
     pub fn fetch_ratings(&mut self, id: u64) {
-        if !self.capabilities.ratings {
+        let preference = self.capabilities.preference.is_some();
+        if !self.capabilities.ratings && !preference {
             return;
         }
-        let rating_kinds = self.capabilities.rating_kinds.clone();
+        let rating_kinds = if preference {
+            self.capabilities.favorite_kinds.clone()
+        } else {
+            self.capabilities.rating_kinds.clone()
+        };
         let Some(v) = self.view_by_id(id) else { return };
         let mut refs = Vec::new();
         for r in &v.rows {
@@ -242,16 +302,43 @@ impl Model {
         }
         self.ask(
             Request {
-                cmd: ipc::CMD_RATINGS.into(),
+                cmd: if preference {
+                    "favorites".into()
+                } else {
+                    ipc::CMD_RATINGS.into()
+                },
                 refs,
                 ..Default::default()
             },
-            |r| r.ok().map(|m| Msg::Ratings(m.ratings)),
+            move |r| {
+                r.ok().map(|m| {
+                    if preference {
+                        Msg::Favorites(m.favorites)
+                    } else {
+                        Msg::Ratings(m.ratings)
+                    }
+                })
+            },
         );
     }
 
     /// The heart or thumb shown for id, one cell wide.
     pub fn rating_mark(&self, id: &str) -> L {
+        self.rating_mark_for("song", id)
+    }
+    pub fn rating_mark_for(&self, kind: &str, id: &str) -> L {
+        if self.capabilities.preference.is_some() {
+            return if self
+                .favorites
+                .get(&format!("{kind}:{id}"))
+                .copied()
+                .unwrap_or(false)
+            {
+                one("♥", ERR)
+            } else {
+                plain(" ")
+            };
+        }
         match self.rating.get(id).copied().unwrap_or(0) {
             LOVE => one("♥", ERR),
             DISLIKE => one(IC_DISLIKE, DIM),

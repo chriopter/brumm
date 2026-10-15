@@ -62,6 +62,14 @@ pub fn cache_path(dir: &Path, url: &str) -> PathBuf {
 /// used.
 pub async fn cached(client: &reqwest::Client, dir: &Path, url: &str) -> Result<RgbaImage> {
     let path = cache_path(dir, url);
+    if std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age > std::time::Duration::from_secs(86400))
+    {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
     if let Ok(b) = tokio::fs::read(&path).await
         && let Ok(img) = decode(&b, true)
     {
