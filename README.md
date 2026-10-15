@@ -4,22 +4,23 @@
 
 **Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
-- 🎧 Supported Services: Apple Music by [@chriopter](https://github.com/chriopter), Tidal by [@keylimesoda](https://github.com/keylimesoda), Spotify by [@sean-imus](https://github.com/sean-imus)
-- 🎵 Library, catalog, search as you type
-- 🏠 Home: recent, heavy rotation, picks
-- 🧭 Explore: charts, genres, videos, countries
-- ❤️ Favorites, Replay and playlist folders
+**Supported services**
+
+| Service | Integration by |
+|---|---|
+| Apple Music | [@chriopter](https://github.com/chriopter) |
+| Tidal | [@keylimesoda](https://github.com/keylimesoda) |
+| Spotify | [@sean-imus](https://github.com/sean-imus) |
+
+**Features**
+
+- ⇄ GUI and TUI: press <kbd>g</kbd> to switch while music keeps playing
+- 🎵 Library, playlists, favorites and search as you type
+- 🧭 Home and Explore: recommendations, charts, artists and radio
 - 🎬 Music video previews in the GUI
-- 📻 Radio: your station, live, any song
-- 🎤 Artists: top songs, releases, similar ones
-- ♥ Love, dislike, library, playlists
-- 🖼 Covers: pixel art, smooth, or real
-- 🌈 Thirteen visualizers that hear the kick
-- ⌨️ <kbd>?</kbd> for keys, mouse works everywhere
-- 🔋 Nearly idle while paused
-- 🐧 Theme colors, media keys, bar widget
-- ⇄ Terminal and window, <kbd>g</kbd> to switch, music plays on
-- 🎹 <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> opens brumm instead of Spotify, if you like — `brumm keys on|off`
+- 🌈 Cover art and thirteen visualizers
+- ⌨️ Keyboard and mouse controls
+- 🐧 Desktop theme, media keys and bar widget
 
 ## Install
 
@@ -53,6 +54,9 @@ Qt 6 Multimedia QML package on other Linux systems.
 | <kbd>Ctrl</kbd>+<kbd>o</kbd> | connect or switch music services |
 | <kbd>U</kbd> | look for an update |
 | <kbd>Q</kbd> / <kbd>q</kbd> | close, keep playing / quit |
+
+Enable <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> to open brumm with
+`brumm keys on`; `brumm keys off` restores the previous music-key behavior.
 
 Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
 Features vary by service; radio, Replay and playlist folders are Apple Music features.
