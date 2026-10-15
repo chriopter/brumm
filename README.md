@@ -1,6 +1,4 @@
-# ʕ•ᴥ•ʔ brumm
-
-<img src="assets/bear.webp" alt="brumm's dancing bear" width="180">
+# <img src="assets/bear.webp" alt="brumm's dancing bear" width="180">
 
 **Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
