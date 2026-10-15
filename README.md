@@ -80,104 +80,38 @@ gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 
 ## Development
 
-The Rust daemon owns service connections, playback, the queue and shared
-options. The TUI and GUI talk to it over a local socket, so switching between
-them keeps the same music session. The [provider guide](docs/providers.md)
-explains the API boundary and service integrations.
-
-### Repository layout
+The daemon and TUI use Rust; the GUI uses Qt Quick/QML and C++.
+Both interfaces share the same daemon and music session.
 
 ```text
-brumm/
-├── crates/
-│   ├── brumm/                 # Rust application
-│   │   ├── src/
-│   │   │   ├── daemon/        # Background service, sessions, library and queue
-│   │   │   ├── provider/      # Service APIs, authentication and data mapping
-│   │   │   │   ├── apple/     # Apple Music
-│   │   │   │   ├── tidal/     # Tidal
-│   │   │   │   └── spotify/   # Spotify
-│   │   │   ├── engine/        # Browser playback and Chrome DevTools bridge
-│   │   │   ├── chrome/        # Private Chrome download and verification
-│   │   │   ├── tui/           # Terminal UI, input, navigation and visualizers
-│   │   │   ├── art/           # Cover rendering for the terminal
-│   │   │   ├── update/        # Installation, updates and signature checks
-│   │   │   ├── ipc.rs         # Local socket protocol
-│   │   │   ├── config.rs      # Configuration and shared options
-│   │   │   ├── music.rs       # Shared music data types
-│   │   │   ├── mpris.rs       # Desktop media controls
-│   │   │   └── main.rs        # CLI entry point
-│   │   └── tests/             # Daemon integration tests
-│   └── brumm-shared/          # Shared Rust calculations and C interface
-│       └── src/               # Cover colors and audio analysis
-├── gui/
-│   ├── qml/                  # GUI screens, controls and navigation
-│   │   └── viz/              # Visualizer styles and feedback textures
-│   ├── shaders/              # GLSL effects for the GUI and visualizers
-│   ├── src/                  # C++ Qt host, daemon bridge and frame clock
-│   └── tests/                # QML navigation and layout tests
-├── web/
-│   ├── tidal/                # Source and tests for the Tidal Web SDK adapter
-│   └── spotify/              # Tests for the Spotify playback adapter
-├── tools/
-│   ├── demo-services         # Start the fake music-service demo
-│   ├── fakedaemon/           # Sample music, covers and simulated service APIs
-│   ├── devtoken/             # Apple Music developer-token generator
-│   └── sign/                 # Release signing tools
-├── bin/                      # Build, install, preview and benchmark scripts
-├── omarchy/
-│   ├── plugin/               # Bar widget and plugin manifest
-│   ├── brumm.service         # systemd user service
-│   └── brumm.desktop         # Desktop launcher
-├── docs/                     # Provider guides, screenshots and release notes
-├── benchmarks/               # Saved benchmark data
-├── .github/                  # CI, release workflows and repository rules
-├── Cargo.toml                # Rust workspace and build settings
-└── go.mod                    # Go development-tool dependencies
+crates/brumm/src/
+├── provider/  # Service APIs: sign-in, library, catalog and track metadata
+└── engine/    # Playback: run each service's web player in Chrome
 ```
 
-### Build and run
+Providers handle Apple Music, Tidal and Spotify. The engine runs their
+playback pages and controls the audio through Chrome DevTools. See the
+[provider guide](docs/providers.md) for details.
 
-Building needs Rust 1.89 or newer, a C++ compiler and Qt 6, including Qt Quick,
-Quick Controls and Shader Tools. Video previews also need Qt Multimedia.
-Go is needed for the demo and signing tools, Python 3 for the live preview,
-and Node.js/npm when rebuilding the Tidal Web SDK adapter.
+### Development scripts
+
+`bin/` contains the scripts for building, running and previewing brumm.
+Building needs Rust 1.89+, Qt 6 and a C++ compiler; sample-data previews
+also need Go. Rebuilding the Tidal adapter needs Node.js/npm.
 
 ```sh
 bin/setup        # build and install this checkout
-bin/dev          # run the daemon in the foreground
-bin/dev ui       # open the TUI against the daemon
-bin/dev gui      # build and open the GUI against the daemon
-bin/build-tidal  # rebuild the bundled adapter after changing web/tidal
+bin/dev          # foreground daemon; add ui or gui to open a player
+bin/preview      # isolated preview with the real account (needs Python 3)
+bin/prototype    # isolated preview with sample music
+bin/gui-shot out.png  # screenshot with sample data
+bin/build-tidal  # rebuild after changes to the Tidal web adapter
 ```
 
-`bin/setup` installs the application and desktop integration. `bin/dev` stops
-an installed brumm user service before starting the development daemon.
-
-### Preview and demo
-
-```sh
-tools/demo-services            # first start with fake Apple Music, Tidal and Spotify
-tools/demo-services connected  # all three services already connected
-bin/preview                    # isolated player using the existing real account
-bin/gui-shot out.png           # screenshot with sample data
-bin/viz-thumbs                  # regenerate visualizer thumbnails
-```
-
-The service demo needs no account and plays no audio. Its connections and
-changes stay in memory; each run starts fresh. See the
-[demo instructions](tools/fakedaemon/README.md) for individual services.
-`bin/preview` uses private configuration and caches, but playback and actions
-in that preview use the real account.
-
-### Checks
-
-```sh
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-go test ./tools/fakedaemon
-node --test web/tidal/player.test.mjs web/spotify/player.test.mjs
-QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input gui/tests
-```
+For fake service setup and switching, run `tools/demo-services`, or
+`tools/demo-services connected` to start with all three connected.
+The [demo](tools/fakedaemon/README.md) needs no account and plays no audio.
+`bin/preview` uses the real account, including actions taken in its UI.
+`bin/setup` installs brumm; `bin/dev` stops an installed brumm user service.
 
 Inspired by [vibez](https://github.com/simonepelosi/vibez).
