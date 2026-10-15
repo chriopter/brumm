@@ -31,6 +31,9 @@ pub trait Library: Send + Sync {
 /// Catalog and Library are required. Optional operations explicitly report
 /// Unsupported until a provider implements them. No Apple fallback is used.
 pub trait Api: Catalog + Library {
+    fn recently_played<'a>(&'a self) -> Reply<'a, Result<Vec<Track>>> {
+        Box::pin(async { Err(Error::Unsupported) })
+    }
     fn favorites<'a>(&'a self, _refs: &'a [Ref]) -> Reply<'a, Result<BTreeMap<String, bool>>> {
         Box::pin(async { Err(Error::Unsupported) })
     }

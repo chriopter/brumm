@@ -17,6 +17,7 @@ layout(std140, binding = 0) uniform buf {
     float level;
     float aspect; // width / height
     vec4 tint;    // the cover's color
+    vec4 activeArea;
 };
 layout(binding = 1) uniform sampler2D hist;
 
@@ -35,7 +36,8 @@ vec3 shade(float r) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
+    vec2 screen = qt_TexCoord0;
+    vec2 uv = (screen - activeArea.xy) / max(activeArea.zw, vec2(0.001));
     float px = fwidth(uv.y);
     float y = uv.y;
 
@@ -76,14 +78,18 @@ void main() {
 
     // the sky behind: deep blue into black, a haze on the horizon and a
     // light behind the middle that breathes with the bass
-    vec3 sky = mix(vec3(0.0, 0.01, 0.05), mix(vec3(0.03, 0.02, 0.12), tint.rgb * 0.2, 0.3), smoothstep(0.0, 0.5, y));
-    sky += mix(vec3(0.3, 0.4, 1.0), tint.rgb, 0.4) * 0.35 * exp(-abs(y - HZ) * 14.0);
-    vec2 p = vec2((uv.x - 0.5) * aspect, y - 0.4);
+    vec3 sky = mix(vec3(0.0, 0.01, 0.05), mix(vec3(0.03, 0.02, 0.12), tint.rgb * 0.2, 0.3), smoothstep(0.0, 0.9, screen.y));
+    sky += mix(vec3(0.3, 0.4, 1.0), tint.rgb, 0.4) * 0.35 * exp(-abs(screen.y - (activeArea.y + HZ * activeArea.w)) * 14.0 / max(activeArea.w, 0.001));
+    vec2 center = activeArea.xy + activeArea.zw * vec2(0.5, 0.4);
+    vec2 p = (screen - center) * vec2(aspect, 1.0);
     sky += mix(vec3(0.2, 0.5, 1.0), tint.rgb, 0.3) * (0.12 + 0.3 * bass) * exp(-dot(p, p) * 6.0);
-    ground = mix(sky, ground, glass);
+    // Only the ridgelines occupy the free area; the sky spans the window.
+    float boundary = smoothstep(0.0, 0.035, uv.y) * (1.0 - smoothstep(0.96, 1.0, uv.y));
+    boundary *= smoothstep(0.0, 0.025, uv.x) * (1.0 - smoothstep(0.975, 1.0, uv.x));
+    ground = mix(sky, ground, glass * boundary);
 
-    vec3 col = ground + light;
+    vec3 col = ground + light * boundary;
     col += max(col - 1.0, 0.0).gbr * 0.3;
-    float vg = 1.0 - 0.4 * dot(uv - 0.5, uv - 0.5) * 2.0;
+    float vg = 1.0 - 0.4 * dot(screen - 0.5, screen - 0.5) * 2.0;
     fragColor = vec4(clamp(col * vg, 0.0, 1.0), 1.0) * qt_Opacity;
 }

@@ -13,6 +13,7 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#010607"
 
     property real dt: 0
 
@@ -62,7 +63,7 @@ VizEffect {
         property real beat: fx.audio.beat
         property real quick: Math.exp(-fx.dt * 16)
         property real slow: Math.exp(-fx.dt * 5)
-        property size px: Qt.size(width / 2, height / 2)
+        property size px: Qt.size(fx.sceneWidth / 2, fx.sceneHeight / 2)
         property var prev: phosphorTex
         property var scan: scanTex
         property var wave: fx.wave
@@ -85,7 +86,7 @@ VizEffect {
         property real time: fx.audio.t
         property real beat: fx.audio.beat
         property real bass: fx.audio.bass
-        property size px: Qt.size(width, height)
+        property size px: Qt.size(fx.sceneWidth, fx.sceneHeight)
         property color ground: theme.dark ? (fx.colors.darker_background || "#0e0e14") : "#0c0c14"
         property color flash: fx.lit(fx.colors.cyan, 1.1)
         property color glow: fx.lit(fx.colors.green, 1.3)
@@ -94,6 +95,7 @@ VizEffect {
         property var scan: scanTex
         property var wave: fx.wave
         property var spectrum: fx.spectrum
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_scope.frag.qsb"
     }
 }

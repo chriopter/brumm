@@ -32,6 +32,7 @@ layout(std140, binding = 0) uniform buf {
     vec4 tint;    // the cover's color
     float part;   // 0 the church; 1 the air alone, at a third of the size;
                   // 2 the glass alone, sharp, laid over the church
+    vec4 activeArea;
 };
 layout(binding = 1) uniform sampler2D glass;
 layout(binding = 2) uniform sampler2D air; // what the air pass gathered
@@ -164,14 +165,19 @@ void main() {
     // the camera, so the pan is visible instead of keeping the window locked
     // to the same spot. Long, independent periods avoid abrupt turns.
     float t = pan;
+    vec2 scene = (qt_TexCoord0 - activeArea.xy) / max(activeArea.zw, vec2(0.001));
+    float sceneAspect = aspect * activeArea.z / max(activeArea.w, 0.001);
+    // Back away in narrow layouts so the entire window stays inside the
+    // free area. Rays outside it continue through the same church.
+    float distance = max(13.0, WW * 1.35 / max(sceneAspect, 0.1));
     const float TAU = 6.28318530718;
-    vec3 ro = vec3(0.45 * sin(t * TAU / 180.0), 2.6 + 0.10 * sin(t * TAU / 210.0 + 1.0), -13.0 + 0.35 * sin(t * TAU / 240.0 + 2.0));
-    vec3 at = vec3(1.6 * sin(t * TAU / 120.0), 3.5 + 0.2 * sin(t * TAU / 160.0), 0.0);
+    vec3 ro = vec3(0.45 * sin(t * TAU / 180.0), 2.6 + 0.10 * sin(t * TAU / 210.0 + 1.0), -distance + 0.35 * sin(t * TAU / 240.0 + 2.0));
+    vec3 at = vec3(0.35 * sin(t * TAU / 120.0), SILL + WH * 0.5 + 0.15 * sin(t * TAU / 160.0), 0.0);
     vec3 fw = normalize(at - ro);
     vec3 rt = normalize(cross(vec3(0, 1, 0), fw));
     vec3 up = cross(fw, rt);
     float roll = 0.004 * sin(t * TAU / 200.0);
-    vec2 sp = (qt_TexCoord0 - 0.5) * vec2(aspect, -1.0);
+    vec2 sp = (scene - 0.5) * vec2(sceneAspect, -1.0);
     sp = mat2(cos(roll), -sin(roll), sin(roll), cos(roll)) * sp;
     float focal = 1.0;
     vec3 rd = normalize(fw * focal + rt * sp.x + up * sp.y);

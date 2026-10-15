@@ -7,6 +7,7 @@
 // ring out from the middle. Every sixteen kicks the fire changes its gas:
 // blue, purple, green.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -26,7 +27,9 @@ layout(std140, binding = 0) uniform buf {
     float huesTo;   // the gas it burns now
     float huesMix;  // how far it has changed, 0–1
     vec4 tint;      // the cover's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D sim;
 
 const float FLOOR = 0.2; // the floor's edge, in heights
@@ -60,7 +63,8 @@ vec3 ramp(float h) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
+    vec2 uv = areaUv(qt_TexCoord0);
+    float focus = areaFocus(uv);
     float x = uv.x * aspect;
     float h = 1.0 - uv.y - FLOOR; // height above the floor's edge
 
@@ -82,9 +86,9 @@ void main() {
         float w1 = noise(vec2(x * 13.0, h * 9.0 - rise2)) - 0.5;
         float w2 = noise(vec2(x * 9.0 + 7.0, h * 14.0 - rise2 * 0.7)) - 0.5;
         vec2 suv = uv + vec2(w1, w2) * 0.007 * (0.4 + level + flare) + vec2(-push.x / aspect, push.y);
-        vec4 s = texture(sim, suv);
-        vec4 near = texture(sim, suv, 3.0); // two widths of bloom
-        vec4 wide = texture(sim, uv, 5.5);
+        vec4 s = texture(sim, suv) * focus;
+        vec4 near = texture(sim, suv, 3.0) * focus; // two widths of bloom
+        vec4 wide = texture(sim, uv, 5.5) * focus;
 
         // torn fine: the half-size heat cut by small fast noise
         float fine = noise(vec2(x * 42.0 + w1 * 4.0, h * 24.0 - rise2 * 2.2));
@@ -142,9 +146,9 @@ void main() {
     // a shock lights everything for a moment; the corners fall dark
     col *= 1.0 + 0.7 * blastPow * exp(-blastAge * 7.0);
     vec2 v = uv - 0.5;
-    col *= 1.0 - 0.55 * dot(v, v);
+    col *= clamp(1.0 - 0.55 * dot(v, v), 0.25, 1.0);
 
     // hot spots bloom toward white rather than clip
-    col = 1.0 - exp(-col * 1.5);
+    col = 1.0 - exp(-max(col, vec3(0.0)) * 1.5);
     fragColor = vec4(col, 1.0) * qt_Opacity;
 }

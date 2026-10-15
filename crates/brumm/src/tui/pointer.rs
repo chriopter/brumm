@@ -24,7 +24,7 @@ impl Model {
             || self.upd.is_some()
             || self.pick.is_some()
             || self.opt_open
-            || (self.full && self.viz_list)
+            || self.viz_list
         {
             if g.options.has(x, y) {
                 SHAPE_POINTER

@@ -475,7 +475,7 @@ fn help_key() {
     let mut m = model(120, 35);
     press(&mut m, "?");
     assert!(m.help && !m.show_tips());
-    assert!(shows(&mut m, "fullscreen visualizer"));
+    assert!(shows(&mut m, "cover / visualizer"));
     press(&mut m, "?");
     assert!(!m.help);
     m.opts.o.always_tips = true;
@@ -910,10 +910,10 @@ fn viz_controls() {
     );
     m.full_key("v");
     m.full_key("3");
-    assert!(!m.viz_list && m.viz_style == 2);
+    assert!(!m.viz_list && m.viz_style == 1);
     m.toggle_full();
     m.toggle_full();
-    assert_eq!(m.viz_style, 2, "f opens on the style shown last");
+    assert_eq!(m.viz_style, 1, "f opens on the style shown last");
     m.full_key("a");
     assert!(m.opts.o.no_viz_cycle);
     screen(&mut m);
@@ -1666,6 +1666,7 @@ fn place_round_trip() {
     a.section = SEC_ALBUMS;
     a.player_view = true;
     a.full = true;
+    a.inline_viz = true;
     a.viz_style = 4;
     let album = Item {
         kind: KIND_ALBUM.into(),
@@ -2044,4 +2045,173 @@ fn pixel_cover_resize_runs_off_the_input_thread() {
     m.update(job().unwrap());
     assert!(!m.stage_busy);
     assert!(!m.rendered.contains_key(&(next, false)));
+}
+
+#[test]
+fn inline_visualizer_keeps_browser_and_transport_then_expands() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(140, 40);
+    m.state.player.title = "The playing song".into();
+    m.state.player.playing = true;
+    m.key("f");
+    assert!(m.inline_viz && !m.full);
+    let screen = screen(&mut m);
+    assert!(m.inline_viz_shown);
+    assert!(screen.iter().any(|line| line.contains("The playing song")));
+    assert!(m.geo.play.x1 > m.geo.play.x0, "transport remains clickable");
+    assert!(m.want_spec());
+    assert!(m.next_tick().unwrap() <= Duration::from_millis(34));
+    m.subscribe();
+    assert_eq!(m.spec_fps, VIZ_FPS);
+    m.key("f");
+    assert!(m.full);
+    m.full_key("f");
+    assert!(!m.full && !m.inline_viz);
+    m.render();
+    assert!(!m.inline_viz_shown);
+}
+
+#[test]
+fn inline_visualizer_styles_open_without_hiding_browser() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(140, 40);
+    m.key("v");
+    assert!(!m.inline_viz && m.viz_list && !m.full);
+    m.full_key("down");
+    assert_eq!(m.viz_style, 0);
+    m.full_key("enter");
+    assert!(!m.viz_list && m.inline_viz && !m.full);
+}
+
+#[test]
+fn visualizer_menu_opens_from_options_and_footer_and_saves_selection() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(140, 40);
+    screen(&mut m);
+    let button = m.geo.foot.iter().find(|f| f.action == "v").unwrap().r;
+    click(&mut m, button.x0, button.y0);
+    assert!(m.viz_list && !m.inline_viz && !m.full);
+    press(&mut m, "down");
+    press(&mut m, "enter");
+    assert!(!m.viz_list);
+    assert_eq!(m.opts.o.viz, super::viz::NAMES[0]);
+    m.opt_open = true;
+    m.opt_sel = super::options::OPT_VISUALIZER;
+    m.options_key("enter");
+    assert!(m.viz_list && !m.opt_open);
+    screen(&mut m);
+    let x = m.geo.options.x0 + 2;
+    let y = m.geo.opt_row0 + 2;
+    click(&mut m, x, y);
+    assert!(!m.viz_list);
+    assert_eq!(m.opts.o.viz, super::viz::NAMES[1]);
+}
+
+#[test]
+fn cover_is_first_choice_and_restores_normal_player() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(140, 40);
+    m.toggle_full();
+    m.open_visualizers();
+    assert_eq!(m.viz_sel, m.viz_style + 1);
+    m.full_key("1");
+    assert!(!m.full && !m.inline_viz && !m.viz_list);
+    m.open_visualizers();
+    assert_eq!(m.viz_sel, 0);
+    m.full_key("2");
+    assert!(m.inline_viz && !m.full);
+    assert_eq!(m.viz_style, 0);
+    m.open_visualizers();
+    m.full_key("1");
+    assert!(!m.inline_viz);
+    m.toggle_full();
+    m.open_visualizers();
+    m.full_key("up");
+    assert!(!m.full, "preview the cover");
+    m.full_key("esc");
+    assert!(m.full, "Escape restores the previous presentation");
+}
+
+#[test]
+fn visualizer_options_sync_both_directions_and_preserve_gui_artwork_styles() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(140, 40);
+    let mut options = m.opts.o.clone();
+    options.viz = "synth".into();
+    options.viz_full = false;
+    m.options_changed(options.clone());
+    assert!(m.inline_viz && !m.full);
+    assert_eq!(super::viz::NAMES[m.viz_style], "synth");
+    assert_eq!(m.here().visualizer, "synth");
+    options.viz_full = true;
+    m.options_changed(options.clone());
+    assert!(m.full);
+    m.cycle_visualizer();
+    assert_eq!(m.opts.o.viz, "coverwall");
+    assert!(!m.opts.o.viz_full);
+    options.viz = "coverflow".into();
+    options.viz_full = false;
+    m.options_changed(options);
+    assert!(!m.inline_viz && !m.full);
+    assert_eq!(m.here().visualizer, "coverflow");
+    let mut large_cover = m.opts.o.clone();
+    large_cover.viz_full = true;
+    m.options_changed(large_cover);
+    assert!(m.full && !m.inline_viz);
+    assert!(m.here().full);
+    assert_eq!(m.here().visualizer, "coverflow");
+    m.got_place(Some(
+        serde_json::json!({"visualizer":"wire", "full":false, "sectionId":"home"}),
+    ));
+    assert!(m.inline_viz && !m.full);
+    assert_eq!(super::viz::NAMES[m.viz_style], "wire");
+}
+
+#[test]
+fn transport_stays_below_upcoming_covers() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(140, 70);
+    m.next = vec![super::upnext::NextUp {
+        url: "next.jpg".into(),
+        name: "Next".into(),
+        artist: "Artist".into(),
+        pos: 1,
+    }];
+    screen(&mut m);
+    assert!(m.geo.upnext[0].y1 > m.geo.upnext[0].y0);
+    assert!(m.geo.upnext[0].y1 <= m.geo.bar.y0);
+    assert!(m.geo.bar.y1 <= m.geo.play.y0);
+    assert_eq!(m.geo.play.y1, BODY_TOP + m.height - BODY_TOP - 2);
+}
+
+#[test]
+fn inline_visualizer_keeps_frames_and_audio_when_focus_is_lost() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(140, 40);
+    m.state.player.playing = true;
+    m.cycle_visualizer();
+    screen(&mut m);
+    assert!(m.inline_viz_shown);
+    let cadence = m.next_tick();
+    m.update(Msg::Focus(false));
+    assert!(m.blurred);
+    assert!(m.want_spec() && m.spec_on);
+    assert_eq!(m.spec_fps, VIZ_FPS);
+    assert_eq!(m.next_tick(), cadence);
+    m.update(Msg::Focus(true));
+    assert_eq!(m.next_tick(), cadence);
 }

@@ -16,6 +16,7 @@ import QtQuick.Shapes
 
 VizEffect {
     id: fx
+    backgroundColor: "#02050a"
 
     // the spin, carried from frame to frame
     readonly property var st: ({ ax: 0, ay: 0, az: 0, aw: 0, spin: 0, k: -1 })
@@ -86,7 +87,7 @@ VizEffect {
                    sz * cy + cz * sx * sy, cz * cx, sz * sy - cz * sx * cy,
                    -cx * sy, sx, cx * cy]
         const ox = width / 2, oy = height * 0.43
-        const S = Math.min(width, height) * 0.28 * (1 + 0.16 * a.bass + 0.1 * a.beat)
+        const S = Math.min(fx.sceneWidth, fx.sceneHeight) * 0.28 * (1 + 0.16 * a.bass + 0.1 * a.beat)
         const X = fx.px, Y = fx.py, Z = fx.pz
         function put(i, x, y, z, inv) {
             let u, v, w
@@ -100,8 +101,8 @@ VizEffect {
                 w = m[6] * x + m[7] * y + m[8] * z
             }
             const f = 3.2 / (w + 3.2 + 0.001) * S
-            X[i] = ox + u * f
-            Y[i] = oy + v * f
+            X[i] = ox + u * f * width / fx.sceneWidth
+            Y[i] = oy + v * f * height / fx.sceneHeight
             Z[i] = Math.max(0, Math.min(1, (w + 1.4) / 2.8))
         }
         // edges go to one of three strokes by how lit they are
@@ -167,6 +168,21 @@ VizEffect {
                 }
         }
         }
+        // Fit the actual projected vertices, including kick spikes and sparks.
+        // This constrains the object itself instead of fading a rectangular image.
+        let extentX = 1, extentY = 1
+        for (const group of [...lines, sparks])
+            for (const segment of group)
+                for (const point of segment) {
+                    extentX = Math.max(extentX, Math.abs(point.x - ox))
+                    extentY = Math.max(extentY, Math.abs(point.y - oy))
+                }
+        const fit = Math.min(1, width * 0.44 / extentX, height * 0.35 / extentY)
+        if (fit < 1)
+            for (const group of [...lines, sparks])
+                for (const segment of group)
+                    for (let i = 0; i < segment.length; i++)
+                        segment[i] = Qt.point(ox + (segment[i].x - ox) * fit, oy + (segment[i].y - oy) * fit)
         nearLines.paths = lines[0]
         midLines.paths = lines[1]
         farLines.paths = lines[2]
@@ -178,6 +194,7 @@ VizEffect {
         onTriggered: fx.step(Math.min(frameTime, 0.1))
     }
     Component.onCompleted: step(0)
+    onCoverAreaChanged: if (nearLines) step(0)
 
     // The lines as they stand this frame, white by how lit: drawn only
     // into their texture.
@@ -225,7 +242,7 @@ VizEffect {
 
     ShaderEffect {
         anchors.fill: parent
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real beat: fx.audio.beat
         property real bass: fx.audio.bass
         property real floorY: 0.8
@@ -235,6 +252,7 @@ VizEffect {
         property color halo: Qt.tint(fx.lit(fx.here, 1.2), Qt.alpha(deep, 0.5))
         property var lines: linesTex
         property var trail: phosphor
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_wire.frag.qsb"
         Behavior on deep { ColorAnimation { duration: 600 } }
         Behavior on hot { ColorAnimation { duration: 600 } }

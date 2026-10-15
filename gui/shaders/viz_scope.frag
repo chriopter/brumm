@@ -3,6 +3,7 @@
 // green) bloomed from its mip levels, and the beam itself, traced again
 // at full size, burning white.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -18,7 +19,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 flash;  // the phosphor, fresh
     vec4 glow;   // the phosphor, lingering
     vec4 halo;   // the cover's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D phosphor;
 layout(binding = 2) uniform sampler2D scan;
 layout(binding = 3) uniform sampler2D wave;
@@ -55,11 +58,11 @@ float trace(vec2 uv) {
     float gain = (s.g + s.b / 255.0) * 4.0 * 0.46;
     float h = 2.0 / px.x;
     vec2 p = uv * px;
-    float x = uv.x - 2.0 * h;
+    float x = clamp(uv.x - 2.0 * h, 0.0, 1.0);
     vec2 a = vec2(x, 0.5 - signal(x, s) * gain) * px;
     float d = 1e9;
     for (int i = -1; i <= 2; i++) {
-        x = uv.x + float(i) * h;
+        x = clamp(uv.x + float(i) * h, 0.0, 1.0);
         vec2 b = vec2(x, 0.5 - signal(x, s) * gain) * px;
         d = min(d, seg(p, a, b));
         a = b;
@@ -82,8 +85,8 @@ float graticule(vec2 uv) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
-    vec2 c = uv - 0.5;
+    vec2 uv = areaUv(qt_TexCoord0);
+    vec2 c = qt_TexCoord0 - areaCenter();
     c.x *= px.x / px.y;
 
     // the tube: dark, a little lighter in the middle, the corners in shade
@@ -92,14 +95,15 @@ void main() {
     base += halo.rgb * exp(-dot(c, c) * 3.0) * (0.05 + 0.06 * bass);
 
     // the graticule, lit a little by the beam near it
-    vec2 ph = texture(phosphor, uv).rg;
-    vec2 near = texture(phosphor, uv, 4.0).rg;
-    vec3 light = mix(glow.rgb, flash.rgb, 0.3) * graticule(uv) * (0.2 + 0.6 * near.g);
+    float inTrace = step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+    vec2 ph = texture(phosphor, uv).rg * inTrace;
+    vec2 near = texture(phosphor, uv, 4.0).rg * inTrace;
+    vec3 light = mix(glow.rgb, flash.rgb, 0.3) * graticule(qt_TexCoord0) * (0.2 + 0.6 * near.g);
 
     // the afterglow and its bloom
-    vec2 b1 = texture(phosphor, uv, 2.0).rg;
-    vec2 b2 = texture(phosphor, uv, 4.5).rg;
-    vec2 b3 = texture(phosphor, uv, 6.5).rg;
+    vec2 b1 = texture(phosphor, uv, 2.0).rg * inTrace;
+    vec2 b2 = texture(phosphor, uv, 4.5).rg * inTrace;
+    vec2 b3 = texture(phosphor, uv, 6.5).rg * inTrace;
     light += flash.rgb * ph.r * 0.9 + glow.rgb * ph.g * 0.8;
     light += flash.rgb * (b1.r * 0.5 + b2.r * 0.7 + b3.r * 0.6) * (0.8 + 0.8 * beat);
     light += glow.rgb * (b1.g * 0.4 + b2.g * 0.6 + b3.g * 0.7);
@@ -113,7 +117,7 @@ void main() {
     // the glass: faint scanlines and a gloss across the top
     light *= 0.93 + 0.07 * sin(uv.y * px.y * 2.0944);
     float gloss = smoothstep(0.25, 0.0, length((uv - vec2(0.35, -0.1)) * vec2(0.9, 2.2)) - 0.3);
-    vec3 col = base + 1.0 - exp(-light * 1.2);
-    col += vec3(gloss * 0.05) * vig;
+    vec3 col = base + (1.0 - exp(-light * 1.2));
+    col += vec3(gloss * 0.05) * vig * areaFocus(uv);
     fragColor = vec4(col * vig * 0.15 + col * 0.85, 1.0) * qt_Opacity;
 }
