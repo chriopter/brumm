@@ -69,6 +69,10 @@ switch lifecycle belong to the next phase. Each API session retains its own
 library and fixed cache path; a fresh login replaces the active session and
 rejects late API replies and authorization errors from the previous one.
 Persisted queues also retain the cache path assigned when created or loaded.
+Reloading the same namespace preserves the in-memory library and queue, including
+changes not saved yet. A different namespace saves the outgoing queue and closes
+its player before starting the new session. Late player reports and startups
+cannot replace the new session or write into its queue.
 
 ## Next steps
 

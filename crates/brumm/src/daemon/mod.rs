@@ -119,12 +119,14 @@ impl std::ops::Deref for ProviderSession {
 #[derive(Default)]
 struct Inner {
     lib: Arc<Library>,
-    login_task: Option<tokio::task::AbortHandle>,
+    login_task: Option<tokio::task::JoinHandle<()>>,
+    login_serial: u64,
     eng: Option<Arc<Engine>>,
     api: Option<Arc<ProviderSession>>,
     state: State,
     conns: HashMap<u64, ConnInfo>,
     booting: bool,
+    boot_next: bool,
     refreshing: bool,
     /// Another refresh was asked for during one.
     refresh_next: bool,
@@ -344,12 +346,19 @@ impl Daemon {
         {
             let mut i = self.lock();
             if i.booting {
+                i.boot_next = true;
                 return;
             }
             i.booting = true;
         }
-        self.clone().boot_once().await;
-        self.lock().booting = false;
+        loop {
+            self.clone().boot_once().await;
+            let mut i = self.lock();
+            if !std::mem::take(&mut i.boot_next) {
+                i.booting = false;
+                break;
+            }
+        }
     }
 
     async fn boot_once(self: Arc<Self>) {
@@ -378,12 +387,16 @@ impl Daemon {
                 .set_status(ipc::STATUS_LOGGED_OUT, "not signed in")
                 .await;
         }
-        let first = {
+        let (first, api) = {
             let mut i = self.lock();
-            i.api = Some(Arc::new(ProviderSession {
+            if i.lib.directory() != config::session_cache_dir_for(&cfg) {
+                return; // a login has replaced the account while this boot was preparing
+            }
+            let api = Arc::new(ProviderSession {
                 api,
                 lib: i.lib.clone(),
-            }));
+            });
+            i.api = Some(api.clone());
             if let Some(exp) = provider.expiry(&cfg) {
                 i.expires = Some(exp);
                 let days = (exp - chrono::Utc::now().timestamp()) / 86400;
@@ -393,7 +406,7 @@ impl Daemon {
             }
             let first = !i.booted;
             i.booted = true;
-            first
+            (first, api)
         };
         if first {
             self.spawn_refresh();
@@ -417,18 +430,38 @@ impl Daemon {
             Ok(e) => e,
             Err(e) => return self.failed(e).await,
         };
-        let old = {
-            let mut i = self.lock();
-            let old = i.eng.replace(eng.clone());
-            i.asleep = false;
-            i.active = Some(Instant::now());
-            old
+        let old = match self.install_engine(&api, &eng) {
+            Ok(old) => old,
+            Err(_) => {
+                eng.close().await;
+                return;
+            }
         };
         if let Some(old) = old {
             tokio::spawn(async move { old.close().await });
         }
         let _ = eng.set_autoplay(!Options::load().no_autoplay).await;
         self.spawn_watch(eng);
+    }
+
+    fn install_engine(
+        &self,
+        api: &Arc<ProviderSession>,
+        eng: &Arc<Engine>,
+    ) -> Result<Option<Arc<Engine>>> {
+        let mut i = self.lock();
+        // Chrome may finish starting after a login has replaced its API.
+        if !i
+            .api
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, api))
+        {
+            return Err(err("music session changed; try again"));
+        }
+        let old = i.eng.replace(eng.clone());
+        i.asleep = false;
+        i.active = Some(Instant::now());
+        Ok(old)
     }
 
     /// Shows why the player did not start and schedules another try,
@@ -513,7 +546,7 @@ impl Daemon {
                     rev = r;
                     last_ok = Instant::now();
                     self.lock().retry = Duration::ZERO; // the player works: the next failure waits briefly again
-                    self.apply(es.clone()).await;
+                    self.apply(&eng, es.clone()).await;
                     if self.idle(&eng, &es) {
                         return;
                     }
@@ -644,7 +677,7 @@ impl Daemon {
         self.lock().state.player.playing
     }
 
-    async fn apply(self: &Arc<Self>, mut es: Player) {
+    async fn apply(self: &Arc<Self>, eng: &Arc<Engine>, mut es: Player) -> bool {
         let (status, msg) = if es.needs_auth {
             (ipc::STATUS_LOGGED_OUT, "music session expired".to_string())
         } else if !es.err.is_empty() {
@@ -656,17 +689,18 @@ impl Daemon {
         };
         let (next, changed, started) = {
             let mut i = self.lock();
+            if !same(&i.eng, eng) {
+                return false;
+            }
             if let Some(r) = i.resume.as_mut()
                 && r.autoplay
                 && es.ready
             {
                 r.autoplay = false;
                 let r = r.clone();
-                let d = self.clone();
+                let eng = eng.clone();
                 tokio::spawn(async move {
-                    if let Some(eng) = d.engine() {
-                        let _ = r.play(&eng).await;
-                    }
+                    let _ = r.play(&eng).await;
                 });
             }
             if let Some(r) = i.resume.as_mut() {
@@ -702,6 +736,7 @@ impl Daemon {
             })
             .await;
         }
+        true
     }
 
     /// The most spectrum bands and waveform samples any player asks for,
@@ -1297,18 +1332,11 @@ impl Daemon {
             self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
             return;
         }
-        let lib = Arc::new(Library::load_at(config::session_cache_dir_for(&cfg)));
-        let eng = {
-            let mut i = self.lock();
-            i.lib = lib;
-            i.resume = Resume::load_at(config::session_cache_dir_for(&cfg));
-            i.pages.clear();
-            i.api = Some(Arc::new(ProviderSession {
-                api,
-                lib: i.lib.clone(),
-            }));
-            i.eng.clone()
-        };
+        let old = self.replace_session(&cfg, api);
+        if let Some(old) = old {
+            old.close().await;
+        }
+        let eng = self.engine();
         let page = crate::provider::registry::definition(cfg.effective_provider())
             .and_then(|p| p.playback(&cfg, &self.version));
         if let (Some(eng), Ok(page)) = (eng, page)
@@ -1323,6 +1351,35 @@ impl Daemon {
             i.retry_at = None;
         }
         self.boot().await;
+    }
+
+    /// Keep live, possibly unsaved data for the same namespace. A different
+    /// account must never inherit the old player's queue or its state updates.
+    fn replace_session(&self, cfg: &Config, api: Arc<dyn Api>) -> Option<Arc<Engine>> {
+        let dir = config::session_cache_dir_for(cfg);
+        let mut i = self.lock();
+        let old = if i.lib.directory() != dir {
+            if let Some(resume) = i.resume.as_mut() {
+                resume.save();
+            }
+            if let Err(e) = i.lib.save() {
+                eprintln!("library cache: {e}");
+            }
+            i.lib = Arc::new(Library::load_at(dir.clone()));
+            i.resume = Resume::load_at(dir);
+            i.state.player = Player::default();
+            i.play_check += 1;
+            i.asleep = false;
+            i.eng.take()
+        } else {
+            None
+        };
+        i.pages.clear();
+        i.api = Some(Arc::new(ProviderSession {
+            api,
+            lib: i.lib.clone(),
+        }));
+        old
     }
 
     /// Re-reads the library from Apple Music — the lists first, then every
@@ -1360,7 +1417,12 @@ impl Daemon {
         ] {
             let mut reply = Message::default();
             let result = self.fetch_list(api, name, &mut reply).await;
-            if self.auth_check(api, result).await.is_err() {
+            let result = self.auth_check(api, result).await;
+            // A failed list must not prevent the other lists from refreshing.
+            // Stop only for a replaced session or expired credentials.
+            if matches!(result, Err(Error::Unauthorized))
+                || self.auth_check(api, Ok(())).await.is_err()
+            {
                 return;
             }
         }
