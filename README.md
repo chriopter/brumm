@@ -93,6 +93,25 @@ Providers handle Apple Music, Tidal and Spotify. The engine runs their
 playback pages and controls the audio through Chrome DevTools. See the
 [provider guide](docs/providers.md) for details.
 
+```mermaid
+flowchart LR
+    apple["Apple Music"] <--> appleProvider
+    tidal["Tidal"] <--> tidalProvider
+    spotify["Spotify"] <--> spotifyProvider
+
+    subgraph daemon["brumm daemon"]
+        appleProvider["Apple provider"] <--> core
+        tidalProvider["Tidal provider"] <--> core
+        spotifyProvider["Spotify provider"] <--> core
+        core["Shared provider interface<br/>Session · Library · Queue · Options"]
+        core <--> engine["Playback engine<br/>Chrome + provider web player"]
+    end
+
+    core <-->|"Unix socket · JSON"| tui["TUI<br/>Rust / Ratatui"]
+    core <-->|"Unix socket · JSON"| gui["GUI<br/>Qt Quick / QML"]
+    core <-->|"MPRIS · D-Bus"| widget["Omarchy widget"]
+```
+
 ### Development scripts
 
 `bin/` contains the scripts for building, running and previewing brumm.
