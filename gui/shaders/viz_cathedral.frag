@@ -172,7 +172,9 @@ void main() {
     float distance = max(13.0, WW * 1.35 / max(sceneAspect, 0.1));
     const float TAU = 6.28318530718;
     vec3 ro = vec3(0.45 * sin(t * TAU / 180.0), 2.6 + 0.10 * sin(t * TAU / 210.0 + 1.0), -distance + 0.35 * sin(t * TAU / 240.0 + 2.0));
-    vec3 at = vec3(0.35 * sin(t * TAU / 120.0), SILL + WH * 0.5 + 0.15 * sin(t * TAU / 160.0), 0.0);
+    // Aim below the glass center: keep the window high and leave room
+    // for its colored light and reflection across the marble floor.
+    vec3 at = vec3(0.35 * sin(t * TAU / 120.0), SILL + WH * 0.25 + 0.15 * sin(t * TAU / 160.0), 0.0);
     vec3 fw = normalize(at - ro);
     vec3 rt = normalize(cross(vec3(0, 1, 0), fw));
     vec3 up = cross(fw, rt);
