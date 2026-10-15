@@ -10,6 +10,7 @@ use super::Daemon;
 use crate::config::Options;
 use crate::error::Result;
 use crate::ipc::Message;
+use crate::provider::session::AuthEvent;
 use crate::{login, update};
 
 /// One change of the options at a time.
@@ -98,15 +99,45 @@ impl Daemon {
     pub(super) fn login(self: &Arc<Self>) {
         let Ok(guard) = LOGIN.try_lock() else { return }; // the page is open already
         let d = self.clone();
-        tokio::spawn(async move {
+        let report = {
+            let d = d.clone();
+            Arc::new(move |event| {
+                let state = {
+                    let mut i = d.lock();
+                    match event {
+                        AuthEvent::Progress(message) => i.state.message = message,
+                        AuthEvent::Prompt(prompt) => i.state.auth = Some(prompt),
+                    }
+                    i.state.clone()
+                };
+                let d = d.clone();
+                tokio::spawn(async move {
+                    d.broadcast(Message {
+                        state: Some(state),
+                        ..Default::default()
+                    })
+                    .await;
+                });
+            })
+        };
+        let task = tokio::spawn(async move {
             let _guard = guard;
-            match login::run(|s| eprintln!("login: {s}")).await {
+            let result = login::run_with_report(report).await;
+            {
+                let mut i = d.lock();
+                i.state.auth = None;
+                i.login_task = None;
+            }
+            match result {
                 Ok(()) => d.reload().await,
                 Err(e) => {
                     eprintln!("login: {e}");
                     // The players say what went wrong: the report carries it.
-                    let mut st = d.lock().state.clone();
-                    st.player.err = format!("sign-in: {e}");
+                    let st = {
+                        let mut i = d.lock();
+                        i.state.player.err = format!("sign-in: {e}");
+                        i.state.clone()
+                    };
                     d.broadcast(Message {
                         state: Some(st),
                         ..Default::default()
@@ -115,12 +146,30 @@ impl Daemon {
                 }
             }
         });
+        self.lock().login_task = Some(task.abort_handle());
+    }
+
+    pub(super) async fn cancel_login(&self) {
+        let st = {
+            let mut i = self.lock();
+            if let Some(task) = i.login_task.take() {
+                task.abort();
+            }
+            i.state.auth = None;
+            i.state.message = "sign-in cancelled".into();
+            i.state.clone()
+        };
+        self.broadcast(Message {
+            state: Some(st),
+            ..Default::default()
+        })
+        .await;
     }
 
     /// Asks the active provider what a share link names.
     pub(super) async fn resolve(&self, link: &str, reply: &mut Message) -> Result<()> {
         let api = self.client()?;
-        let (it, song) = self.auth_check(api.resolve(link).await).await?;
+        let (it, song) = self.auth_check(&api, api.resolve(link).await).await?;
         reply.items = vec![it];
         if !song.is_empty() {
             reply.ids = vec![song];

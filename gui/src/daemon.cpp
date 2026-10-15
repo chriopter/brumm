@@ -127,6 +127,7 @@ void Daemon::write(QJsonObject req, const QJSValue &done)
         return;
     }
     const int id = ++m_next;
+    req.insert("protocolVersion", 1);
     req.insert("id", id);
     m_pending.insert(id, done);
     m_sock.write(QJsonDocument(req).toJson(QJsonDocument::Compact) + '\n');
@@ -142,6 +143,7 @@ void Daemon::readLines()
         const QJsonObject msg = QJsonDocument::fromJson(line).object();
         if (msg.isEmpty())
             continue;
+        if (msg.contains("provider")) emit providerChanged(msg.value("provider").toObject().toVariantMap());
         if (msg.contains("options")) {
             const QVariantMap o = msg.value("options").toObject().toVariantMap();
             const bool omarchy = msg.contains("omarchy") ? msg.value("omarchy").toBool() : m_omarchy;

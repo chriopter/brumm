@@ -9,7 +9,7 @@ Box {
     // same groups and order; only the window's own keys differ.
     readonly property var groups: [
         ["Browse", [["↑↓  j k", "move"], ["enter  l  →", "open · play"], ["esc  h", "back"], ["←  then ↑↓", "the sections"],
-                    ["tab  1 – 8", "next section · a section"], ["home  G", "top · bottom"], ["/", "filter; tab: all of Apple Music"],
+                    ["tab  1 – " + store.secQueue, "next section · a section"], ["home  G", "top · bottom"], ["/", "filter; tab: all of " + store.providerName],
                     ["a  A", "the song's album · artist"], ["c", "go to what plays"]]],
         ["Play", [["space", "play · pause"], ["hold space  O", "preview the song"], ["n  p", "next · back (p restarts after 3 s)"],
                   ["R", "radio from the song or artist"], ["z  Z", "add to queue · play next"], ["⇧←  ⇧→", "seek 10 s"],

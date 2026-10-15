@@ -58,6 +58,46 @@ pub fn cache_dir() -> PathBuf {
     xdg("XDG_CACHE_HOME", ".cache").join("brumm")
 }
 
+/// Account-derived browse and resume data is isolated from the selected service.
+pub fn session_cache_dir() -> PathBuf {
+    let cfg = Config::load().unwrap_or_default();
+    session_cache_dir_for(&cfg)
+}
+
+pub fn session_cache_dir_for(cfg: &Config) -> PathBuf {
+    match crate::provider::registry::definition(cfg.effective_provider()) {
+        Ok(provider) if provider.signed_in(cfg) => cache_dir()
+            .join(provider.id())
+            .join(provider.account_key(cfg)),
+        _ => cache_dir(),
+    }
+}
+
+/// Import the original Apple cache once, leaving it available to the old build.
+pub fn migrate_session_cache() -> Result<()> {
+    let cfg = Config::load()?;
+    let provider = match crate::provider::registry::definition(cfg.effective_provider()) {
+        Ok(p) if p.signed_in(&cfg) => p,
+        _ => return Ok(()),
+    };
+    let marker = cache_dir().join(format!("legacy-{}-imported", provider.id()));
+    if marker.exists() {
+        return Ok(());
+    }
+    let target = session_cache_dir_for(&cfg);
+    fs::create_dir_all(&target)?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+    for name in ["library.json", "resume.json"] {
+        if let Ok(bytes) = fs::read(cache_dir().join(name))
+            && !target.join(name).exists()
+        {
+            write_private(&target.join(name), &bytes)?;
+        }
+    }
+    write_private(&marker, b"1\n")?;
+    Ok(())
+}
+
 /// The daemon's control socket.
 pub fn socket() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {

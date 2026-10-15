@@ -40,6 +40,9 @@ pub fn drop_word(s: &str) -> String {
 
 impl Model {
     pub fn open_picker(&mut self) {
+        if !self.capabilities.playlist_write {
+            return;
+        }
         let v = self.cur();
         let row = v.rows.get(v.sel);
         let (what, name) = if let Some(t) = row.and_then(|r| r.track.as_ref()) {
@@ -214,8 +217,8 @@ impl Model {
                     DIM,
                 ));
             } else if p.lists.is_empty() {
-                lines.push(one("  Apple lets apps add only to playlists", DIM));
-                lines.push(one("  made with an app — like a new one here", DIM));
+                lines.push(one("  No editable playlists available", DIM));
+                lines.push(one("  Create a new playlist here", DIM));
             }
             lines.push(L::default());
             lines.push(line(vec![

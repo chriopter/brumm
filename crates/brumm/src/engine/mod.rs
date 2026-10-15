@@ -1,4 +1,4 @@
-//! Plays Apple Music through MusicKit JS in a headless Chrome: the page is
+//! Runs a provider-supplied playback page in headless Chrome. The page is
 //! served on a loopback port at a secret path (a secure context, which EME
 //! needs), and driven over the DevTools pipe.
 
@@ -23,8 +23,6 @@ use crate::httpd;
 use crate::ipc::Player;
 use crate::music::Track;
 use crate::proc;
-
-pub const PAGE: &str = include_str!("player.html");
 
 /// How long Chrome may take to come up.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -122,12 +120,24 @@ pub fn private_temp_dir(root: &Path, prefix: &str) -> std::io::Result<PathBuf> {
     Err(std::io::Error::other("no free temporary name"))
 }
 
-/// The page with its configuration.
+#[cfg(test)]
 fn page_html(developer_token: &str, user_token: &str, version: &str) -> String {
-    let cfg =
-        json!({"developerToken": developer_token, "userToken": user_token, "version": version});
-    PAGE.replace("__BRUMM_CFG__", &script_json(&cfg))
+    use crate::provider::session::Definition;
+    crate::provider::apple::session::Apple
+        .playback(
+            &crate::config::Config {
+                developer_token: developer_token.into(),
+                user_token: user_token.into(),
+                ..Default::default()
+            },
+            version,
+        )
+        .unwrap()
+        .html
 }
+
+#[cfg(test)]
+const PAGE: &str = include_str!("../provider/apple/player.html");
 
 /// Serves html at path to requests addressed to host, nothing else.
 async fn serve_page(ln: TcpListener, host: String, path: String, html: Arc<String>) {
@@ -163,14 +173,10 @@ async fn serve_page(ln: TcpListener, host: String, path: String, html: Arc<Strin
 impl Engine {
     /// Launches Chrome on the playback page. Chrome dies with the daemon
     /// (PR_SET_PDEATHSIG), so a killed daemon leaves no orphaned browser.
-    pub async fn start(
-        developer_token: &str,
-        user_token: &str,
-        version: &str,
-    ) -> Result<Arc<Engine>> {
-        let html = Arc::new(page_html(developer_token, user_token, version));
+    pub async fn start(page: crate::provider::session::PlaybackPage) -> Result<Arc<Engine>> {
+        let html = Arc::new(page.html);
         let ln = TcpListener::bind("127.0.0.1:0").await?;
-        // The page carries the user's Apple Music token. It is served only
+        // The page carries private provider credentials. It is served only
         // at an unguessable path and only to requests addressed to this
         // loopback port, so other local users cannot read it.
         let page_path = format!("/{}", random_hex(16));
@@ -538,8 +544,20 @@ impl Engine {
     pub async fn set_volume(&self, v: f64) -> Result<()> {
         self.call(&format!("brumm.volume({})", num(v))).await
     }
-    pub async fn set_user_token(&self, t: &str) -> Result<()> {
-        self.call(&format!("brumm.setToken({})", js(t))).await
+    pub async fn refresh_session(
+        &self,
+        page: crate::provider::session::PlaybackPage,
+    ) -> Result<()> {
+        let call = page
+            .refresh
+            .ok_or_else(|| err("session requires a player restart"))?;
+        let args = call
+            .args
+            .iter()
+            .map(script_json)
+            .collect::<Vec<_>>()
+            .join(",");
+        self.call(&format!("{}({args})", call.method)).await
     }
     pub async fn set_shuffle(&self, on: bool) -> Result<()> {
         self.call(&format!("brumm.shuffle({on})")).await

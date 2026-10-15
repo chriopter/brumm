@@ -84,3 +84,5 @@ pub mod apple;
 pub(crate) mod tests;
 
 pub mod registry;
+
+pub mod session;

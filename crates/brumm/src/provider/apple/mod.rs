@@ -607,6 +607,9 @@ impl Client {
         if ids.is_empty() {
             return Ok(());
         }
+        if ids.iter().all(|id| id.starts_with("i.")) {
+            return Err(err("already in your library"));
+        }
         let q = text::encode_query(&[(format!("ids[{kind}]"), ids.join(","))]);
         self.send(Method::POST, &format!("/v1/me/library?{q}"), None)
             .await?;
@@ -910,3 +913,8 @@ mod tests {
         assert!(it.editable && it.route.is_empty());
     }
 }
+
+mod auth;
+pub mod session;
+#[cfg(test)]
+mod session_tests;

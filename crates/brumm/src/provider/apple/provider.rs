@@ -147,8 +147,9 @@ mod tests {
     async fn provider_supplies_resolvable_explore_visuals() {
         let (client, seen) = fake_api(vec![("/v1/catalog/de/charts", r#"{"results":{}}"#)]).await;
         let page = client.feature("app:discover").await.unwrap();
-        assert_eq!(page.visuals.len(), 2);
-        for (i, visual) in page.visuals.iter().enumerate() {
+        assert_eq!(page.visuals.len(), 3);
+        assert_eq!(page.visuals[0].route, "app:discover:recent");
+        for (i, visual) in page.visuals.iter().skip(1).enumerate() {
             client.feature(&visual.route).await.unwrap();
             let target = seen.lock().unwrap().last().unwrap().target.clone();
             assert!(target.contains(if i == 0 {

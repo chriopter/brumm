@@ -154,7 +154,7 @@ impl Model {
                 ));
             }
             if let Some(it) = &r.item
-                && matches!(it.kind.as_str(), KIND_ALBUM | KIND_PLAYLIST | KIND_STATION)
+                && self.capabilities.rating_kinds.contains(&it.kind)
             {
                 return Some((
                     Ref {
@@ -180,6 +180,9 @@ impl Model {
 
     /// Toggles a love (LOVE) or a dislike (DISLIKE).
     pub fn rate(&mut self, value: i64) {
+        if !self.capabilities.ratings || (value == -1 && !self.capabilities.dislike) {
+            return;
+        }
         let Some((r, name)) = self.rateable() else {
             return;
         };
@@ -210,6 +213,10 @@ impl Model {
     /// Asks which songs and albums, playlists and stations of a view are
     /// loved or disliked.
     pub fn fetch_ratings(&mut self, id: u64) {
+        if !self.capabilities.ratings {
+            return;
+        }
+        let rating_kinds = self.capabilities.rating_kinds.clone();
         let Some(v) = self.view_by_id(id) else { return };
         let mut refs = Vec::new();
         for r in &v.rows {
@@ -222,7 +229,7 @@ impl Model {
                     id: t.id.clone(),
                 });
             } else if let Some(it) = &r.item
-                && matches!(it.kind.as_str(), KIND_ALBUM | KIND_PLAYLIST | KIND_STATION)
+                && rating_kinds.contains(&it.kind)
             {
                 refs.push(Ref {
                     kind: it.kind.clone(),
@@ -255,6 +262,9 @@ impl Model {
     /// Starts a station: the selected one, or the one Apple makes from the
     /// selected song or artist, or from the song playing.
     pub fn play_station(&mut self) {
+        if !self.capabilities.stations {
+            return;
+        }
         let mut req = Request::new(ipc::CMD_STATION);
         let v = self.cur();
         let row = v.rows.get(v.sel);

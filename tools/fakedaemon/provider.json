@@ -1,0 +1,130 @@
+{
+  "selected": "apple",
+  "needsChoice": false,
+  "protocolVersion": 1,
+  "choices": [
+    {
+      "id": "apple",
+      "name": "Apple Music",
+      "available": true
+    },
+    {
+      "id": "tidal",
+      "name": "Tidal",
+      "available": false
+    }
+  ],
+  "navigation": [
+    {
+      "id": "home",
+      "label": "Home",
+      "icon": "home",
+      "destination": {
+        "kind": "home"
+      }
+    },
+    {
+      "id": "explore",
+      "label": "Explore",
+      "icon": "explore",
+      "destination": {
+        "kind": "page",
+        "route": "app:discover"
+      }
+    },
+    {
+      "id": "playlists",
+      "label": "Playlists",
+      "icon": "playlists",
+      "destination": {
+        "kind": "library",
+        "list": "playlists"
+      }
+    },
+    {
+      "id": "albums",
+      "label": "Albums",
+      "icon": "albums",
+      "destination": {
+        "kind": "library",
+        "list": "albums"
+      }
+    },
+    {
+      "id": "artists",
+      "label": "Artists",
+      "icon": "artists",
+      "destination": {
+        "kind": "library",
+        "list": "artists"
+      }
+    },
+    {
+      "id": "songs",
+      "label": "Songs",
+      "icon": "songs",
+      "destination": {
+        "kind": "library",
+        "list": "songs"
+      }
+    },
+    {
+      "id": "radio",
+      "label": "Radio",
+      "icon": "radio",
+      "destination": {
+        "kind": "container",
+        "item": {
+          "kind": "shelf",
+          "id": "radio",
+          "name": "Radio",
+          "catalog": true
+        }
+      }
+    },
+    {
+      "id": "search",
+      "label": "Search",
+      "icon": "search",
+      "destination": {
+        "kind": "search"
+      }
+    },
+    {
+      "id": "queue",
+      "label": "Queue",
+      "icon": "queue",
+      "destination": {
+        "kind": "queue"
+      }
+    }
+  ],
+  "capabilities": {
+    "ratings": true,
+    "dislike": true,
+    "favorites": true,
+    "collectionWrite": true,
+    "playlistWrite": true,
+    "folders": true,
+    "stations": true,
+    "previews": true,
+    "autoplay": true,
+    "collectionKinds": [
+      "song",
+      "album",
+      "playlist"
+    ],
+    "ratingKinds": [
+      "song",
+      "album",
+      "playlist",
+      "station"
+    ],
+    "favoriteKinds": [
+      "song",
+      "album",
+      "artist",
+      "playlist"
+    ]
+  }
+}

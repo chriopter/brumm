@@ -54,6 +54,7 @@ signals:
     void connectedChanged();
     void optionsChanged();
     void state(const QVariantMap &state);
+    void providerChanged(const QVariantMap &provider);
     void library();
     void failed(const QString &error);
     void sound(const QVector<int> &spectrum, const QVector<int> &wave);

@@ -47,17 +47,28 @@ pub const FRAME_EVERY: Duration = Duration::from_millis(100);
 const HOLD_DELAY: Duration = Duration::from_millis(280);
 
 // Sections.
+#[cfg(test)]
 pub const SEC_HOME: usize = 0;
+#[cfg(test)]
 pub const SEC_EXPLORE: usize = 1;
+#[cfg(test)]
 pub const SEC_PLAYLISTS: usize = 2;
+#[cfg(test)]
 pub const SEC_ALBUMS: usize = 3;
+#[cfg(test)]
 pub const SEC_ARTISTS: usize = 4;
+#[cfg(test)]
 pub const SEC_SONGS: usize = 5;
+#[cfg(test)]
 pub const SEC_RADIO: usize = 6;
+#[cfg(test)]
 pub const SEC_SEARCH: usize = 7;
+#[cfg(test)]
 pub const SEC_QUEUE: usize = 8;
+#[cfg(test)]
 pub const NUM_SECTIONS: usize = 9;
 
+#[cfg(test)]
 pub const SECTION_NAMES: [&str; NUM_SECTIONS] = [
     "Home",
     "Explore",
@@ -69,13 +80,6 @@ pub const SECTION_NAMES: [&str; NUM_SECTIONS] = [
     "Search",
     "Queue",
 ];
-const SECTION_LISTS: [&str; 4] = [
-    ipc::LIST_PLAYLISTS,
-    ipc::LIST_ALBUMS,
-    ipc::LIST_ARTISTS,
-    ipc::LIST_SONGS,
-];
-
 /// One line of a list: a song, or something that opens; or a shelf's
 /// title, or a line of text about the view.
 #[derive(Clone, Debug, Default)]
@@ -127,7 +131,7 @@ impl Row {
 pub struct ExploreLoad {
     pub id: u64,
     pub page: music::ExplorePage,
-    pub groups: [Vec<Shelf>; 3],
+    pub groups: Vec<Vec<Shelf>>,
 }
 
 /// One level of the browser.
@@ -255,7 +259,7 @@ pub enum Msg {
     Event(Message),
     /// The daemon went away.
     Closed,
-    Connected(Option<(Client, State)>),
+    Connected(Option<(Client, Message)>),
     Loaded {
         view: u64,
         reply: Result<Message, String>,
@@ -270,7 +274,6 @@ pub enum Msg {
         lines: Vec<L>,
     },
     Album(Result<(Item, String), String>),
-    Login(Result<(), String>),
     Err(String),
     StageCover {
         url: String,
@@ -390,7 +393,10 @@ pub struct Model {
     pub spec: Vec<f64>,
 
     pub section: usize,
-    pub stacks: [Vec<View>; NUM_SECTIONS],
+    pub stacks: Vec<Vec<View>>,
+    pub navigation: Vec<crate::provider::session::NavigationEntry>,
+    pub capabilities: crate::provider::session::Capabilities,
+    pub provider_name: String,
     next_view: u64,
 
     /// The search box has focus.
@@ -577,6 +583,97 @@ pub fn sample(ids: &[String], skip: &str, n: usize) -> Vec<String> {
 }
 
 impl Model {
+    pub fn sec(&self, id: &str) -> usize {
+        use crate::provider::session::Destination;
+        self.navigation
+            .iter()
+            .position(|entry| {
+                entry.id == id
+                    || matches!(&entry.destination, Destination::Library { list } if list == id)
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn section_stack_mut(&mut self, id: &str) -> &mut Vec<View> {
+        let index = self.sec(id);
+        &mut self.stacks[index]
+    }
+
+    pub fn library_sections(&self) -> Vec<usize> {
+        self.navigation
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| {
+                matches!(
+                    entry.destination,
+                    crate::provider::session::Destination::Library { .. }
+                )
+                .then_some(i)
+            })
+            .collect()
+    }
+
+    pub fn configure_navigation(
+        &mut self,
+        entries: Vec<crate::provider::session::NavigationEntry>,
+    ) {
+        use crate::provider::session::Destination;
+        if entries.is_empty() || entries == self.navigation {
+            return;
+        }
+        let selected = if self.navigation.iter().any(|entry| {
+            !matches!(
+                entry.destination,
+                crate::provider::session::Destination::Search
+                    | crate::provider::session::Destination::Queue
+            )
+        }) {
+            self.navigation
+                .get(self.section)
+                .map(|entry| entry.id.clone())
+        } else {
+            None
+        };
+        let old = std::mem::take(&mut self.navigation);
+        let mut stacks = std::mem::take(&mut self.stacks);
+        for entry in &entries {
+            if let Some(i) = old
+                .iter()
+                .position(|e| e.id == entry.id && e.destination == entry.destination)
+            {
+                stacks[i][0].title = entry.label.clone();
+                self.stacks.push(std::mem::take(&mut stacks[i]));
+                continue;
+            }
+            let (key, item) = match &entry.destination {
+                Destination::Home => ("home:".into(), None),
+                Destination::Page { route } => (
+                    format!("{}:", entry.id),
+                    Some(Item {
+                        kind: music::KIND_SHELF.into(),
+                        id: entry.id.clone(),
+                        name: entry.label.clone(),
+                        route: route.clone(),
+                        catalog: true,
+                        ..Default::default()
+                    }),
+                ),
+                Destination::Library { list } => (format!("list:{list}"), None),
+                Destination::Container { item } => {
+                    (format!("{}:", entry.id), Some((**item).clone()))
+                }
+                Destination::Search => ("search:".into(), None),
+                Destination::Queue => ("queue:".into(), None),
+            };
+            let mut view = self.view(&entry.label, &key, item);
+            view.loaded = matches!(entry.destination, Destination::Search);
+            self.stacks.push(vec![view]);
+        }
+        self.navigation = entries;
+        self.section = selected
+            .and_then(|id| self.navigation.iter().position(|e| e.id == id))
+            .unwrap_or(0);
+    }
     pub fn new(client: Option<Client>, initial: State) -> Model {
         let opts = Opts::load();
         let has_omarchy = crate::update::has_omarchy();
@@ -607,8 +704,11 @@ impl Model {
             state: initial,
             state_at: Instant::now(),
             spec: Vec::new(),
-            section: SEC_HOME,
-            stacks: Default::default(),
+            section: 0,
+            stacks: Vec::new(),
+            navigation: Vec::new(),
+            capabilities: Default::default(),
+            provider_name: "music service".into(),
             next_view: 0,
             searching: false,
             query: String::new(),
@@ -703,40 +803,7 @@ impl Model {
             viz_spec: Vec::new(),
             wave: Vec::new(),
         };
-        for s in SEC_PLAYLISTS..=SEC_SONGS {
-            let v = m.view(
-                SECTION_NAMES[s],
-                &format!("list:{}", SECTION_LISTS[s - SEC_PLAYLISTS]),
-                None,
-            );
-            m.stacks[s] = vec![v];
-        }
-        let home = m.view("Home", "home:", None);
-        m.stacks[SEC_HOME] = vec![home];
-        let explore = Item {
-            kind: music::KIND_SHELF.into(),
-            id: "discover".into(),
-            name: "Explore".into(),
-            route: "app:discover".into(),
-            catalog: true,
-            ..Default::default()
-        };
-        let explore = m.view("Explore", "explore:", Some(explore));
-        m.stacks[SEC_EXPLORE] = vec![explore];
-        let radio = Item {
-            kind: music::KIND_SHELF.into(),
-            id: "radio".into(),
-            name: "Radio".into(),
-            catalog: true,
-            ..Default::default()
-        };
-        let radio = m.view("Radio", "radio:", Some(radio));
-        m.stacks[SEC_RADIO] = vec![radio];
-        let mut search = m.view("Search", "search:", None);
-        search.loaded = true;
-        m.stacks[SEC_SEARCH] = vec![search];
-        let queue = m.view("Queue", "queue:", None);
-        m.stacks[SEC_QUEUE] = vec![queue];
+        m.configure_navigation(crate::provider::session::navigation(Vec::new()));
         m
     }
 
@@ -927,7 +994,7 @@ impl Model {
                     let _ = tx.send(Msg::Closed);
                 });
             }
-            Some(Msg::Connected(Some((c, reply.state.unwrap_or_default()))))
+            Some(Msg::Connected(Some((c, reply))))
         });
     }
 
@@ -1211,6 +1278,18 @@ impl Model {
         match msg {
             Msg::ProviderChoices(reply) => match reply {
                 Ok(info) => {
+                    if info.protocol_version != 1 {
+                        self.set_flash("Update Brumm's daemon and frontends together");
+                        return;
+                    }
+                    self.provider_name = info
+                        .choices
+                        .iter()
+                        .find(|p| p.id == info.selected)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| "music service".into());
+                    self.capabilities = info.capabilities;
+                    self.configure_navigation(info.navigation);
                     self.provider_choices = info.choices;
                     self.provider_index = self
                         .provider_choices
@@ -1314,7 +1393,8 @@ impl Model {
             Msg::Connected(None) => self.reconnect(),
             Msg::Connected(Some((c, st))) => {
                 self.client = Some(c);
-                self.state = st;
+                self.event(st);
+                self.provider_asked = false;
                 self.state_at = Instant::now();
                 self.opt_queue = None;
                 self.load_cur();
@@ -1373,7 +1453,7 @@ impl Model {
                 }
             }
             Msg::Typed(seq) => {
-                if seq == self.typed_seq && self.section == SEC_SEARCH {
+                if seq == self.typed_seq && self.section == self.sec("search") {
                     self.run_search(false); // not after leaving it
                 }
             }
@@ -1422,13 +1502,6 @@ impl Model {
                     self.push(v, &song);
                 }
             },
-            Msg::Login(r) => match r {
-                Err(e) => self.set_flash(&format!("sign-in failed: {e}")),
-                Ok(()) => {
-                    self.set_flash("signed in");
-                    self.send(Request::new(ipc::CMD_RELOAD));
-                }
-            },
             Msg::Err(e) => self.set_flash(&e),
             Msg::Hold(seq) => self.hold(seq),
             Msg::Key(k) if k.release => {
@@ -1444,7 +1517,7 @@ impl Model {
             }
             Msg::Feedback(r) => self.feedback_done(r),
             Msg::FeatureSaved => {
-                self.set_flash("Created in Apple Music");
+                self.set_flash(&format!("Created in {}", self.provider_name));
                 let id = self.cur().id;
                 if let Some(v) = self.view_by_id(id) {
                     v.loading = false;
@@ -1476,8 +1549,9 @@ impl Model {
         }
         let want = std::mem::take(&mut v.want);
         select_song(v, &want, frame);
-        let is_explore = v.key == "explore:";
-        if is_explore && let Some(page) = explorer {
+        if let Some(page) = explorer
+            && !page.visuals.is_empty()
+        {
             self.load_explore_visuals(id, page);
         }
         self.maybe_resume();
@@ -1488,6 +1562,21 @@ impl Model {
     }
 
     pub fn event(&mut self, msg: Message) {
+        if let Some(info) = msg.provider {
+            if info.protocol_version != 1 {
+                self.set_flash("Update Brumm's daemon and frontends together");
+                return;
+            }
+            self.provider_name = info
+                .choices
+                .iter()
+                .find(|p| p.id == info.selected)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "music service".into());
+            self.capabilities = info.capabilities;
+            self.configure_navigation(info.navigation);
+            self.provider_choices = info.choices;
+        }
         if let Some(mut st) = msg.state {
             let was_logged_out = self.state.status == ipc::STATUS_LOGGED_OUT;
             self.keep_showing(&mut st);
@@ -1495,7 +1584,7 @@ impl Model {
             let song_changed = st.player.id != self.state.player.id;
             self.state = st;
             self.state_at = Instant::now();
-            if song_changed && self.section == SEC_QUEUE && self.stack().len() == 1 {
+            if song_changed && self.section == self.sec("queue") && self.stack().len() == 1 {
                 self.load_cur();
             }
             let e = self.state.player.err.clone();
@@ -1523,7 +1612,7 @@ impl Model {
         if msg.library {
             // Refreshed in the background: reload what is on screen, keeping
             // the old rows visible until the new ones arrive.
-            for s in SEC_PLAYLISTS..=SEC_SONGS {
+            for s in self.library_sections() {
                 let ids: Vec<u64> = self.stacks[s].iter().map(|v| v.id).collect();
                 for id in ids {
                     if s == self.section {
@@ -1581,11 +1670,14 @@ impl Model {
 
     pub fn switch_to(&mut self, s: usize) {
         self.player_view = false;
+        if s >= self.stacks.len() {
+            return;
+        }
         self.section = s;
         self.help = false;
         self.filtering = false; // a filter stays with its list, the typing does not
-        if s == SEC_QUEUE {
-            self.stacks[SEC_QUEUE].truncate(1);
+        if s == self.sec("queue") {
+            self.section_stack_mut("queue").truncate(1);
             self.cur_mut().loaded = false; // always fresh
         }
         self.searching = false; // the box stays behind; at Search, typing a letter goes into it
@@ -1857,6 +1949,9 @@ impl Model {
     }
 
     fn hold(&mut self, seq: u64) {
+        if !self.capabilities.previews {
+            return;
+        }
         if !self.space_down || seq != self.space_seq {
             return;
         }
@@ -1876,6 +1971,9 @@ impl Model {
     /// Starts previewing the selected song, or ends a preview — as holding
     /// space does, for terminals that cannot report releases.
     pub fn toggle_preview(&mut self) {
+        if !self.capabilities.previews {
+            return;
+        }
         if self.previewing {
             self.previewing = false;
             return self.send(Request::new(ipc::CMD_PREVIEW));
@@ -2042,7 +2140,7 @@ impl Model {
             return;
         }
         let frame = self.frame;
-        for s in 0..NUM_SECTIONS {
+        for s in 0..self.navigation.len() {
             if let Some(i) = self.stacks[s].iter().position(|v| v.key == src) {
                 self.section = s;
                 self.stacks[s].truncate(i + 1);
@@ -2058,7 +2156,12 @@ impl Model {
                 return;
             }
         }
-        for s in SEC_PLAYLISTS..=SEC_ARTISTS {
+        for s in self
+            .library_sections()
+            .into_iter()
+            .filter(|&s| self.navigation[s].id != "songs")
+            .collect::<Vec<_>>()
+        {
             let found = self.stacks[s][0].rows.iter().find_map(|r| {
                 r.item
                     .as_ref()
@@ -2097,9 +2200,9 @@ impl Model {
             return;
         }
         let root = if self.state.player.source.contains(":album:") {
-            SEC_ALBUMS
+            self.sec("albums")
         } else {
-            SEC_PLAYLISTS
+            self.sec("playlists")
         };
         if !self.stacks[root][0].loaded {
             let id = self.stacks[root][0].id;
@@ -2114,7 +2217,7 @@ impl Model {
     /// focused, starts typing into it: any character but a digit (the
     /// sections) and the few keys that mean something everywhere.
     pub fn types_search(&self, k: &str) -> bool {
-        if self.section != SEC_SEARCH
+        if self.section != self.sec("search")
             || self.stack().len() != 1
             || self.full
             || k.chars().count() != 1
@@ -2126,6 +2229,10 @@ impl Model {
     }
 
     pub fn key_press(&mut self, msg: Key) {
+        if self.state.auth.is_some() && msg.name == "esc" {
+            self.send(Request::new(ipc::CMD_CANCEL_LOGIN));
+            return;
+        }
         if self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
             self.provider_key(&msg.name);
             return;
@@ -2192,19 +2299,21 @@ impl Model {
                 self.switch_to(k.as_bytes()[0] as usize - b'1' as usize)
             }
             "tab" | "right" => {
-                if self.section == SEC_QUEUE {
-                    self.switch_to(SEC_HOME);
+                if self.section == self.sec("queue") {
+                    self.switch_to(self.sec("home"));
                 } else {
-                    self.switch_to((self.section + 1) % SEC_QUEUE);
+                    self.switch_to((self.section + 1) % self.sec("queue"));
                 }
             }
-            "shift+tab" | "left" => self.switch_to((self.section + SEC_QUEUE - 1) % SEC_QUEUE),
+            "shift+tab" | "left" => {
+                self.switch_to((self.section + self.sec("queue") - 1) % self.sec("queue"))
+            }
             "/" => {
                 if self.filterable() {
                     self.start_filter(); // here first; tab goes on to all of Apple Music
                     return;
                 }
-                self.section = SEC_SEARCH;
+                self.section = self.sec("search");
                 self.searching = true;
                 self.help = false;
             }
@@ -2299,7 +2408,7 @@ impl Model {
             }
             "enter" | "l" => {
                 let v = self.cur();
-                if self.section == SEC_SEARCH
+                if self.section == self.sec("search")
                     && self.stack().len() == 1
                     && v.rows.get(v.sel).is_none_or(|r| !r.selectable())
                 {
@@ -2394,7 +2503,7 @@ impl Model {
     /// Searches for words or asks the provider to resolve a share link.
     pub fn run_search(&mut self, final_: bool) {
         let q = self.query.trim().to_string();
-        self.section = SEC_SEARCH;
+        self.section = self.sec("search");
         if url::Url::parse(&q)
             .is_ok_and(|u| matches!(u.scheme(), "https" | "http") && u.host_str().is_some())
         {
@@ -2402,7 +2511,7 @@ impl Model {
                 return;
             }
             self.searching = false;
-            self.stacks[SEC_SEARCH].truncate(1);
+            self.section_stack_mut("search").truncate(1);
             self.ask(
                 Request {
                     cmd: ipc::CMD_RESOLVE.into(),
@@ -2423,12 +2532,12 @@ impl Model {
         if q.chars().count() < 2 {
             return;
         }
-        if self.stacks[SEC_SEARCH][0].key == format!("search:{q}") {
-            self.stacks[SEC_SEARCH].truncate(1); // already found: back to the results
+        if self.stacks[self.sec("search")][0].key == format!("search:{q}") {
+            self.section_stack_mut("search").truncate(1); // already found: back to the results
             return;
         }
         let v = self.view("Search", &format!("search:{q}"), None);
-        self.stacks[SEC_SEARCH] = vec![v];
+        *self.section_stack_mut("search") = vec![v];
         self.load_cur();
     }
 
@@ -2437,7 +2546,7 @@ impl Model {
         let ok = self.step(k);
         if self.cur().sel == prev
             && (k == "up" || k == "k")
-            && self.section == SEC_SEARCH
+            && self.section == self.sec("search")
             && self.stack().len() == 1
         {
             self.searching = true; // up from the first result: back into the box
@@ -2641,7 +2750,7 @@ impl Model {
         } else if g.repeat.has(x, y) {
             self.key("r");
         } else if g.queue.has(x, y) {
-            self.switch_to(SEC_QUEUE);
+            self.switch_to(self.sec("queue"));
         } else if g.volume.has(x, y) {
             self.key("m");
         } else if g.artist.has(x, y) && has_song {
@@ -2664,27 +2773,25 @@ impl Model {
         }
     }
 
-    /// Opens the Apple Music sign-in page in the browser.
+    /// Authentication belongs to the daemon and the selected provider.
     pub fn sign_in(&mut self) {
-        self.task(async move {
-            Some(Msg::Login(
-                crate::login::run(|_| {}).await.map_err(|e| e.to_string()),
-            ))
+        self.ask(Request::new(ipc::CMD_LOGIN), |reply| {
+            reply.err().map(Msg::Err)
         });
     }
 
     /// Opens the sign-in page by itself the first time brumm finds it is
     /// signed out, so nobody has to hunt for the key.
     pub fn auto_login(&mut self) {
+        if !self.provider_asked && self.client.is_some() {
+            self.provider_asked = true;
+            self.ask(Request::new(ipc::CMD_PROVIDER), |reply| {
+                Some(Msg::ProviderChoices(reply.and_then(|m| {
+                    m.provider.ok_or_else(|| "missing provider choices".into())
+                })))
+            });
+        }
         if self.state.status == ipc::STATUS_CHOOSE_PROVIDER {
-            if !self.provider_asked && self.client.is_some() {
-                self.provider_asked = true;
-                self.ask(Request::new(ipc::CMD_PROVIDER), |reply| {
-                    Some(Msg::ProviderChoices(reply.and_then(|m| {
-                        m.provider.ok_or_else(|| "missing provider choices".into())
-                    })))
-                });
-            }
             return;
         }
 
@@ -2693,20 +2800,23 @@ impl Model {
             return;
         }
         self.login_tried = true;
-        self.set_flash("opening the Apple Music sign-in in your browser…");
+        self.set_flash("opening sign-in in your browser…");
         self.sign_in();
     }
 
     /// Adds the selected catalog song, album or playlist — or the song
     /// playing — to the library.
     fn add_to_library(&mut self) {
+        if !self.capabilities.collection_write {
+            return;
+        }
         let v = self.cur();
         let row = v.rows.get(v.sel);
         let (kind, id, name) = if let Some(t) = row.and_then(|r| r.track.as_ref()) {
             ("songs".to_string(), t.id.clone(), t.title.clone())
         } else if let Some(it) = row.and_then(|r| r.item.as_ref()) {
-            if it.kind == music::KIND_ARTIST {
-                return self.set_flash("artists cannot be added; add one of their albums");
+            if !self.capabilities.collection_kinds.contains(&it.kind) {
+                return self.set_flash("This resource cannot be added to your library");
             }
             if !it.catalog {
                 let msg = format!("{} is already in your library", it.name);
@@ -2722,9 +2832,7 @@ impl Model {
         } else {
             return;
         };
-        if id.starts_with("i.") {
-            return self.set_flash(&format!("{name} is already in your library"));
-        }
+
         self.ask(
             Request {
                 cmd: ipc::CMD_ADD.into(),

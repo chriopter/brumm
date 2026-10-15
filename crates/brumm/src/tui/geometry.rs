@@ -1,6 +1,5 @@
 //! Where things were drawn, for the mouse.
 
-use super::model::NUM_SECTIONS;
 use super::upnext::NEXT_MAX;
 
 /// A clickable screen area, x1/y1 exclusive.
@@ -42,7 +41,7 @@ pub struct Geometry {
     pub crumb: Rect,
     pub search: Rect,
     pub divider: Rect,
-    pub tabs: [Rect; NUM_SECTIONS],
+    pub tabs: Vec<Rect>,
     pub prev: Rect,
     pub play: Rect,
     pub next: Rect,

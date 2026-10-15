@@ -396,7 +396,7 @@ Window {
             }
         }
         Text {
-            visible: !!store.inspect && (prototypeMode || !store.inspect.favorite) && (!!store.inspect.title || ["album", "artist", "playlist"].includes(store.inspect.kind))
+            visible: store.capabilities.favorites && !!store.inspect && (prototypeMode || !store.inspect.favorite) && (!!store.inspect.title || (store.capabilities.favoriteKinds || []).includes(store.inspect.kind))
             text: prototypeMode && store.inspect && store.inspect.favorite ? "♥ Remove favorite" : "♡ Add favorite"
             color: ui.here
             font.pixelSize: ui.px(16)

@@ -21,6 +21,7 @@ use crate::error::{Error, Result, err};
 use crate::music::{ExplorePage, Item, Ref, Shelf, Track};
 
 // Commands.
+pub const PROTOCOL_VERSION: i64 = 1;
 /// Add ids (of kind `list`: songs, albums, playlists) to the library.
 pub const CMD_ADD: &str = "add";
 /// Push state (and spectrum when bands > 0).
@@ -89,6 +90,7 @@ pub const CMD_OPTIONS: &str = "options";
 /// Open the Apple Music sign-in in the browser; the player reloads once
 /// signed in.
 pub const CMD_LOGIN: &str = "login";
+pub const CMD_CANCEL_LOGIN: &str = "cancel-login";
 /// `query` "tui", "gui" or "" (as the options say): open that player, or
 /// bring it to the front.
 pub const CMD_SHOW: &str = "show";
@@ -132,6 +134,8 @@ fn some_value<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<Val
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Request {
+    #[serde(rename = "protocolVersion", skip_serializing_if = "is_zero_i")]
+    pub protocol_version: i64,
     pub id: i64,
     pub cmd: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -229,6 +233,8 @@ pub struct Player {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct State {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<crate::provider::session::AuthPrompt>,
     pub status: String,
     /// Progress or error text.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -413,6 +419,7 @@ impl Client {
     /// Sends a request and waits for its answer; an answer carrying an
     /// error is that error.
     pub async fn request(&self, mut r: Request) -> Result<Message> {
+        r.protocol_version = PROTOCOL_VERSION;
         r.id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         match self.pending.lock().unwrap().as_mut() {

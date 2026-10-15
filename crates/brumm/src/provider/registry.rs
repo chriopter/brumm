@@ -12,6 +12,12 @@ pub struct ProviderInfo {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Selection {
+    #[serde(default)]
+    pub navigation: Vec<super::session::NavigationEntry>,
+    #[serde(default)]
+    pub capabilities: super::session::Capabilities,
+    #[serde(default, rename = "protocolVersion")]
+    pub protocol_version: u32,
     pub selected: String,
     #[serde(rename = "needsChoice")]
     pub needs_choice: bool,
@@ -40,9 +46,25 @@ pub fn validate(id: &str) -> Result<()> {
 }
 pub fn selection(cfg: &Config) -> Selection {
     Selection {
+        navigation: definition(cfg.effective_provider())
+            .map(|p| super::session::navigation(p.navigation()))
+            .unwrap_or_else(|_| super::session::navigation(vec![])),
+        capabilities: definition(cfg.effective_provider())
+            .map(|p| p.capabilities())
+            .unwrap_or_default(),
+        protocol_version: 1,
         selected: cfg.effective_provider().into(),
         needs_choice: cfg.needs_provider_choice(),
         choices: choices(),
+    }
+}
+
+/// The sole composition point for built-in service implementations.
+pub fn definition(id: &str) -> Result<&'static dyn super::session::Definition> {
+    static APPLE: super::apple::session::Apple = super::apple::session::Apple;
+    match id {
+        "apple" => Ok(&APPLE),
+        _ => Err(Error::Unsupported),
     }
 }
 
