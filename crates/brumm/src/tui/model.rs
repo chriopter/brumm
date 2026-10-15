@@ -531,6 +531,9 @@ pub struct Model {
     pub eq_bars: String,
     pub eq_at: Option<Instant>,
 
+    /// Visualizer replaces the cover while keeping browser and transport.
+    pub inline_viz: bool,
+    pub inline_viz_shown: bool,
     /// Fullscreen visualizer.
     pub full: bool,
     /// The list of styles shows over it.
@@ -538,6 +541,7 @@ pub struct Model {
     pub viz_sel: usize,
     /// The style before the list opened: esc goes back to it.
     pub viz_from: usize,
+    pub viz_from_full: bool,
     pub viz_style: usize,
     /// The style fading out.
     pub viz_prev: Option<usize>,
@@ -816,6 +820,9 @@ impl Model {
             viz_list: false,
             viz_sel: 0,
             viz_from: 0,
+            viz_from_full: false,
+            inline_viz: false,
+            inline_viz_shown: false,
             viz_style: VIZ_OPENING,
             viz_prev: None,
             viz_at: Instant::now(),
@@ -824,6 +831,7 @@ impl Model {
             viz_spec: Vec::new(),
             wave: Vec::new(),
         };
+        m.apply_visualizer_options();
         m.configure_navigation(crate::provider::session::navigation(Vec::new()));
         m
     }
@@ -917,13 +925,13 @@ impl Model {
     /// ticks while nothing moves, so an idle brumm costs no wakeups.
     pub fn next_tick(&self) -> Option<Duration> {
         let st = &self.state.player;
-        if self.blurred && !self.full {
+        if self.blurred && !self.full && !self.inline_viz_shown {
             return st.playing.then_some(Duration::from_secs(1)); // the clock and the meter, for a glance
         }
-        if self.full && !st.playing {
+        if (self.full || self.inline_viz_shown) && !st.playing {
             return Some(2 * FRAME_EVERY); // the paused visualizer only breathes
         }
-        if self.full {
+        if self.full || self.inline_viz_shown {
             // The visualizer moves by the clock, so it draws at the
             // display's pace, not the spectrum's.
             return Some(Duration::from_secs(1) / self.draw_fps() as u32);
@@ -977,7 +985,7 @@ impl Model {
     /// The spectrum can be seen — the visualizer, or the playing row's
     /// equalizer in a focused window.
     pub fn want_spec(&self) -> bool {
-        self.full || (!self.blurred && self.eq_shown)
+        self.full || self.inline_viz_shown || (!self.blurred && self.eq_shown)
     }
 
     /// Tells the daemon what to stream: the spectrum only while it can be
@@ -989,7 +997,7 @@ impl Model {
             fps: METER_FPS,
             ..Default::default()
         };
-        if self.full {
+        if self.full || self.inline_viz_shown {
             r.wave = 96.max(self.width * 3); // room for the scope to find its trigger
             r.fps = VIZ_FPS;
         } else if !self.want_spec() {
@@ -1274,6 +1282,7 @@ impl Model {
             && ms.button == Button::None
             && !self.dragging
             && !self.full
+            && !self.viz_list
         {
             // Hovering: the pointer's shape, nothing drawn.
             self.still = true;
@@ -1285,7 +1294,7 @@ impl Model {
         let was_motion =
             matches!(&msg, Msg::Event(m) if m.state.is_none() && m.options.is_none() && !m.library);
         self.update_inner(msg);
-        if was_motion && self.full && self.tick_at.is_some() {
+        if was_motion && (self.full || self.inline_viz_shown) && self.tick_at.is_some() {
             self.still = true; // the visualizer draws on its own clock: the spectrum waits for the next frame
         }
         if self.client.is_some() && self.drawn && self.want_spec() != self.spec_on {
@@ -2164,20 +2173,103 @@ impl Model {
         self.toggle();
     }
 
+    /// Consume shared settings without publishing them back to the daemon.
+    pub fn apply_visualizer_options(&mut self) {
+        if let Some(style) = viz::NAMES.iter().position(|name| *name == self.opts.o.viz) {
+            self.viz_style = style;
+            self.inline_viz = true;
+            self.full = self.opts.o.viz_full;
+        } else {
+            // GUI artwork styles use the terminal's cover presentation.
+            self.inline_viz = false;
+            self.full = self.opts.o.viz_full
+                && ["coverwall", "coverflow", "waves"].contains(&self.opts.o.viz.as_str());
+            self.inline_viz_shown = false;
+        }
+        self.viz_prev = None;
+        self.viz_at = Instant::now();
+        self.viz_list = false;
+        self.subscribe();
+    }
+
+    fn publish_visualizer(&mut self) {
+        self.opts.o.viz = if self.inline_viz {
+            viz::NAMES[self.viz_style].into()
+        } else {
+            "coverwall".into()
+        };
+        self.opts.o.viz_full = self.full;
+        self.save_options();
+    }
+
+    /// Cover → visualizer in the cover area → large visualizer → cover.
+    pub fn cycle_visualizer(&mut self) {
+        if self.full {
+            self.full = false;
+            self.inline_viz = false;
+            self.inline_viz_shown = false;
+        } else if self.inline_viz {
+            self.toggle_full();
+        } else {
+            self.inline_viz = true;
+            self.viz_style = viz::NAMES
+                .iter()
+                .position(|n| *n == self.opts.o.viz)
+                .unwrap_or(self.viz_style);
+            self.viz_prev = None;
+            self.viz_at = Instant::now();
+        }
+        self.viz_list = false;
+        self.publish_visualizer();
+        self.subscribe();
+    }
+
+    /// One style menu for the normal player, options and large view.
+    pub fn open_visualizers(&mut self) {
+        self.opt_open = false;
+        self.viz_list = true;
+        self.viz_sel = self.viz_choice();
+        self.viz_from = self.viz_sel;
+        self.viz_from_full = self.full;
+    }
+
+    pub fn viz_choice(&self) -> usize {
+        if self.inline_viz {
+            self.viz_style + 1
+        } else {
+            0
+        }
+    }
+
+    fn preview_viz_choice(&mut self, choice: usize) {
+        if choice == 0 {
+            self.full = false;
+            self.inline_viz = false;
+            self.inline_viz_shown = false;
+        } else {
+            self.full = self.viz_from_full;
+            self.inline_viz = true;
+            self.preview_viz(choice - 1);
+        }
+        self.subscribe();
+    }
+
     /// Switches the fullscreen visualizer, asking the daemon for waveform
     /// data only while it shows.
     pub fn toggle_full(&mut self) {
         self.full = !self.full;
         self.viz_list = false;
         if self.full {
+            self.inline_viz = true;
             // it opens on the style shown last, in either player
             self.viz_style = viz::NAMES
                 .iter()
                 .position(|n| *n == self.opts.o.viz)
-                .unwrap_or(VIZ_OPENING);
+                .unwrap_or(self.viz_style);
             self.viz_prev = None;
             self.viz_at = Instant::now();
         }
+        self.publish_visualizer();
         self.subscribe();
     }
 
@@ -2187,19 +2279,20 @@ impl Model {
     pub fn full_key(&mut self, k: &str) -> bool {
         let n = viz::NAMES.len();
         if self.viz_list {
+            let n = n + 1; // Cover, then the animated styles.
             match k {
                 "g" => return false,
                 "up" | "k" | "shift+tab" => {
                     self.viz_sel = (self.viz_sel + n - 1) % n;
-                    self.preview_viz(self.viz_sel);
+                    self.preview_viz_choice(self.viz_sel);
                 }
                 "down" | "j" | "tab" => {
                     self.viz_sel = (self.viz_sel + 1) % n;
-                    self.preview_viz(self.viz_sel);
+                    self.preview_viz_choice(self.viz_sel);
                 }
-                "enter" | "space" | " " | "l" | "v" => self.viz_list = false, // keep what shows
+                "enter" | "space" | " " | "l" | "v" => self.pick_viz(self.viz_sel),
                 "esc" | "q" | "h" => {
-                    self.preview_viz(self.viz_from); // back to the style before the list
+                    self.preview_viz_choice(self.viz_from); // back to the style before the list
                     self.viz_list = false;
                 }
                 "a" => self.toggle_viz_cycle(),
@@ -2212,14 +2305,11 @@ impl Model {
             return true;
         }
         match k {
-            "esc" | "f" | "q" => self.toggle_full(),
+            "esc" | "q" => self.toggle_full(),
+            "f" => self.cycle_visualizer(),
             "tab" | "right" | "down" | "j" | "l" => self.show_viz((self.viz_style + 1) % n),
             "shift+tab" | "left" | "up" | "k" | "h" => self.show_viz((self.viz_style + n - 1) % n),
-            "v" => {
-                self.viz_list = true;
-                self.viz_sel = self.viz_style;
-                self.viz_from = self.viz_style;
-            }
+            "v" => self.open_visualizers(),
             "a" => self.toggle_viz_cycle(),
             "x" => self.toggle_viz_bare(),
             "F" => {
@@ -2249,11 +2339,10 @@ impl Model {
     }
 
     /// Shows style i and closes the list.
-    pub fn pick_viz(&mut self, i: usize) {
+    pub fn pick_viz(&mut self, choice: usize) {
+        self.preview_viz_choice(choice);
         self.viz_list = false;
-        if i != self.viz_style {
-            self.show_viz(i);
-        }
+        self.publish_visualizer();
     }
 
     /// Switches whether the line under the visualizer goes while the
@@ -2284,11 +2373,11 @@ impl Model {
     }
 
     pub fn show_viz(&mut self, style: usize) {
+        self.inline_viz = true;
         self.viz_prev = Some(self.viz_style);
         self.viz_style = style;
         self.viz_at = Instant::now();
-        self.opts.o.viz = viz::NAMES[style % viz::NAMES.len()].into();
-        self.save_options();
+        self.publish_visualizer();
     }
 
     /// Shows the list the current song was started from with the song
@@ -2387,7 +2476,7 @@ impl Model {
             return false;
         }
         let r = k.chars().next().unwrap_or(' ');
-        !r.is_control() && r != ' ' && !r.is_numeric() && !"/?ofgqQ".contains(r)
+        !r.is_control() && r != ' ' && !r.is_numeric() && !"/?ofvgqQF".contains(r)
     }
 
     pub fn open_provider_picker(&mut self) {
@@ -2442,7 +2531,7 @@ impl Model {
             self.help = !self.help;
             return;
         }
-        if self.full && self.full_key(&msg.name) {
+        if (self.full || self.viz_list) && self.full_key(&msg.name) {
             return;
         }
         self.key(&msg.name);
@@ -2490,7 +2579,8 @@ impl Model {
                 self.searching = true;
                 self.help = false;
             }
-            "f" => self.toggle_full(),
+            "f" => self.cycle_visualizer(),
+            "v" => self.open_visualizers(),
             "n" => self.skip(),
             "p" | "b" => self.go_back(),
             "shift+left" | "shift+right" => {
@@ -2830,12 +2920,14 @@ impl Model {
             }
             MouseKind::Moved => {
                 self.mouse_at = Instant::now();
-                if self.full && self.viz_list {
+                if self.viz_list {
                     let i = ms.y - self.geo.opt_row0;
-                    if self.geo.options.has(ms.x, ms.y) && i >= 0 && (i as usize) < viz::NAMES.len()
+                    if self.geo.options.has(ms.x, ms.y)
+                        && i >= 0
+                        && (i as usize) <= viz::NAMES.len()
                     {
                         self.viz_sel = i as usize;
-                        self.preview_viz(i as usize);
+                        self.preview_viz_choice(i as usize);
                     }
                     return;
                 }
@@ -2861,7 +2953,7 @@ impl Model {
     /// Maps a mouse click onto the layout recorded by the last render. A
     /// click plays a song or opens an item; right click goes back.
     fn click(&mut self, ms: Mouse) {
-        if self.full {
+        if self.full || self.viz_list {
             return self.full_click(ms);
         }
         if ms.button == Button::Right {
@@ -3192,7 +3284,7 @@ impl Model {
                 return;
             }
             let i = ms.y - self.geo.opt_row0;
-            if i >= 0 && (i as usize) < viz::NAMES.len() {
+            if i >= 0 && (i as usize) <= viz::NAMES.len() {
                 self.pick_viz(i as usize);
             }
             return;

@@ -16,6 +16,7 @@ layout(std140, binding = 0) uniform buf {
     float rows;    // segments in a column
     float beat;    // 1 on a kick, decaying
     vec4 tint;     // the cover's color, in the glass
+    vec4 activeArea;
 };
 layout(binding = 1) uniform sampler2D spectrum;
 
@@ -92,13 +93,15 @@ vec3 display(vec2 p) {
 
 void main() {
     vec2 uv = qt_TexCoord0;
-    vec2 p = vec2(uv.x * aspect, 1.0 - uv.y);
-    float W = min(aspect * 0.84, HEIGHT * cols / rows * 1.9);
-    float L = (aspect - W) * 0.5;
+    vec2 scene = (uv - activeArea.xy) / max(activeArea.zw, vec2(0.001));
+    float sceneAspect = aspect * activeArea.z / max(activeArea.w, 0.001);
+    vec2 p = vec2(scene.x * sceneAspect, 1.0 - scene.y);
+    float W = min(sceneAspect * 0.84, HEIGHT * cols / rows * 1.9);
+    float L = (sceneAspect - W) * 0.5;
     vec2 cell = vec2(W / cols, HEIGHT / rows);
 
     // the room: black, a haze of the cover's color behind the panel
-    vec2 cp = p - vec2(aspect * 0.5, BOTTOM + HEIGHT * 0.5);
+    vec2 cp = p - vec2(sceneAspect * 0.5, BOTTOM + HEIGHT * 0.5);
     vec3 c = vec3(0.01, 0.01, 0.018) + tint.rgb * 0.12 * exp(-dot(cp, cp) * 2.5);
 
     float pad = 0.035;

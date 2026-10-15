@@ -12,6 +12,7 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#090514"
 
     property real flow: 0
     property real speed: 0.3
@@ -98,6 +99,7 @@ VizEffect {
         property vector4d ripples: fx.ripples
         property vector4d sources: fx.sources
         property var ring: palette
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_plasma.frag.qsb"
     }
 }

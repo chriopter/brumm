@@ -21,7 +21,7 @@ void VizClock::setRunning(bool running)
 {
     if (m_running == running) return;
     m_running = running;
-    m_drawRate.store(running ? m_fps : 0);
+    m_drawRate.store(running && m_limitFrames ? m_fps : 0);
     if (running) reset(); else m_timer.stop();
     emit runningChanged();
 }
@@ -30,9 +30,16 @@ void VizClock::setFps(int fps)
     fps = std::clamp(fps, 1, 240);
     if (m_fps == fps) return;
     m_fps = fps;
-    m_drawRate.store(m_running ? fps : 0);
+    m_drawRate.store(m_running && m_limitFrames ? fps : 0);
     if (m_running) reset();
     emit fpsChanged();
+}
+void VizClock::setLimitFrames(bool limit)
+{
+    if (m_limitFrames == limit) return;
+    m_limitFrames = limit;
+    m_drawRate.store(m_running && limit ? m_fps : 0);
+    emit limitFramesChanged();
 }
 void VizClock::reset()
 {

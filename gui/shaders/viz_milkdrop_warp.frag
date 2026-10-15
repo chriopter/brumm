@@ -3,6 +3,7 @@
 // drawn over it — the spectrum ring, the waveform ring inside it, and the
 // kick's shockwave. Drawn at half size into a texture that feeds itself.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -23,7 +24,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 hueA;     // the spectrum ring's color
     vec4 hueB;     // the waveform ring's color
     vec4 flash;    // the shockwave's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D prev;
 layout(binding = 2) uniform sampler2D spectrum;
 layout(binding = 3) uniform sampler2D wave;
@@ -44,7 +47,7 @@ float line(float d, float w) {
 
 void main() {
     vec2 uv = qt_TexCoord0;
-    vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+    vec2 p = (uv - areaCenter()) * vec2(aspect / max(activeArea.z, 0.001), 1.0 / max(activeArea.w, 0.001));
 
     // Where this pixel was: nearer the middle, turned back, and swirled a
     // little by a slow liquid field, so the echoes flow outward.
@@ -52,13 +55,14 @@ void main() {
     float a = twist * steps;
     vec2 q = mat2(cos(a), sin(a), -sin(a), cos(a)) * p * zoom;
     q += 0.0035 * steps * vec2(sin(q.y * 7.0 + time * 0.9), sin(q.x * 6.0 - time * 0.7)) * (0.4 + level);
-    vec2 src = q / vec2(aspect, 1.0) + 0.5;
+    vec2 src = q * vec2(activeArea.z / max(aspect, 0.001), activeArea.w) + areaCenter();
     vec3 old = texture(prev, src).rgb;
     old *= step(0.0, src.x) * step(src.x, 1.0) * step(0.0, src.y) * step(src.y, 1.0);
     // faded, with a floor so eight bits of light still reach black
     old = max(hueTurn(old, 0.07 * steps) * pow(0.84, steps) - 0.6 / 255.0, 0.0);
 
-    float r = length(p);
+    float fit = 0.72 * min(1.0, aspect);
+    float r = length(p) / max(fit, 0.001);
     float ang = atan(p.y, p.x);
 
     // the spectrum ring: radius by band, mirrored so it is whole

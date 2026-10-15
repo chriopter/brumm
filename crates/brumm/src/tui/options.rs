@@ -118,7 +118,8 @@ pub const OPT_COVER: usize = 3;
 pub const OPT_KEYS: usize = 4;
 pub const OPT_BAR: usize = 5;
 pub const OPT_MUSIC_KEYS: usize = 6;
-pub const NUM_OPTIONS: usize = 7;
+pub const OPT_VISUALIZER: usize = 7;
+pub const NUM_OPTIONS: usize = 8;
 
 const OPT_LABELS: [&str; NUM_OPTIONS] = [
     "Cover Colors",
@@ -128,6 +129,7 @@ const OPT_LABELS: [&str; NUM_OPTIONS] = [
     "Show Shortcuts",
     "Show in Top Bar",
     "Music Keys",
+    "Visualizer",
 ];
 const OPT_HINTS: [&str; NUM_OPTIONS] = [
     "Use the cover's colors for the app.",
@@ -137,6 +139,7 @@ const OPT_HINTS: [&str; NUM_OPTIONS] = [
     "Show keys on the buttons.",
     "The song in Omarchy's top bar.",
     "Super+Shift+M opens brumm, not Spotify.",
+    "Choose a visualizer for the cover area or large view.",
 ];
 
 /// A pick of one, cur marked.
@@ -248,7 +251,11 @@ impl Model {
         if self.has_omarchy && !o.bar.is_empty() {
             self.bar_on = o.bar == "on";
         }
+        let visualizer_changed = o.viz != self.opts.o.viz || o.viz_full != self.opts.o.viz_full;
         self.opts.o = o;
+        if visualizer_changed {
+            self.apply_visualizer_options();
+        }
     }
 
     /// Handles a key while the options are open; every key stays in the
@@ -263,7 +270,10 @@ impl Model {
                 // The cover style steps either way; a switch goes on to the
                 // right, off to the left, whatever it was.
                 let on = k == "right" || k == "l";
-                if self.opt_sel == OPT_COVER || self.option_on(self.opt_sel) != on {
+                if self.opt_sel == OPT_VISUALIZER
+                    || self.opt_sel == OPT_COVER
+                    || self.option_on(self.opt_sel) != on
+                {
                     self.change_option(self.opt_sel, if on { 1 } else { -1 });
                 }
             }
@@ -329,6 +339,7 @@ impl Model {
     /// Flips a switch, or steps a choice by dir.
     pub fn change_option(&mut self, i: usize, dir: i64) {
         match i {
+            OPT_VISUALIZER => return self.open_visualizers(),
             OPT_COVER => {
                 self.opts.o.cover = step(&COVER_STYLES, self.opts.chosen(), dir).to_string();
                 self.rendered.clear();
@@ -382,6 +393,17 @@ impl Model {
             },
         );
         values[OPT_COVER] = choices(&COVER_STYLES, self.opts.chosen());
+        values[OPT_VISUALIZER] = one(
+            format!(
+                "{}  ›",
+                if self.full || self.inline_viz {
+                    super::viz::NAMES[self.viz_style]
+                } else {
+                    "cover"
+                }
+            ),
+            DIM,
+        );
         for i in [OPT_AUTOPLAY, OPT_MOTION, OPT_KEYS, OPT_BAR, OPT_MUSIC_KEYS] {
             values[i] = check(self.option_on(i));
         }

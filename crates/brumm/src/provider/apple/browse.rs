@@ -844,4 +844,15 @@ mod tests {
         assert_eq!(shelves[0].items[0].kind, KIND_TERM);
         assert_eq!(shelves[1].items[0].name, "More Songs");
     }
+    #[tokio::test]
+    async fn listening_history_loads_previously_played_songs() {
+        let (c, _) = fake_api(vec![(
+            "/v1/me/recent/played/tracks",
+            r#"{"data":[{"id":"old","type":"songs","attributes":{"name":"Earlier song","artistName":"Artist","durationInMillis":180000}}]}"#,
+        )]).await;
+        let history = crate::provider::Api::recently_played(&c).await.unwrap();
+        assert_eq!(history[0].id, "old");
+        assert_eq!(history[0].title, "Earlier song");
+        assert_eq!(history[0].duration, 180.0);
+    }
 }

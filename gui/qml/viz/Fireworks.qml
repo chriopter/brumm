@@ -15,6 +15,7 @@ import QtQuick
 
 VizEffect {
     id: fx
+    backgroundColor: "#020307"
 
     // Twenty shells, newest over oldest, four to a matrix, each a row:
     // (x, apex + 50 × the climb's seconds, the second it bursts, code).
@@ -119,7 +120,7 @@ VizEffect {
         height: fx.height
         property real time: fx.time
         property real dt: fx.dt
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real px: 2 / Math.max(1, height)
         property real glitter: fx.audio.high
         property real since: fx.time - fx.kickAt
@@ -151,7 +152,7 @@ VizEffect {
         height: fx.height
         property real time: fx.time
         property real dt: fx.dt
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property var prev: haze
         property var sparks: trail
         fragmentShader: "qrc:/shaders/viz_fireworks_smoke.frag.qsb"
@@ -172,7 +173,7 @@ VizEffect {
     ShaderEffect {
         anchors.fill: parent
         property real time: fx.time
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real beat: fx.audio.beat
         property real glitter: fx.audio.high
         property real level: fx.audio.level
@@ -182,6 +183,7 @@ VizEffect {
         property var sparks: trail
         property var smoke: haze
         property var spectrum: fx.spectrum
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_fireworks.frag.qsb"
     }
 }

@@ -109,6 +109,8 @@ pub const CMD_FEEDBACK: &str = "feedback";
 /// Read the provider choices, or select an available provider named in query.
 pub const CMD_PROVIDER: &str = "provider";
 pub const CMD_PLACE: &str = "place";
+/// Page played songs newest first; query is the previous reply's next cursor.
+pub const CMD_HISTORY: &str = "history";
 /// Stop the daemon.
 pub const CMD_QUIT: &str = "quit";
 
@@ -321,6 +323,9 @@ pub struct Message {
     pub ids: Vec<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub link: String,
+    /// Cursor for the next page of listening history.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub next: String,
     /// The daemon's own, with an update check.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub version: String,

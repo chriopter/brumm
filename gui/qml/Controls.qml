@@ -4,6 +4,7 @@ import QtQuick
 
 Item {
     id: ctl
+    property alias visualizerButton: visualizer
     height: play.height
     // Narrow, the side buttons give way: first shuffle, repeat, dislike and
     // radio, then the volume too; back, play and next always stay.
@@ -30,7 +31,15 @@ Item {
         anchors { right: parent.right; verticalCenter: parent.verticalCenter }
         spacing: ui.px(10)
         visible: !store.st.preview && !ctl.tight
-        Orb { size: ui.px(34); icon: "󰐑"; on: store.section === store.secQueue; onClicked: { store.showPlayer(); store.sideFocus = false } }
+        Orb { visible: store.full && ctl.roomy; size: ui.px(34); icon: "󰐑"; on: store.section === store.secQueue; onClicked: { store.full = false; store.showPlayer(); store.sideFocus = false } }
+        Orb {
+            id: visualizer
+            visible: !store.full && ctl.width >= ui.px(360)
+            size: ui.px(34)
+            icon: "󰀻"
+            tooltip: store.vizList ? "" : "Visualizer · " + (store.vizNames[store.vizStyle] || "")
+            onClicked: full.openSettings(visualizer)
+        }
         // The volume: click mutes, the wheel turns it and says how loud.
         Orb {
             size: ui.px(34)

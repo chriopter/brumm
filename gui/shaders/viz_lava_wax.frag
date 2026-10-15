@@ -41,13 +41,8 @@ float smin(float a, float b, float k) {
 
 // how far p is from the wax
 float wax(vec3 p) {
-    // the pools: the floor's heaves with the bass, the cap's hangs in drips
-    // (both fall away toward the back and the front, so each shows as a ridge)
-    float mid = exp(-p.x * p.x * 1.6);
-    float away = 0.55 * p.z * p.z;
-    float d = p.y + 0.90 + away - 0.07 * sin(p.x * 2.3 + phase * 0.9) * cos(p.z * 3.0 + phase * 0.6) - (0.06 + 0.30 * bass) * mid;
-    float top = 0.94 + away - p.y - 0.08 * sin(p.x * 3.1 - phase * 0.7) * sin(p.z * 2.5 + phase * 0.5);
-    d = min(d, top) * 0.75;
+    // Blobs float inside the subject area; the liquid continues across the window.
+    float d = 1e4;
     float k = 0.30 + 0.25 * swell;
     for (int i = 0; i < 12; i++) {
         vec3 q = p - ball[i].xyz;
@@ -71,16 +66,16 @@ void main() {
         vec4 b = path[i];
         float a = phase * b.y * 2.0 + b.w * 1.7;
         float band = texture(spectrum, vec2((float(i) / 7.0 * 63.0 + 0.5) / 64.0, 1.5 / 4.0)).r;
-        ball[i] = vec4(aspect * 0.78 * sin(phase * b.x * 2.0 + b.w),
-                       0.88 * sin(a),
+        ball[i] = vec4(aspect * 0.48 * sin(phase * b.x * 2.0 + b.w),
+                       0.50 * sin(a),
                        0.36 * sin(phase * b.z * 2.0 + b.w * 2.3),
-                       0.19 * (0.6 + 1.3 * band + 1.2 * swell));
-        tall[i] = 1.0 + 0.38 * abs(cos(a)) + 0.4 * swell;
+                       min(0.28, 0.15 * (0.6 + 1.3 * band + 1.2 * swell)));
+        tall[i] = 1.0 + 0.18 * abs(cos(a)) + 0.15 * swell;
     }
     for (int i = 0; i < 4; i++) {
         float a = phase * 1.3 + float(i) * 1.9;
         float r = ball[i].w;
-        ball[8 + i] = vec4(ball[i].xyz + vec3(cos(a), sin(a) * 0.8, sin(a * 0.7) * 0.4) * (r * 0.7 + 0.62 * split), r * 0.55);
+        ball[8 + i] = vec4(ball[i].xyz + vec3(cos(a), sin(a) * 0.8, sin(a * 0.7) * 0.4) * (r * 0.4 + 0.12 * split), r * 0.55);
         tall[8 + i] = 1.0;
     }
 

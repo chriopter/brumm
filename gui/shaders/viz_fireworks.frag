@@ -5,6 +5,7 @@
 // skyline whose windows are the spectrum, and all of it again in rippling
 // water, behind a few boats.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -19,7 +20,9 @@ layout(std140, binding = 0) uniform buf {
     float level;   // how loud
     vec4 tint;     // the cover's color: the haze over the city
     mat4 m0; mat4 m1; mat4 m2; mat4 m3; mat4 m4;  // the shells, as the sparks have them
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D sparks;
 layout(binding = 2) uniform sampler2D smoke;
 layout(binding = 3) uniform sampler2D spectrum;
@@ -97,7 +100,8 @@ float boat(vec2 p, float s) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
+    vec2 uv = areaUv(qt_TexCoord0);
+    float focus = areaFocus(uv);
     vec2 p = vec2(uv.x * aspect, 1.0 - uv.y);
 
     // below the waterline, look at the sky mirrored and rippling instead
@@ -128,6 +132,9 @@ void main() {
     flash(sp, ROW(m4, 0), light, streak); flash(sp, ROW(m4, 1), light, streak);
     flash(sp, ROW(m4, 2), light, streak); flash(sp, ROW(m4, 3), light, streak);
 
+    light *= focus;
+    streak *= focus;
+
     // the night: deep blue above, the city's haze below
     float up = clamp((sp.y - HORIZON) / (1.0 - HORIZON), 0.0, 1.0);
     vec3 c = mix(vec3(0.05, 0.03, 0.16) + tint.rgb * 0.03, vec3(0.004, 0.006, 0.04), pow(up, 0.55));
@@ -152,12 +159,12 @@ void main() {
     c += light * (0.4 + 1.2 * cloud * (0.4 + n3));
 
     // smoke, glowing with what burned in it and with what bursts now
-    vec3 sm = texture(smoke, su, 1.0).rgb;
+    vec3 sm = texture(smoke, su, 1.0).rgb * focus;
     float thick = max(sm.r, max(sm.g, sm.b));
     float puff = 0.45 + 1.1 * n2 * (0.5 + n3);
     c += sm * 0.2 * puff + thick * puff * light * 2.2;
 
-    vec3 g = glow(su, soft) * (0.85 + 0.3 * level);
+    vec3 g = glow(su, soft) * (0.85 + 0.3 * level) * focus;
 
     // the city: a far row in the haze, a near row in front, its windows
     // lit as high as their part of the spectrum
@@ -212,7 +219,7 @@ void main() {
     c *= 1.0 + beat * 0.1;
     // a soft lens: darker corners; bright, never clipped flat; colors kept deep
     vec2 v = uv - 0.5;
-    c *= 1.0 - 0.55 * dot(v, v);
+    c *= clamp(1.0 - 0.55 * dot(v, v), 0.3, 1.0);
     c = 1.0 - exp(-c * 1.5);
     c = clamp(mix(vec3(dot(c, vec3(0.3, 0.59, 0.11))), c, 1.25), 0.0, 1.0);
     fragColor = vec4(c, 1.0) * qt_Opacity;

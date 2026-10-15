@@ -6,6 +6,7 @@ import QtQuick
 
 VizEffect {
     id: fx
+    backgroundColor: "#02030b"
 
     // The flight, moved on once a frame: how fast, how far, how rolled.
     property real speed: 0.06
@@ -44,6 +45,7 @@ VizEffect {
         property real aspect: width / Math.max(1, height)
         property real pixel: 2 / Math.max(1, height)
         property color tint: fx.here
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_stars.frag.qsb"
     }
 }

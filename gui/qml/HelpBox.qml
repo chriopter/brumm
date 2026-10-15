@@ -15,7 +15,7 @@ Box {
                   (store.capabilities.stations ? ["R", "radio from the song or artist"] : null), ["z  Z", "add to queue · play next"], ["⇧←  ⇧→", "seek 10 s"],
                   ["s", "shuffle"], ["r", "repeat off · all · one"], ["+  -  m", "volume · mute"]]],
         ["Library", [(store.capabilities.preference ? ["*", "favorite"] : (store.capabilities.ratings ? ["*  d", "love · dislike"] : null)), (store.capabilities.collectionWrite ? ["i", "add to your library"] : null), (store.capabilities.playlistWrite ? ["P", "add to a playlist, or a new one"] : null), ["y", "copy the song's link"]]],
-        ["brumm", [["?", "this list"], ["o", "options"], ["ctrl+o", "connect or switch services"], ["f", "visualizer (tab, v styles, a auto, x controls)"], ["F", "visualizer full screen"], ["[  ]", "list narrower · wider"],
+        ["brumm", [["?", "this list"], ["o", "options"], ["ctrl+o", "connect or switch services"], ["f", "player view · large visualizer"], ["F", "visualizer full screen"], ["[  ]", "list narrower · wider"],
                    ["g", "to the terminal player"], ["Q", "close, music plays on"], ["q", "quit, music stops"], ["L", "sign in again"],
                    ["U", "look for an update, install it"], ["!", "send feedback: a new issue on GitHub"]]],
     ]

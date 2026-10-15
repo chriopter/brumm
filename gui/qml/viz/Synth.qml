@@ -12,6 +12,7 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#0b0614"
 
     // one lap of the land: its hills and rows repeat after it
     readonly property real lap: 62.832
@@ -38,7 +39,11 @@ VizEffect {
     property real highWas: 0
     property color hot: lit(colors.magenta)
     property color ice: lit(colors.cyan)
-    property point sun: Qt.point(0.5, 0.45)
+    readonly property point sun: {
+        const qy = 0.06 + dip - 0.35 * Math.min(0.347, sceneAspect * 0.2)
+        return Qt.point(activeArea.x + activeArea.z * (0.5 + Math.sin(roll) * qy / sceneAspect),
+                        activeArea.y + activeArea.w * (0.5 + Math.cos(roll) * qy))
+    }
 
     readonly property var hots: [colors.magenta, colors.red, colors.yellow]
     readonly property var ices: [colors.cyan, colors.blue, colors.green, colors.magenta]
@@ -75,11 +80,6 @@ VizEffect {
             fx.alt += (1 + 0.22 * a.bass + 0.12 * fx.flare - fx.alt) * k
             fx.dip += (0.035 * a.bass - 0.03 * fx.flare - fx.dip) * k
 
-            // where the sun stands in the turned picture
-            const asp = fx.width / Math.max(1, fx.height)
-            const qy = 0.06 + fx.dip - 0.35 * Math.min(0.347, asp * 0.2)
-            fx.sun = Qt.point(0.5 + Math.sin(fx.roll) * qy / asp, 0.5 + Math.cos(fx.roll) * qy)
-
             // a shooting star when the highs leap
             if (fx.shoot >= 1 && a.high > 0.35 && a.high > fx.highWas + 0.04) {
                 fx.shoot = 0
@@ -108,10 +108,11 @@ VizEffect {
     // The world, drawn into a texture only.
     ShaderEffect {
         id: world
+        property vector4d activeArea: fx.activeArea
         anchors.fill: parent
         blending: false
         property real time: fx.clock
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real run: fx.run
         property real stripe: fx.stripe
         property real flare: fx.flare
@@ -171,6 +172,7 @@ VizEffect {
         property color ice: fx.ice
         property var scene: worldTex
         property var rays: raysTex
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_synth.frag.qsb"
     }
 }
