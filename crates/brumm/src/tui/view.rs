@@ -168,6 +168,8 @@ impl Model {
             Some(self.bar_box())
         } else if self.pick.is_some() {
             Some(self.picker_box())
+        } else if self.viz_list {
+            Some(self.viz_list_box())
         } else if self.opt_open {
             Some(self.options_box())
         } else {
@@ -179,6 +181,7 @@ impl Model {
     }
 
     pub fn render(&mut self) -> Vec<L> {
+        self.inline_viz_shown = false;
         self.geo = Geometry::default();
         self.marquee = false;
         self.eq_shown = false;
@@ -298,7 +301,8 @@ impl Model {
             e("/", "find", "/"),
             preview,
             e("o", "options", "o"),
-            e("f", "visualizer", "f"),
+            e("v", "visualizers", "v"),
+            e("f", "view", "f"),
             e("g", "gui", "g"),
             e("?", "keys", "?"),
             e("!", "feedback", "!"),
@@ -307,7 +311,8 @@ impl Model {
             // the rest is on the buttons: the footer has what is not
             keys = vec![
                 e("esc", "back", "esc"),
-                e("f", "visualizer", "f"),
+                e("v", "visualizers", "v"),
+                e("f", "view", "f"),
                 e("c", "now playing", "c"),
                 e("Q", "close, music plays on", "Q"),
                 e("q", "quit", "q"),
@@ -819,10 +824,13 @@ impl Model {
                 if had_top {
                     group.push(StageLine::default());
                 }
+                let free = h - group.len() as i64 - rest.len() as i64;
+                group.extend(self.up_next(col_w, free));
+                // Upcoming covers sit above the transport, which stays at the bottom.
+                let gap = (h - group.len() as i64 - rest.len() as i64).max(0);
+                group.extend((0..gap).map(|_| StageLine::default()));
                 group.extend(rest);
-                let free = h - group.len() as i64;
-                group.extend(self.up_next(col_w, free)); // room to spare: what comes next
-                let start = ((h - group.len() as i64) / 2).max(0); // the cover sits in the vertical middle
+                let start = 0;
                 for (i, l) in group.iter().enumerate() {
                     put_line(&mut out, start + i as i64, l);
                 }
@@ -869,6 +877,24 @@ impl Model {
             }
             Hit::UpSongs { w: wd, n } => self.geo.upsongs = Rect::new(x, y, x + wd, y + n),
         }
+    }
+
+    pub fn inline_visualizer(&mut self, size: Size) -> Vec<L> {
+        self.inline_viz_shown = true;
+        self.viz_spec.clear();
+        self.viz_spec.extend(self.spec.iter().map(|v| v * v * v));
+        let fade = self.viz_at.elapsed().as_secs_f64() / super::model::VIZ_FADE.as_secs_f64();
+        self.viz.render_mix(
+            self.viz_prev.filter(|_| fade < 1.0),
+            self.viz_style,
+            fade,
+            &self.viz_spec,
+            &self.wave,
+            size.width,
+            size.height,
+            self.state.player.playing,
+        );
+        self.viz.lines()
     }
 
     /// The stage's cover at size; dim darkens it, to sit behind a card
@@ -969,10 +995,7 @@ impl Model {
                 &[
                     ("?", "this list (keys on the buttons: in the options)"),
                     ("o", "options: covers, autoplay and more"),
-                    (
-                        "f",
-                        "fullscreen visualizer (tab: next, v: all styles, a: auto-change, F: frame rate)",
-                    ),
+                    ("f", "cover / visualizer / fullscreen visualizer; v: styles"),
                     ("[ ]", "narrower / wider list"),
                     ("g", "go over to the gui (and g there comes back)"),
                     ("Q", "close, music keeps playing"),
@@ -1054,17 +1077,26 @@ impl Model {
         };
         let f = if from.is_some() { f } else { 1.0 };
         let playing = self.state.player.playing;
-        self.viz.render_mix(
-            from,
-            self.viz_style,
-            f,
-            &self.viz_spec,
-            &self.wave,
-            self.width as usize,
-            h,
-            playing,
-        );
-        self.viz.blit(buf, 0, 0);
+        if self.inline_viz {
+            self.viz.render_mix(
+                from,
+                self.viz_style,
+                f,
+                &self.viz_spec,
+                &self.wave,
+                self.width as usize,
+                h,
+                playing,
+            );
+            self.viz.blit(buf, 0, 0);
+        } else {
+            let width = (h as f64 * self.cell_aspect).round().min(self.width as f64) as usize;
+            let lines = self.cover_lines(Size { width, height: h }, false);
+            let x = (self.width - width as i64).max(0) / 2;
+            for (y, line) in lines.iter().enumerate() {
+                put(buf, x, y as i64, line);
+            }
+        }
         if bare {
             self.geo = Geometry::default(); // nothing on screen to click
             return;
@@ -1099,7 +1131,14 @@ impl Model {
         let buttons: Vec<(String, L, String)> = vec![
             (
                 "tab".into(),
-                one(viz::NAMES[self.viz_style], DIM),
+                one(
+                    if self.inline_viz {
+                        viz::NAMES[self.viz_style]
+                    } else {
+                        "cover"
+                    },
+                    DIM,
+                ),
                 "tab".into(),
             ),
             ("v".into(), one("styles", DIM), "v".into()),
@@ -1162,13 +1201,16 @@ impl Model {
     /// The list of styles, over the visualizer's lower left.
     fn viz_list_box(&self) -> Vec<L> {
         let mut lines: Vec<L> = Vec::new();
-        for (i, name) in viz::NAMES.iter().enumerate() {
+        for (i, name) in std::iter::once(&"cover")
+            .chain(viz::NAMES.iter())
+            .enumerate()
+        {
             let gutter = if i == self.viz_sel {
                 line(vec![sp("▌", HERE), sp(" ", PLAIN)])
             } else {
                 plain("  ")
             };
-            let dot = if i == self.viz_style {
+            let dot = if i == self.viz_choice() {
                 sp("●", HERE)
             } else {
                 sp("○", DIM)

@@ -7,7 +7,7 @@
 - 🎵 Library, playlists, favorites and search as you type
 - 🧭 Home and Explore: recommendations, charts, artists and radio
 - 🎬 Music video previews in the GUI
-- 🌈 Cover art and thirteen visualizers
+- 🌈 Coverwall, Waves and thirteen audio visualizers
 - ⌨️ Keyboard and mouse controls
 - 🐧 Desktop theme, media keys and bar widget
 
@@ -38,7 +38,8 @@ Press <kbd>?</kbd> in brumm for the full shortcut list.
 | Switch between GUI and TUI | <kbd>g</kbd> |
 | Filter or search | <kbd>/</kbd> |
 | Connect or switch music services | <kbd>Ctrl</kbd> + <kbd>O</kbd> |
-| Open or close the visualizer | <kbd>f</kbd> |
+| Switch player view and large visualizer (GUI) | <kbd>f</kbd> |
+| Cycle cover, embedded visualizer and large view (TUI) | <kbd>f</kbd> |
 | Close the interface, keep music playing | <kbd>Shift</kbd> + <kbd>Q</kbd> |
 | Quit brumm and stop the music | <kbd>q</kbd> |
 
@@ -78,6 +79,20 @@ Available actions depend on the music service.
 | Change frame rate | <kbd>Ctrl</kbd> + <kbd>F</kbd> | <kbd>Shift</kbd> + <kbd>F</kbd> |
 | Toggle fullscreen | <kbd>Shift</kbd> + <kbd>F</kbd> | Uses the terminal window |
 | Leave the visualizer | <kbd>Esc</kbd> | <kbd>Esc</kbd> |
+
+In the TUI, choose a style with <kbd>v</kbd>, the footer’s Visualizers button,
+or Options → Visualizer. Click a style or press Enter to keep it.
+The first entry, Cover, returns to the album artwork. Visualizer selection,
+large view and shared settings stay in sync between the GUI and TUI.
+
+The GUI starts with Coverwall over Waves. The style picker also offers Waves
+on its own and Coverflow. Each style can fill the player area, the window or
+the screen. In the player view, each scene fills the window. Its main subject stays in
+the free area beside the list and above the controls.
+
+Now Playing opens at the current song. Scroll up for listening history, which
+loads older songs as needed; scroll down for the queue. History is kept per
+service account from the time this version starts recording it.
 
 </details>
 

@@ -439,6 +439,17 @@ impl Library for Client {
 }
 
 impl Api for Client {
+    fn recently_played<'a>(&'a self) -> Reply<'a, Result<Vec<Track>>> {
+        Box::pin(async {
+            let doc = self.get("/v1/me/player/recently-played?limit=50").await?;
+            let items = doc
+                .get("items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            Ok(tracks_of(&items, Some("track"), None))
+        })
+    }
     fn home<'a>(&'a self) -> Reply<'a, Result<Vec<Shelf>>> {
         Box::pin(self.home_shelves())
     }
@@ -725,5 +736,20 @@ mod tests {
         let home = c.home().await.unwrap();
         assert_eq!(home[0].tracks.len(), 1, "played twice, shown once");
         assert_eq!(home.len(), 2);
+    }
+    #[tokio::test]
+    async fn listening_history_preserves_provider_order() {
+        let (c, _) = fake_api(vec![(
+            "/v1/me/player/recently-played",
+            &format!(
+                r#"{{"items":[{{"track":{}}},{{"track":{}}}]}}"#,
+                song(T2),
+                song(T1)
+            ),
+        )])
+        .await;
+        let history = c.recently_played().await.unwrap();
+        assert_eq!(history[0].id, T2);
+        assert_eq!(history[1].id, T1);
     }
 }

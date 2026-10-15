@@ -118,6 +118,11 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         reuseItems: true
         cacheBuffer: ui.px(500)
+        property real beforeHistoryY: 0
+        onContentYChanged: {
+            if (moving && contentY <= originY + rowH * 3) store.loadHistory(store.view, false)
+        }
+        onAtYBeginningChanged: if (atYBeginning) store.loadHistory(store.view, false)
         readonly property int rowH: ui.px(50)
         onHeightChanged: store.pageRows = Math.max(1, Math.floor(height / rowH) - 1)
         Component.onCompleted: store.pageRows = Math.max(1, Math.floor(height / rowH) - 1)
@@ -127,7 +132,12 @@ Item {
         Connections {
             target: store
             function onSelMoved() { Qt.callLater(() => list.positionViewAtIndex(store.sel, ListView.Contain)) }
-            function onRowsChanged() { Qt.callLater(() => list.positionViewAtIndex(store.sel, ListView.Contain)) }
+            function onRowsChanged() { if (!store.prependingHistory) Qt.callLater(() => list.positionViewAtIndex(store.sel, ListView.Contain)) }
+            function onHistoryChanging() { list.beforeHistoryY = list.contentY }
+            function onHistoryChanged(added) {
+                const y = list.beforeHistoryY + added * list.rowH
+                Qt.callLater(() => { list.contentY = y })
+            }
         }
     }
 

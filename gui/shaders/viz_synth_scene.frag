@@ -5,6 +5,7 @@
 // the highs. The hills are found by a short march along the ray (28
 // steps and 6 more to refine, only where a ray leaves the road).
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -29,7 +30,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 hot;        // the grid's color
     vec4 ice;        // the ridges' color
     vec4 tint;       // the cover's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D spectrum;
 
 const float HY = 0.56;      // the horizon, from the top
@@ -78,7 +81,7 @@ float stars(vec2 g, float px, float twinkle) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
+    vec2 uv = areaUv(qt_TexCoord0);
     float px = fwidth(uv.y); // one pixel, in heights
     vec3 violet = mix(vec3(0.35, 0.2, 1.0), hot.rgb, 0.25);
     vec3 col;

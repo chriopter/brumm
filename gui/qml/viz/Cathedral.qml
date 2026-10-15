@@ -15,6 +15,8 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#08090d"
+    adaptiveScene: true
 
     property real tick: 0
     property real pan: 0
@@ -81,6 +83,7 @@ VizEffect {
     // their own; the church around them, at half, adds them; the glass,
     // the only sharp thing, comes last at full size.
     component Church: ShaderEffect {
+        property vector4d activeArea: fx.activeArea
         property real tick: fx.tick
         property real pan: fx.pan
         property real aspect: width / Math.max(1, height)

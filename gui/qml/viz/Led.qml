@@ -5,12 +5,15 @@ import QtQuick
 
 VizEffect {
     id: fx
+    backgroundColor: "#020205"
+    adaptiveScene: true
     ShaderEffect {
         anchors.fill: parent
         property real aspect: width / Math.max(1, height)
+        property vector4d activeArea: fx.activeArea
         // as many columns as fit comfortably, up to 32; segments to match
-        property real cols: Math.max(8, Math.min(32, Math.round(width / ui.px(44))))
-        property real rows: Math.max(10, Math.min(26, Math.round(height / ui.px(28))))
+        property real cols: Math.max(8, Math.min(32, Math.round(fx.coverArea.width / ui.px(44))))
+        property real rows: Math.max(10, Math.min(26, Math.round(fx.coverArea.height / ui.px(28))))
         property real beat: fx.audio.beat
         property color tint: fx.here
         property var spectrum: fx.spectrum

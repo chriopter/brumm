@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Exercise every GUI visualizer before any resize, using an isolated fake daemon."""
+import json
+import math
+import os
+from pathlib import Path
+import socketserver
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+STYLES = ['coverwall', 'coverflow', 'waves', 'milkdrop', 'cathedral', 'synth', 'stars', 'wire', 'fireworks', 'lava', 'scope', 'plasma', 'fire', 'matrix', 'ridge', 'led']
+OUT = ROOT / 'tmp' / 'viz-layout-check'
+OUT.mkdir(parents=True, exist_ok=True)
+PROVIDER = dict(protocolVersion=1, generation=1, selected='apple', needsChoice=False, needsSetup=False,
+                choices=[dict(id='apple', name='Apple Music', available=True, configured=True)], capabilities={},
+                navigation=[dict(id='playlists', label='Playlists', icon='playlists', destination=dict(kind='library', list='playlists')),
+                            dict(id='queue', label='Now Playing', icon='queue', destination=dict(kind='queue'))])
+STATE = dict(status='ready', ready=True, playing=True, title='Layout test', artist='Fixture', album='Fixture',
+             id='test-song', pos=12, dur=180, index=0, length=1)
+
+class Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        lock = threading.Lock()
+        alive = threading.Event()
+        alive.set()
+        audio = threading.Event()
+        options = dict(viz="coverwall" if self.server.style != "coverwall" else "milkdrop", viz_full=False, no_viz_cycle=True, viz_fps=30)
+        def send(value):
+            try:
+                with lock:
+                    self.wfile.write(json.dumps(value).encode() + b'\n')
+                    self.wfile.flush()
+            except (OSError, ValueError):
+                alive.clear()
+        def sound():
+            start = time.monotonic()
+            switched = False
+            last_state = 0.0
+            while alive.wait(0) and not self.server.stopping.is_set():
+                if not switched and time.monotonic() - start > .4:
+                    options.update(viz=self.server.style, viz_full=False)
+                    send(dict(generation=1, options=options.copy()))
+                    switched = True
+                if time.monotonic() - last_state > .3:
+                    send(dict(generation=1, state=STATE))
+                    last_state = time.monotonic()
+                if audio.is_set():
+                    t = time.monotonic() - start
+                    send(dict(spectrum=[int(55 + 40 * math.sin(t * 2 + i * .3)) for i in range(64)],
+                              wave=[int(128 + 70 * math.sin(t * 3 + i * .12)) for i in range(256)]))
+                time.sleep(1 / 30)
+        threading.Thread(target=sound, daemon=True).start()
+        try:
+            for line in self.rfile:
+                req = json.loads(line)
+                reply = dict(id=req.get('id'), generation=1)
+                cmd = req.get('cmd')
+                if cmd == 'options':
+                    options.update(req.get('options', {}))
+                    reply['options'] = options.copy()
+                elif cmd == 'provider':
+                    reply['provider'] = PROVIDER
+                elif cmd == 'subscribe':
+                    reply['state'] = STATE
+                    audio.set() if req.get('bands', 0) else audio.clear()
+                elif cmd == 'state':
+                    reply['state'] = STATE
+                elif cmd == 'place':
+                    reply['place'] = dict(sectionId='playlists', visualizer=options['viz'], full=False, views=[], sel={})
+                elif cmd == 'queue':
+                    reply.update(tracks=[dict(id='test-song', title='Layout test', artist='Fixture', duration=180)], pos=0)
+                send(reply)
+        except ConnectionError:
+            pass
+        finally:
+            alive.clear()
+
+class Server(socketserver.ThreadingUnixStreamServer):
+    daemon_threads = True
+
+with tempfile.TemporaryDirectory(prefix='brumm-layout-') as temp:
+    env = os.environ.copy()
+    for key in list(env):
+        if key.startswith('BRUMM_GUI_'):
+            del env[key]
+    env.update(XDG_RUNTIME_DIR=temp, XDG_CONFIG_HOME=temp + '/config', XDG_CACHE_HOME=temp + '/cache',
+               QT_QPA_PLATFORM='offscreen', QT_QPA_PLATFORMTHEME='', QT_QUICK_BACKEND='rhi', QSG_RHI_BACKEND='opengl',
+               BRUMM_GUI_SIZE='1200x800', BRUMM_GUI_SHOT_MS='1500')
+    server = Server(temp + '/brumm.sock', Handler)
+    server.style = STYLES[0]
+    server.stopping = threading.Event()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        for style in (sys.argv[1:] or STYLES):
+            assert style in STYLES, "unknown style: " + style
+            server.style = style
+            env['BRUMM_GUI_SHOT'] = str(OUT / (style + '.png'))
+            env['BRUMM_GUI_SCENE_STATE'] = str(OUT / (style + '.json'))
+            result = subprocess.run([str(ROOT / 'tmp/visualizer-preview/brumm-gui')], env=env, capture_output=True, text=True, timeout=20)
+            (OUT / (style + '.log')).write_text(result.stderr)
+            assert result.returncode == 0, (style, result.stderr)
+            assert not any(error in result.stderr for error in ['ReferenceError', 'TypeError', 'Unable to assign', 'Failed to create']), (style, result.stderr)
+            state = json.loads((OUT / (style + '.json')).read_text())
+            assert state['scenes'], (style, 'no scene loaded', result.stderr)
+            assert any(scene['style'] == STYLES.index(style) for scene in state['scenes']), (style, 'style did not switch', state)
+            for scene in state['scenes']:
+                assert scene['width'] == state['width'] and scene['height'] == state['height'], (style, state)
+                x, y, w, h = scene['area']
+                assert x > 0 and y >= 0 and w > 0 and h > 0, (style, state)
+                assert x + w <= state['width'] + 1 and y + h < state['height'], (style, state)
+                expected = [x / state['width'], y / state['height'], w / state['width'], h / state['height']]
+                assert all(abs(a-b) < .001 for a,b in zip(scene['active'], expected)), (style, state)
+            print(style + ': style switch without resize OK', flush=True)
+    finally:
+        server.stopping.set()
+        server.shutdown()
+        server.server_close()

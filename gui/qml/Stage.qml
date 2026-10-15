@@ -8,6 +8,8 @@ Item {
     clip: false
     property bool compact: false
     readonly property real playbackTop: col.y + info.y - ui.px(18)
+    property alias visualizerButton: transport.visualizerButton
+    property alias visualizerArea: visualizerArea
 
     readonly property var st: store.st
     readonly property bool preview: !!st.preview
@@ -60,23 +62,25 @@ Item {
 
         // The cover in a flow of what played and comes next, or in a wall
         // of covers, as the menu says.
-        CoverFlow {
-            visible: !stage.compact && !store.wall && stage.coverSize > 0
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: stage.width
-            size: stage.coverSize
-            url: win.artwork
-        }
+        // Software rendering keeps the cover; GPU styles own all artwork.
         CoverWall {
-            visible: !stage.compact && store.wall && stage.coverSize > 0
+            visible: !ui.effects && !stage.compact && stage.coverSize > 0
             anchors.horizontalCenter: parent.horizontalCenter
             width: stage.width
-            height: Math.max(stage.coverSize, stage.height - info.implicitHeight - ui.px(30))
+            height: stage.coverHeight
             size: stage.coverSize
             url: win.artwork
         }
 
-        Item { visible: stage.compact; width: 1; height: stage.coverHeight }
+        Item {
+            id: visualizerArea
+            visible: store.inlineViz
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: stage.width
+            height: ui.effects ? stage.coverHeight : 0
+            clip: false
+        }
+        Item { visible: stage.compact && !store.inlineViz; width: 1; height: stage.coverHeight }
         Item { visible: stage.coverSize > 0; width: 1; height: ui.px(10) }
 
         Column {
@@ -149,7 +153,7 @@ Item {
             Item { visible: !win.compact; width: 1; height: ui.px(16) }
             Progress { width: parent.width }
             Item { visible: !win.compact; width: 1; height: ui.px(12) }
-            Controls { width: parent.width }
+            Controls { id: transport; width: parent.width }
         }
     }
     RectangularShadow {

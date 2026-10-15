@@ -20,6 +20,7 @@ TestCase {
         property bool omarchy: false
         property var options: ({})
         property var asked: []
+        property var historyPages: ({})
         property var favoriteMembership: ({})
         property string selected: "apple"
         property var configured: ({apple:true})
@@ -46,7 +47,10 @@ TestCase {
         }
         function request(request, callback) {
             asked.push(request)
-            if (request.cmd === "provider") {
+            if (request.cmd === "options") {
+                options = Object.assign({}, options, request.options || {})
+                callback("", {})
+            } else if (request.cmd === "provider") {
                 if (request.query) { selected = request.query; generation++ }
                 callback("", {provider:info()})
             } else if (request.cmd === "favorites") {
@@ -63,6 +67,8 @@ TestCase {
                 callback("", { explorer: { items: [{ kind: "album", id: request.query, name: "Result", artwork: "cover" }] } })
             else if (request.cmd === "resolve")
                 callback("", { items: [{ kind: "album", id: "resolved", name: "Album", catalog: true }], ids: ["song"] })
+            else if (request.cmd === "history")
+                callback("", historyPages[request.query || ""] || {})
             else if (request.cmd === "queue")
                 callback("", {tracks:[{id:"previous",title:"Previous"},{id:"playing",title:"Playing"},{id:"next",title:"Next"}],pos:1})
             else
@@ -88,10 +94,60 @@ TestCase {
     }
 
     function init() {
-        fakeDaemon.asked = []; fakeDaemon.selected = "apple"; fakeDaemon.configured = {apple:true}
+        fakeDaemon.asked = []; fakeDaemon.historyPages = {}; store.recent = []; fakeDaemon.selected = "apple"; fakeDaemon.configured = {apple:true}
         store.st = {status:"starting"}; store.providerRequested = false
         store.configureProvider(fakeDaemon.info())
+        store.closeVisualizer()
         store.setupMode = false; store.providerPickerOpen = false; store.connectingProvider = ""
+    }
+
+    function test_sharedVisualizerUpdatesDoNotEcho() {
+        fakeDaemon.options = {viz:"synth", viz_full:false, viz_fps:120}
+        compare(store.vizNames[store.vizStyle], "synth")
+        verify(!store.full)
+        const before = fakeDaemon.asked.length
+        fakeDaemon.options = {viz:"wire", viz_full:true, viz_fps:60}
+        compare(store.vizNames[store.vizStyle], "wire")
+        verify(store.full)
+        compare(fakeDaemon.asked.length, before)
+        store.full = false
+        compare(fakeDaemon.options.viz_full, false)
+        store.vizShow(0, true)
+        compare(fakeDaemon.options.viz, "coverwall")
+    }
+
+    function test_inlineVisualizerSurvivesFrontendHandoff() {
+        store.goPlace({sectionId:"home", full:false, visualizer:"synth", views:[], sel:{}})
+        compare(store.vizNames[store.vizStyle], "synth")
+        verify(!store.full)
+        compare(store.here().visualizer, "synth")
+    }
+
+    function test_visualizerHoverDoesNotChangeChosenStyle() {
+        store.vizStyle = 0
+        const saved = daemon.options.viz
+        store.vizHover = 5
+        compare(store.vizDisplayed, 5)
+        compare(store.vizStyle, 0)
+        compare(daemon.options.viz, saved)
+        store.vizHover = -1
+        compare(store.vizDisplayed, 0)
+    }
+
+    function test_playlistSortingKeepsOriginalOrderAndSurvivesReload() {
+        store.section = store.secPlaylists
+        const v = store.newView("Playlist", "playlist:test", {kind:"playlist", id:"test"})
+        store.stacks[store.section].push(v)
+        const tracks = [{id:"b",title:"Bravo",duration:90}, {id:"a",title:"Alpha",duration:120}]
+        store.fill(v, {tracks:tracks})
+        store.sortPlaylist("title")
+        compare(v.rows[0].track.id, "a")
+        store.fill(v, {tracks:tracks.concat([{id:"c",title:"Charlie",duration:30}])})
+        compare(v.rows[0].track.id, "a")
+        store.sortPlaylist("duration")
+        compare(v.rows[0].track.id, "c")
+        store.sortPlaylist("original")
+        compare(v.rows.map(r => r.track.id).join(","), "b,a,c")
     }
 
     function test_initialStacksAreArraysBeforeProviderReply() {
@@ -271,9 +327,47 @@ TestCase {
         compare(store.section,store.secHome)
     }
 
+    function test_historyIsVisibleWithoutAnUpcomingQueue() {
+        const view = store.cur()
+        view.key = "queue:"
+        store.st = {status:"ready"}
+        fakeDaemon.historyPages = {"": {tracks:[{id:"heard",title:"Already played"}],next:""}}
+        store.fill(view, {tracks:[],pos:0})
+        store.loadHistory(view, true)
+        compare(view.rows.length, 1)
+        compare(view.rows[0].track.id, "heard")
+        verify(view.rows[0].played)
+        compare(view.sel, 0)
+    }
+
+    function test_historyPrependsWithoutChangingQueuePositions() {
+        store.st = {status:"ready",id:"playing",title:"Playing"}
+        fakeDaemon.historyPages = {
+            "": {tracks:[{id:"playing",title:"Playing"},{id:"older",title:"Older"}],next:"page2"},
+            "page2": {tracks:[{id:"oldest",title:"Oldest"}],next:""}
+        }
+        store.showPlayer()
+        wait(0)
+        const view = store.cur()
+        compare(view.rows[0].track.id,"older")
+        compare(view.rows[view.sel].track.id,"playing")
+        store.loadHistory(view, false)
+        compare(view.rows[0].track.id,"oldest")
+        compare(view.rows[1].track.id,"older")
+        compare(view.rows[view.sel].track.id,"playing")
+        const nextIndex = view.rows.findIndex(r => r.track.id === "next")
+        const expectedPosition = view.rows[nextIndex].queueIndex
+        store.activateAt(nextIndex)
+        const jump = fakeDaemon.asked.filter(r => r.cmd === "jump").pop()
+        compare(jump.value,expectedPosition)
+        const requests = fakeDaemon.asked.filter(r => r.cmd === "history").length
+        store.loadHistory(view, false)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "history").length,requests)
+    }
+
     function test_visualizerSurvivesFrontendHandoff() {
         store.full = true
-        store.vizStyle = 4
+        store.vizStyle = store.vizNames.indexOf("wire")
         const place = store.here()
         compare(place.full,true)
         compare(place.visualizer,"wire")
@@ -281,11 +375,51 @@ TestCase {
         store.vizStyle = 0
         store.goPlace(place)
         verify(store.full)
-        compare(store.vizStyle,4)
+        compare(store.vizNames[store.vizStyle],"wire")
         store.vizList = true
         compare(store.vizKey("g"),false)
         store.full = false
         store.vizList = false
+    }
+
+    function test_visualizerDefaultsAndPlayerModes() {
+        compare(store.vizNames.slice(0, 3).join(","), "coverwall,coverflow,waves")
+        compare(store.vizNames[store.vizStyle], "coverwall")
+        verify(store.vizNames.includes("waves"))
+        verify(store.inlineViz)
+        store.key("f")
+        verify(store.full)
+        compare(store.vizNames[store.vizStyle], "coverwall")
+        store.vizList = true
+        verify(store.vizKey("f"))
+        verify(store.inlineViz)
+        verify(!store.vizList)
+        store.vizShow(store.vizNames.indexOf("waves"), true)
+        store.key("f")
+        verify(store.full)
+        compare(store.vizNames[store.vizStyle], "waves")
+        store.vizKey("esc")
+        verify(!store.full)
+        compare(store.vizNames[store.vizStyle], "coverwall")
+    }
+
+    function test_albumActionsTargetAlbumInsteadOfSelectedSong() {
+        const album = {kind:"album",id:"album-id",name:"An album",catalog:true}
+        const view = store.cur()
+        view.rows = [{track:{id:"selected-song",title:"A song"}}]
+        view.sel = 0
+        store.addToLibrary({item:album})
+        const add = fakeDaemon.asked.find(r => r.cmd === "add")
+        compare(add.list, "albums")
+        compare(add.ids[0], "album-id")
+        store.openPicker({item:album})
+        compare(store.pick.what.item.id, "album-id")
+        compare(store.pick.name, "An album")
+        store.pick = null
+        store.rate(1, {item:album})
+        const rating = fakeDaemon.asked.find(r => r.cmd === "rate")
+        compare(rating.refs[0].kind, "album")
+        compare(rating.refs[0].id, "album-id")
     }
 
     function test_visualizerFrameRatesUseSharedOptions() {

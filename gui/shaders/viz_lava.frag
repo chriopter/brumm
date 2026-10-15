@@ -9,6 +9,7 @@
 // mirror the glow. The wax blooms from the texture's mip levels. A new
 // palette pours in from below, in curling tongues, over a second and a half.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -27,7 +28,9 @@ layout(std140, binding = 0) uniform buf {
     float high;
     float level;
     vec4 tint;    // the cover's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D shape;
 
 // per palette: the liquid, the wax's skin, its core, and the hot white
@@ -76,11 +79,13 @@ vec2 bubbles(vec2 p, float cells, float rise, float seed, float many) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
+    vec2 local = areaUv(qt_TexCoord0);
+    vec2 uv = local;
     float e = abs(uv.x - 0.5) * 2.0; // 0 at the glass's middle, 1 at its edge
 
     // the wax in front of this pixel
-    vec4 w = texture(shape, uv);
+    vec4 w = texture(shape, clamp(uv, vec2(0.0), vec2(1.0)));
+    w.a *= step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
     float cover = smoothstep(0.25, 0.75, w.a);
     vec2 nxy = (w.rg * 2.0 - 1.0) * step(0.02, w.a);
     vec3 n = vec3(nxy, sqrt(max(1.0 - dot(nxy, nxy), 0.0)));
@@ -110,7 +115,7 @@ void main() {
     float flare = 0.75 + 1.1 * beat + 0.5 * bass;
     float bulb = exp(-dist * 1.9) * flare;
     float rays = 0.5 + 0.5 * sin(ang * 11.0 + tick * 0.35) * sin(ang * 5.0 - tick * 0.23 + sin(ang * 3.0 + tick * 0.5));
-    vec3 col = liquid * (0.22 + 1.9 * bulb + 0.35 * (1.0 - at.y));
+    vec3 col = liquid * (0.22 + 1.9 * bulb + 0.35 * max(0.0, 1.0 - at.y));
     col += mix(skin, core, 0.6) * bulb * bulb * (0.5 + 1.6 * rays * rays);
     col += white * pow(bulb, 4.0) * 0.9;
     // caustics on the back wall, livelier the louder
@@ -121,10 +126,10 @@ void main() {
     vec2 b = bubbles(q, 9.0, 1.3, 1.0, many)
            + bubbles(q, 15.0, 1.9, 2.0, many) * 0.8
            + bubbles(q, 24.0, 2.6, 3.0, many) * 0.6;
-    col += (white * 0.55 + liquid) * b.x * (0.5 + bulb);
+    col += (white * 0.55 + liquid) * b.x * (0.5 + bulb) * mix(0.15, 1.0, areaFocus(uv));
 
     // the wax blooms into the liquid around it
-    float halo = textureLod(shape, uv, 3.0).a * 0.35 + textureLod(shape, uv, 4.5).a * 0.45 + textureLod(shape, uv, 6.0).a * 0.5;
+    float halo = (textureLod(shape, uv, 3.0).a * 0.35 + textureLod(shape, uv, 4.5).a * 0.45 + textureLod(shape, uv, 6.0).a * 0.5) * areaFocus(uv);
     col += mix(skin, core, halo) * halo * halo * (0.75 + 0.9 * beat);
 
     if (cover > 0.0) {
@@ -157,36 +162,8 @@ void main() {
     // the bulb's flash on a kick: a streak across the floor
     col += white * beat * 0.5 * exp(-abs(uv.y - 0.93) * 55.0) * exp(-e * e * 2.5);
 
-    // the glass: streaks of the room down its sides, darkening where it bends away
-    float glass = 0.30 * exp(-abs(uv.x - 0.045) * 140.0) + 0.16 * exp(-abs(uv.x - 0.965) * 200.0)
-                + 0.07 * smoothstep(0.05, 0.0, abs(uv.x - 0.135)) * (1.0 - uv.y)
-                + 0.04 * smoothstep(0.012, 0.0, abs(uv.x - 0.19)) * (1.0 - uv.y);
-    col += (vec3(1.0) * 0.8 + tint.rgb * 0.4) * glass;
-    col += skin * 0.25 * pow(e, 6.0);
-    col *= 1.0 - 0.62 * pow(e, 3.5);
-
-    // chrome, foot and cap: curved, banded as chrome is, and in it the
-    // lamp's glow mirrored and squeezed
-    float bow = 0.030 * (1.0 - e * e);
-    float foot = uv.y - (0.945 - bow), cap = (0.042 + bow) - uv.y;
-    float metal = max(foot, cap);
-    if (metal > 0.0) {
-        float into = min(metal * 14.0, 1.0);
-        float side = (uv.x - 0.5) * 2.0;
-        float bands = 0.10 + 0.9 * pow(0.5 + 0.5 * sin(asin(clamp(side, -1.0, 1.0)) * 4.0 + 0.9), 3.0);
-        float my = foot > 0.0 ? 0.945 - bow - foot * 6.0 : 0.042 + bow + cap * 6.0;
-        vec4 m = textureLod(shape, vec2(uv.x + side * metal * 0.4, my), 2.5);
-        vec3 chrome = vec3(0.55, 0.60, 0.70) * bands * (0.35 + 0.65 * into)
-                    + liquid * 0.9 * (1.0 - into)
-                    + mix(skin, core, m.b) * m.a * 0.7 * into
-                    + white * exp(-metal * 90.0) * (foot > 0.0 ? 0.7 + 1.5 * beat : 0.25)
-                    + core * exp(-metal * 22.0) * (foot > 0.0 ? 0.5 + 0.8 * beat : 0.15);
-        chrome *= 1.0 - 0.7 * pow(e, 3.0);
-        col = mix(col, chrome, smoothstep(0.0, 0.003, metal));
-    }
-
     // bright spots bloom toward white rather than clip
-    col = 1.0 - exp(-col * 1.3);
+    col = 1.0 - exp(-max(col, vec3(0.0)) * 1.3);
     col += (hash(uv * 733.0 + tick) - 0.5) / 255.0;
     fragColor = vec4(col, 1.0) * qt_Opacity;
 }

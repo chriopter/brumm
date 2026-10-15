@@ -5,6 +5,7 @@
 // of smaller, dimmer glyphs read from the same state, so it falls slower,
 // as if further off, and a ribbon of green light waving through the dark.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -21,7 +22,9 @@ layout(std140, binding = 0) uniform buf {
     float level;      // loudness 0–1
     float aspect;     // width / height
     vec4 tint;        // the cover's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D state;
 layout(binding = 2) uniform sampler2D atlas;
 
@@ -36,7 +39,8 @@ float glyph(vec2 cell, float seed, vec2 f, float blur) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
+    vec2 screen = qt_TexCoord0;
+    vec2 uv = areaUv(screen);
     vec2 tex = vec2(grid.x, grid.y + 1.0);      // the state has a row more
     vec2 suv = vec2(uv.x, uv.y * grid.y / tex.y); // uv in the state
     vec3 green = mix(vec3(0.1, 1.0, 0.3), tint.rgb, 0.18);
@@ -44,18 +48,20 @@ void main() {
     vec3 sea = mix(vec3(0.0, 0.4, 0.3), tint.rgb * 0.5, 0.25);
 
     // The ground: deep green-black, a ribbon of light waving through it.
-    vec3 col = mix(vec3(0.0, 0.03, 0.02), vec3(0.0, 0.0, 0.01), uv.y);
-    float x = uv.x * aspect;
+    vec3 col = mix(vec3(0.0, 0.03, 0.02), vec3(0.0, 0.0, 0.01), screen.y);
+    float x = screen.x * aspect;
     float wave = 0.58 + 0.06 * sin(x * 1.7 + time * 0.35) + 0.03 * sin(x * 3.1 - time * 0.5);
-    float band = exp(-abs(uv.y - wave) * (22.0 - 10.0 * level));
+    float band = exp(-abs(screen.y - wave) * (22.0 - 10.0 * level));
     col += green * band * (0.07 + 0.12 * level) + mint * pow(band, 12.0) * 0.08;
 
     // The far rain: smaller cells, their state from mirrored columns.
-    vec2 bg = uv * grid * 1.7 + vec2(0.0, -0.37);
+    vec2 bg = screen * grid * 1.7 + vec2(0.0, -0.37);
     vec2 bcell = floor(bg);
     vec2 bs = vec2(grid.x - 1.0 - mod(bcell.x * 3.0, grid.x), mod(bcell.y, grid.y));
     vec4 bst = texture(state, (bs + 0.5) / tex);
     col += sea * 0.6 * bst.r * glyph(bcell + 91.0, bst.g, fract(bg), lod + 1.2);
+
+    vec3 backdrop = col;
 
     // The near rain.
     vec2 g = uv * grid;
@@ -91,5 +97,6 @@ void main() {
     vec2 v = (uv - 0.5) * vec2(aspect, 1.0);
     col *= 1.0 - 0.4 * smoothstep(0.45, 1.15, length(v));
     col += (hash(uv * 911.0 + time) - 0.5) / 255.0;
+    col = backdrop + (col - backdrop) * areaFocus(uv);
     fragColor = vec4(col, 1.0) * qt_Opacity;
 }

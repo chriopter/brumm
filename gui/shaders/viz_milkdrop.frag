@@ -3,6 +3,7 @@
 // toward the edges like light through a lens, and toned so the hot cores
 // burn white while the trails keep their color.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -15,12 +16,14 @@ layout(std140, binding = 0) uniform buf {
     float bass;
     vec4 ground; // the deep background
     vec4 glow;   // the cover's color: the light behind it all
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D feed;
 
 void main() {
     vec2 uv = qt_TexCoord0;
-    vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+    vec2 p = (qt_TexCoord0 - areaCenter()) * vec2(aspect, 1.0);
     float r = length(p);
 
     // the ground: deep, lit from the middle, brighter on the kick
@@ -41,6 +44,6 @@ void main() {
     col = col * (1.0 - 0.7 * hot) + light;
 
     // darker toward the edges, as a screen is
-    col *= 1.0 - 0.45 * dot(uv - 0.5, uv - 0.5) * 2.0;
+    col *= 1.0 - 0.45 * dot(qt_TexCoord0 - 0.5, qt_TexCoord0 - 0.5) * 2.0;
     fragColor = vec4(col, 1.0) * qt_Opacity;
 }

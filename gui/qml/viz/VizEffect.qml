@@ -26,7 +26,18 @@ import QtQuick
 
 Item {
     id: fx
+    objectName: "visualizerScene"
     property bool running: false
+    property rect coverArea: parent && parent.sceneArea !== undefined ? parent.sceneArea : Qt.rect(0, 0, width, height)
+    property real coverSize: parent && parent.sceneCoverSize !== undefined ? parent.sceneCoverSize : Math.min(width * 0.42, height * 0.6)
+    property color backgroundColor: "#030305"
+    property bool adaptiveScene: true
+    readonly property real sceneWidth: Math.max(1, coverArea.width)
+    readonly property real sceneHeight: Math.max(1, coverArea.height)
+    readonly property real sceneAspect: sceneWidth / sceneHeight
+    readonly property vector4d activeArea: Qt.vector4d(coverArea.x / Math.max(1, width),
+        coverArea.y / Math.max(1, height), coverArea.width / Math.max(1, width),
+        coverArea.height / Math.max(1, height))
     readonly property var audio: vizAudio
     property var spectrum: null
     property var wave: null

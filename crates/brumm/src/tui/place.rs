@@ -74,10 +74,12 @@ impl Model {
             section_id: self.navigation[self.section].id.clone(),
             player_view: self.player_view,
             full: self.full,
-            visualizer: if self.full {
+            visualizer: if self.inline_viz {
                 super::viz::NAMES[self.viz_style].into()
+            } else if ["coverwall", "coverflow", "waves"].contains(&self.opts.o.viz.as_str()) {
+                self.opts.o.viz.clone()
             } else {
-                String::new()
+                "coverwall".into()
             },
             query: self.query.clone(),
             ..Default::default()
@@ -158,17 +160,16 @@ impl Model {
             s = i;
         }
         self.player_view = p.player_view;
-        if self.full != p.full {
-            self.toggle_full();
-        }
-        if p.full
-            && let Some(style) = super::viz::NAMES
-                .iter()
-                .position(|name| *name == p.visualizer)
-        {
+        let style = super::viz::NAMES
+            .iter()
+            .position(|name| *name == p.visualizer);
+        self.full = p.full;
+        self.inline_viz = style.is_some();
+        if let Some(style) = style {
             self.viz_style = style;
             self.viz_prev = None;
         }
+        self.subscribe();
         self.query.clone_from(&p.query);
         let q = p.query.trim();
         if q.chars().count() >= 2 {

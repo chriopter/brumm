@@ -269,8 +269,8 @@ Item {
         const rows = []
         if (st.status === "logged-out")
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
-        rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F", hint: "Open the fullscreen visualizer." },
-                  { act: "g", icon: "󰆍", label: "Terminal Player", keys: "g", hint: "Switch to the TUI. Music keeps playing." },
+        rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F", hint: "Switch between the player and large visualizer." },
+                  { act: "g", icon: "󰆍", label: "TUI", keys: "g", hint: "Switch to the TUI. Music keeps playing." },
                   { act: "y", icon: "󰌷", label: "Copy Link", hint: "Copy the current song's link." },
                   { heading: "Options" },
                   { act: "ctrl+o", icon: "󰎈", label: "Music Services…", keys: "Ctrl+O", hint: "Connect a service or switch between your accounts." },
@@ -278,8 +278,7 @@ Item {
         if (menuOptions) {
             rows.push({ option: "cover_colors", icon: "󰏘", label: "Cover Colors", hint: "Use the cover's colors for the app." },
                       { option: "autoplay", icon: "󰁨", label: "Autoplay", hint: "Play on after the last song." },
-                      { option: "reduce_motion", icon: "󰔗", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
-                      { option: "wall", icon: "󰋩", label: "Album Wall", hint: "Covers around the cover, not a flow." })
+                      { option: "reduce_motion", icon: "󰔗", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." })
             if (daemon.omarchy)
                 rows.push({ option: "bar", icon: "󰍹", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
                           { option: "music_keys", icon: "󰌌", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
@@ -359,13 +358,30 @@ Item {
     }
     property var pick: null        // add to playlist: {what, name, lists, loading, sel, naming, input}
     property var upd: null         // the update check: {checking, installing, installed, newer, current, latest, err}
+    property bool vizSyncing: false
     property bool full: false      // the visualizer (f)
+    onFullChanged: if (!vizSyncing) publishVisualizer()
+    readonly property bool inlineViz: !full
+    readonly property bool vizActive: true
+
+    function cycleVisualizer() {
+        full = !full
+        help = false
+        vizList = false
+    }
+    function closeVisualizer() {
+        full = false
+        vizList = false
+        vizShow(vizNames.indexOf("coverwall"), true)
+    }
 
     // ── the visualizer ──────────────────────────────────────────────────
     // Its styles, named and ordered as the terminal player's, best first.
-    readonly property var vizNames: ["milkdrop", "cathedral", "synth", "stars", "wire", "fireworks", "lava", "scope", "plasma", "fire", "matrix", "ridge", "led"]
-    readonly property var vizFiles: ["Milkdrop", "Cathedral", "Synth", "Stars", "Wire", "Fireworks", "Lava", "Scope", "Plasma", "Fire", "Matrix", "Ridge", "Led"]
-    property int vizStyle: 0       // it opens on the showpiece
+    readonly property var vizNames: ["coverwall", "coverflow", "waves", "milkdrop", "cathedral", "synth", "stars", "wire", "fireworks", "lava", "scope", "plasma", "fire", "matrix", "ridge", "led"]
+    readonly property var vizFiles: ["Coverwall", "Coverflow", "Waves", "Milkdrop", "Cathedral", "Synth", "Stars", "Wire", "Fireworks", "Lava", "Scope", "Plasma", "Fire", "Matrix", "Ridge", "Led"]
+    property int vizStyle: 0       // every app start opens on coverwall + waves
+    property int vizHover: -1
+    readonly property int vizDisplayed: vizHover >= 0 ? vizHover : vizStyle
     property bool vizQuick: false  // the last change is shown at once, not dissolved (moving through the list)
     property bool vizList: false   // v: the list of styles shows
     property int vizSel: 0
@@ -374,10 +390,28 @@ Item {
     function vizShow(i, quick) {
         vizQuick = !!quick
         vizStyle = (i + vizNames.length) % vizNames.length
-        if (daemon.options.viz !== vizNames[vizStyle]) daemon.setOption("viz", vizNames[vizStyle])
+        publishVisualizer()
+    }
+    function publishVisualizer() {
+        if (vizSyncing) return
+        const name = vizNames[vizStyle]
+        if (daemon.options.viz === name && !!daemon.options.viz_full === full) return
+        daemon.request({cmd:"options", options:{viz:name, viz_full:full}}, () => {})
+    }
+    function syncVisualizer() {
+        const options = daemon.options
+        if (!options || !options.viz) return
+        const name = options.viz === "cover" ? "coverwall" : options.viz
+        const index = vizNames.indexOf(name)
+        if (index < 0) return
+        vizSyncing = true
+        vizQuick = true
+        vizStyle = index
+        full = !!options.viz_full
+        vizSyncing = false
     }
     // The style shown last, in either player; the showpiece at first.
-    function vizLast() { return Math.max(0, vizNames.indexOf(daemon.options.viz || "")) }
+    function vizLast() { return vizStyle }
     function vizStep(d) { vizShow(vizStyle + d) }
     function vizRate(refresh) {
         const rate = daemon.options.viz_fps || 0
@@ -393,6 +427,7 @@ Item {
     // vizKey answers a key while the visualizer shows, as the terminal
     // player's fullKey; false when it is not the visualizer's.
     function vizKey(k) {
+        if (k === "f") { cycleVisualizer(); return true }
         if (k === "ctrl+f") { vizRateStep(); return true }
         if (k === "F") { win.toggleVizFullscreen(); return true }
         const n = vizNames.length
@@ -410,7 +445,7 @@ Item {
             return true
         }
         switch (k) {
-        case "esc": case "f": case "q": full = false; return true
+        case "esc": case "q": closeVisualizer(); return true
         case "tab": case "right": case "down": case "j": case "l": vizStep(1); return true
         case "shift+tab": case "left": case "up": case "k": case "h": vizStep(-1); return true
         case "v": vizList = true; vizSel = vizStyle; vizFrom = vizStyle; return true
@@ -434,6 +469,9 @@ Item {
     property string flash: ""
     property double split: 0.4
 
+    property bool prependingHistory: false
+    signal historyChanging()
+    signal historyChanged(int added)
     signal selMoved()              // the list scrolls the selection into view
 
     Timer { id: flashTimer; interval: 4000; onTriggered: s.flash = "" }
@@ -479,7 +517,7 @@ Item {
 
     function newView(title, key, item) {
         return { title: title, key: key, item: item || null, rows: [], loaded: false, loading: false,
-                 err: "", sel: 0, qpos: 0, filter: "", all: null, want: "" }
+                 err: "", sel: 0, qpos: 0, filter: "", all: null, want: "", sortMode: "original", sourceRows: [] }
     }
 
     function stack() { return stacks[section] }
@@ -587,13 +625,21 @@ Item {
             for (const i of (sh.items || [])) rows.push({ item: i })
         }
         for (const i of (reply.items || [])) rows.push({ item: i })
-        for (const t of (reply.tracks || [])) rows.push({ track: t })
+        for (const [i, t] of (reply.tracks || []).entries()) rows.push(v.key === "queue:" ? { track: t, queueIndex: Math.max(0, reply.pos || 0) + i } : { track: t })
         if (reply.next) rows.push({ item: { name: "More", kind: "shelf", id: reply.next, route: reply.next, catalog: true } })
         const first = !v.loaded
-        v.rows = rows
+        if (v.key === "queue:") {
+            v.queueRows = rows.slice()
+            v.historyRows = recent.filter(t => t.id !== st.id).map(t => ({track:t, played:true}))
+            v.historyNext = undefined
+            v.historyLoading = false
+            rows.unshift(...v.historyRows)
+        }
+        v.sourceRows = rows.slice()
+        v.rows = sortedRows(v, rows)
         v.loaded = true
         v.err = ""
-        if (v.all !== null) { v.all = rows; applyFilter(v) }
+        if (v.all !== null) { v.all = v.rows; applyFilter(v) }
         v.qpos = Math.max(0, reply.pos || 0)
         if (it && it.kind === "album" && v.title === "Album" && reply.tracks && reply.tracks.length)
             v.title = reply.tracks[0].album
@@ -602,7 +648,61 @@ Item {
             if (i >= 0) v.sel = i
         }
         v.sel = nearest(rows, Math.min(v.sel, Math.max(0, rows.length - 1)), 1)
+        if (v.key === "queue:") Qt.callLater(() => loadHistory(v, true))
     }
+
+    function sortedRows(v, source) {
+        if (!v.item || v.item.kind !== "playlist" || !v.sortMode || v.sortMode === "original") return source.slice()
+        const notes = source.filter(r => !r.track)
+        const tracks = source.filter(r => r.track).slice()
+        const key = v.sortMode
+        tracks.sort((a, b) => key === "duration"
+            ? (a.track.duration || 0) - (b.track.duration || 0)
+            : String(a.track[key] || "").localeCompare(String(b.track[key] || ""), undefined, {numeric:true, sensitivity:"base"}))
+        return notes.concat(tracks)
+    }
+
+    function sortPlaylist(mode) {
+        const v = cur()
+        if (!v.item || v.item.kind !== "playlist") return
+        const selected = v.rows[v.sel]
+        v.sortMode = mode
+        v.rows = sortedRows(v, v.sourceRows || [])
+        if (v.all !== null) { v.all = v.rows; applyFilter(v) }
+        const index = v.rows.indexOf(selected)
+        v.sel = index >= 0 ? index : nearest(v.rows, 0, 1)
+        refresh()
+    }
+
+    function loadHistory(v, reset) {
+        if (!v || v.key !== "queue:" || !v.queueRows || v.historyLoading || (!reset && v.historyNext === "")) return
+        const generation = providerGeneration
+        const song = st.id
+        const queue = v.queueRows
+        v.historyLoading = true
+        daemon.request({cmd:"history", query:reset ? "" : (v.historyNext || ""), value:50}, (err, reply) => {
+            if (generation !== providerGeneration || song !== st.id || v.queueRows !== queue) return
+            v.historyLoading = false
+            if (err) {
+                v.historyNext = ""
+                if (!v.queueRows.length) { v.err = err; if (v === cur()) refresh() }
+                return
+            }
+            const older = ((reply && reply.tracks) || []).filter(t => t.id !== song).reverse().map(t => ({track:t, played:true}))
+            const before = (v.historyRows || []).length
+            if (reset && !older.length) { v.historyNext = (reply && reply.next) || ""; return }
+            v.historyRows = reset ? older : older.concat(v.historyRows || [])
+            v.historyNext = (reply && reply.next) || ""
+            const added = v.historyRows.length - before
+            prependingHistory = true
+            if (v === cur()) historyChanging()
+            v.rows = v.historyRows.concat(v.queueRows)
+            v.sel = Math.max(0, Math.min(v.rows.length - 1, v.sel + added))
+            if (v === cur()) { refresh(); historyChanged(added) }
+            prependingHistory = false
+        })
+    }
+
 
     function nearest(rows, i, dir) {
         for (const d of [dir, -dir])
@@ -655,6 +755,7 @@ Item {
     Connections {
         target: daemon
         ignoreUnknownSignals: true
+        function onOptionsChanged() { s.syncVisualizer() }
         function onProviderChanged(info) { s.configureProvider(info) }
         function onState(state) { s.gotState(state) }
         function onLibrary() {
@@ -798,7 +899,7 @@ Item {
     // as one that played.
     function remember() {
         if (!st.id || st.preview || !st.title) return
-        recent = recent.filter(t => t.id !== st.id).concat([{ id: st.id, title: st.title, artist: st.artist, album: st.album, artwork: artwork }]).slice(-8)
+        recent = recent.filter(t => t.id !== st.id).concat([{ id: st.id, title: st.title, artist: st.artist, album: st.album, artwork: artwork }]).slice(-200)
     }
 
     function showPlaying(t, source, index) {
@@ -889,7 +990,7 @@ Item {
     function here() {
         const v = cur(), r = v.rows[v.sel]
         return { section: section, sectionId: navigation[section].id, sectionName: sectionNames[section], playerView: playerView, query: query,
-                 full: full, visualizer: full ? vizNames[vizStyle] : "",
+                 full: full, visualizer: vizNames[vizStyle],
                  views: stack().slice(1).filter(x => x.item).map(x => ({ key: x.key, title: x.title, item: x.item })),
                  sel: { id: r ? (r.track ? r.track.id : r.item ? r.item.id : "") : "", index: v.sel } }
     }
@@ -915,7 +1016,7 @@ Item {
         compactBrowser = !playerView
         vizList = false
         const style = vizNames.indexOf(p.visualizer || "")
-        if (p.full && style >= 0) vizShow(style, true)
+        if (style >= 0) vizShow(style, true)
         full = !!p.full
         query = p.query || ""
         const q = query.trim()
@@ -1009,8 +1110,10 @@ Item {
             return push(newView(it.name, itemKey(it), it), "")
         }
         if (v.key === "queue:") {
-            showPlaying(r.track, st.source, v.qpos + v.sel)
-            return daemon.send({ cmd: "jump", value: v.qpos + v.sel })
+            if (r.played) return playSong(r.track)
+            const index = r.queueIndex === undefined ? v.qpos + v.sel : r.queueIndex
+            showPlaying(r.track, st.source, index)
+            return daemon.send({ cmd: "jump", value: index })
         }
         const so = songsIn(v)
         const i = so.at[v.sel]
@@ -1404,18 +1507,18 @@ Item {
         })
     }
 
-    function rateable() {
-        const r = cur().rows[cur().sel]
+    function rateable(row) {
+        const r = row || cur().rows[cur().sel]
         if (r && r.track) return { ref: { kind: "song", id: r.track.id }, name: r.track.title }
         if (r && r.item && ((capabilities.ratingKinds || []).includes(r.item.kind) || (capabilities.preference && (capabilities.favoriteKinds || []).includes(r.item.kind)))) return { ref: { kind: r.item.kind, id: r.item.id }, name: r.item.name }
         if (st.id && !st.preview) return { ref: { kind: "song", id: st.id }, name: st.title }
         return null
     }
 
-    function rate(value) {
-        if (capabilities.preference && value === 1) { const it = rateable(); if (it) toggleFavorite(it.ref, it.name); return }
+    function rate(value, row) {
+        if (capabilities.preference && value === 1) { const it = rateable(row); if (it) toggleFavorite(it.ref, it.name); return }
         if (!(capabilities.ratings && (value !== -1 || capabilities.dislike))) return
-        const it = rateable()
+        const it = rateable(row)
         if (!it) return
         if (rating[it.ref.id] === value) value = 0
         if (value === 0) delete rating[it.ref.id]
@@ -1425,9 +1528,9 @@ Item {
         daemon.send({ cmd: "rate", refs: [it.ref], value: value })
     }
 
-    function addToLibrary() {
+    function addToLibrary(row) {
         if (!(capabilities.collectionWrite)) return
-        const r = cur().rows[cur().sel]
+        const r = row || cur().rows[cur().sel]
         let kind, id, name
         if (r && r.track) { kind = "songs"; id = r.track.id; name = r.track.title }
         else if (r && r.item) {
@@ -1451,9 +1554,9 @@ Item {
 
     // ── add to playlist ─────────────────────────────────────────────────
 
-    function openPicker() {
+    function openPicker(row) {
         if (!(capabilities.playlistWrite)) return
-        const r = cur().rows[cur().sel]
+        const r = row || cur().rows[cur().sel]
         let what, name
         if (r && r.track) { what = r; name = r.track.title }
         else if (r && r.item && (r.item.kind === "album" || r.item.kind === "playlist")) { what = r; name = r.item.name }
@@ -1637,6 +1740,8 @@ Item {
         if (filtering) return filterKey(k, ev)
         if (k === "?" && !full) { help = !help; return } // the visualizer carries its own keys
         if (full && vizKey(k)) return
+        // The embedded visualizer leaves list navigation and shortcuts alone.
+        if (inlineViz && k === "esc") { closeVisualizer(); return }
         if (sideFocus) {
             const n = secQueue
             switch (k) {
@@ -1692,10 +1797,8 @@ Item {
             refresh()
             return
         case "F": return win.toggleVizFullscreen()
-        case "f": // it opens on the style shown last, in either player
-            if (!full) vizShow(vizLast(), true)
-            full = !full; help = false; vizList = false
-            return
+        case "f": cycleVisualizer(); return
+        case "v": vizKey("v"); return
         case "n": return next()
         case "p": case "b": return prev()
         case "shift+left": return seek(position(Date.now()) - 10)

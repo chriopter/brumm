@@ -4,6 +4,7 @@
 // center, its streak as long as the speed. Behind them a nebula drifts
 // toward the viewer and, at warp, a tunnel of light.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -20,7 +21,9 @@ layout(std140, binding = 0) uniform buf {
     float aspect; // width / height
     float pixel;  // one pixel, in half-heights
     vec4 tint;    // the cover's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 
 const float TAU = 6.2831853;
 const int RINGS = 11;
@@ -38,7 +41,7 @@ float noise(vec2 p) {
 }
 
 void main() {
-    vec2 p = (qt_TexCoord0 - 0.5) * vec2(aspect, 1.0) * 2.0;
+    vec2 p = (areaUv(qt_TexCoord0) - 0.5) * vec2(aspect * activeArea.z / max(activeArea.w, 0.001), 1.0) * 2.0;
     float r = length(p);
     float ang = atan(p.y, p.x) + roll;
     // Cruising, streaks are short; a kick stretches them into hyperspace.
@@ -58,6 +61,8 @@ void main() {
     float neb2 = smoothstep(0.45, 1.0, noise(np.yx * 2.3 - 3.0));
     vec3 col = mix(vec3(0.004, 0.006, 0.025), far * 0.06, smoothstep(1.8, 0.0, r));
     col += (neb * hue * 0.22 + neb2 * far * 0.14) * (0.5 + level) * smoothstep(0.0, 0.8, r);
+
+    vec3 sky = col;
 
     // Hyperspace: streaks of light racing along the rays.
     float sl = fract(ang / TAU) * 240.0;
@@ -107,6 +112,8 @@ void main() {
     col += vec3(0.85, 0.92, 1.0) * 0.6 * exp(-r * 12.0) * (0.3 + beat + warp);
     col += hue * beat * beat * 0.05;
     col += mix(hue, vec3(1.0), 0.3) * (0.15 + 0.5 * beat) * exp(-abs(p.y) * 40.0 - abs(p.x) * 1.5);
+
+    col = mix(sky, col, areaFocus(areaUv(qt_TexCoord0)));
 
     // Lit like film, softly shaded at the corners.
     col = 1.0 - exp(-col * 1.4);

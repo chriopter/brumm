@@ -152,6 +152,7 @@ Window {
         onTriggered: {
             for (const k of testKeys.split(" ")) {
                 if (k === "MENU") store.menuOpen = true // the menu opens by a click
+                else if (k === "VIZ_MENU") full.openSettings(null)
                 else store.dispatch(k, { text: k.length === 1 ? k : "", modifiers: 0 })
             }
         }
@@ -160,22 +161,12 @@ Window {
     Item {
         id: backgroundLayer
         anchors.fill: parent
-    RenderSurface { id: backdropSurface; anchors.fill: parent; density: Math.min(1, Screen.devicePixelRatio) * 0.5 }
-    Backdrop {
-        anchors.fill: parent
-        visible: ui.effects && !(store.full && full.opacity === 1)
-        layer.enabled: ui.effects
-        layer.smooth: true
-        layer.textureSize: backdropSurface.textureSize
-    }
-    Rectangle {
-        anchors.fill: parent
-        visible: !ui.effects
-        gradient: Gradient {
-            GradientStop { position: 0; color: ui.tint(ui.deep, 0.1) }
-            GradientStop { position: 1; color: ui.tint(ui.deep, 0.22) }
+        z: -2
+        Rectangle {
+            anchors.fill: parent
+            color: full.backgroundColor
+            Behavior on color { enabled: !ui.calm; ColorAnimation { duration: 350 } }
         }
-    }
 
     }
 
@@ -314,8 +305,11 @@ Window {
 
     FullStage {
         id: full
+        parent: win.contentItem
+        z: store.full ? 1 : -1
+        embedded: !store.full
         anchors.fill: parent
-        opacity: store.full ? 1 : 0
+        opacity: store.vizActive ? 1 : 0
         visible: opacity > 0
         Behavior on opacity { enabled: !ui.calm; NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
     }

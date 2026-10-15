@@ -35,10 +35,16 @@ impl Model {
         let mut bottom = Vec::new();
         if cover_h >= 6 {
             let cover_w = col_w.min((cover_h as f64 * self.cell_aspect).round() as i64);
-            for l in self.stage_cover(Size {
+            let size = Size {
                 width: cover_w as usize,
                 height: cover_h as usize,
-            }) {
+            };
+            let picture = if self.inline_viz {
+                self.inline_visualizer(size)
+            } else {
+                self.stage_cover(size)
+            };
+            for l in picture {
                 top.push(StageLine {
                     text: l,
                     center: true,

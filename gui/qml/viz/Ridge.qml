@@ -8,6 +8,8 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#03050b"
+    adaptiveScene: true
 
     // Ten pushes a second; slide is how far the lines have gone toward the
     // next one, so they recede smoothly between pushes.
@@ -48,6 +50,7 @@ VizEffect {
 
     ShaderEffect {
         anchors.fill: parent
+        property vector4d activeArea: fx.activeArea
         property real slide: fx.slide
         property real beat: fx.audio.beat
         property real bass: fx.audio.bass

@@ -14,6 +14,7 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#050302"
 
     property real time: 0
     property real dt: 0
@@ -85,7 +86,7 @@ VizEffect {
         height: fx.height
         property real time: fx.time
         property real dt: fx.dt
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real px: 2 / Math.max(1, height)
         property real reach: fx.reach
         property real rise1: fx.rise1
@@ -116,7 +117,7 @@ VizEffect {
     ShaderEffect {
         anchors.fill: parent
         property real time: fx.time
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real rise2: fx.rise2
         property real flare: fx.flare
         property real bass: fx.audio.bass
@@ -128,6 +129,7 @@ VizEffect {
         property real huesMix: fx.huesMix
         property color tint: fx.here
         property var sim: heat
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_fire.frag.qsb"
     }
 }

@@ -338,6 +338,31 @@ impl Visualizer {
         }
     }
 
+    /// Styled rows for the visualizer embedded in the normal player.
+    pub fn lines(&self) -> Vec<super::text::L> {
+        use ratatui::{
+            style::Style,
+            text::{Line, Span},
+        };
+        (0..self.h)
+            .map(|y| {
+                Line::from(
+                    (0..self.w)
+                        .map(|x| {
+                            let i = y * self.w + x;
+                            Span::styled(
+                                self.glyph[i].to_string(),
+                                Style::default()
+                                    .fg(color(self.col[i]))
+                                    .bg(color(self.bg[i])),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    }
+
     /// The grid as text rows, each cell's glyph and colors, for tests.
     #[cfg(test)]
     pub fn rows(&self) -> Vec<String> {

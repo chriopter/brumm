@@ -49,6 +49,14 @@ impl Library for Client {
 }
 
 impl Api for Client {
+    fn recently_played<'a>(&'a self) -> Reply<'a, Result<Vec<Track>>> {
+        Box::pin(async {
+            let resources = self
+                .fetch("/v1/me/recent/played/tracks?limit=25&types=songs,library-songs")
+                .await?;
+            Ok(super::tracks(&resources))
+        })
+    }
     fn home<'a>(&'a self) -> Reply<'a, Result<Vec<Shelf>>> {
         Box::pin(Client::home(self))
     }

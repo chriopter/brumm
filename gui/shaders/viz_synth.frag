@@ -4,6 +4,7 @@
 // streak and ghosts, scanlines lie across it, and on every eighth kick
 // the tape slips: bands jump sideways and the colors tear.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -20,7 +21,9 @@ layout(std140, binding = 0) uniform buf {
     vec2 sun;     // where the sun stands in the picture
     vec4 hot;     // the grid's color
     vec4 ice;     // the ridges' color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D scene;
 layout(binding = 2) uniform sampler2D rays;
 

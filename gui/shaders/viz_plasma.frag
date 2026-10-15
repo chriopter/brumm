@@ -7,6 +7,7 @@
 // glowing as if lit from within. Everything here is smooth: no edge, no
 // pole, no crease.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -22,7 +23,9 @@ layout(std140, binding = 0) uniform buf {
     float level;   // eased
     vec4 ripples;  // the four kick swells' ages, seconds (< 0: none)
     vec4 sources;  // the two ring trains' middles, off screen (xy, zw)
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D ring;
 
 // the field at p (in rows of a 40-row screen, as the terminal's)
@@ -45,6 +48,7 @@ float field(vec2 p) {
 
 void main() {
     vec2 uv = qt_TexCoord0;
+    float focus = areaFocus(areaUv(uv));
     // in terminal cells: 40 rows high, twice as many columns as it is wide
     vec2 p = (uv - 0.5) * vec2(aspect * 80.0, 40.0);
 
@@ -68,14 +72,14 @@ void main() {
     col = pow(col, vec3(1.6));
     float lum = dot(col, vec3(0.3, 0.55, 0.15));
     col *= 0.35 + 0.65 * n.z * n.z + 0.3 * beat;
-    col += col * lum * (0.8 + 1.0 * beat);
+    col += col * lum * (0.8 + 1.0 * beat) * focus;
 
     // a thin line of light at each step of the ring, as the terminal's
     // bands have edges; it fades out where the surface lies flat, where
     // it would swell into a blot or meet another in a corner
     float step10 = abs(fract(pos * 10.0) - 0.5) * 2.0;
     col += mix(col, vec3(1.0), 0.35) * pow(step10, 18.0) * (0.5 + 0.8 * beat)
-         * smoothstep(0.012, 0.07, slope);
+         * smoothstep(0.012, 0.07, slope) * focus;
 
     // an oil film on the slopes: a faint rainbow where the surface turns
     // away, fuller when it is loud
@@ -88,11 +92,11 @@ void main() {
     vec3 l = normalize(vec3(0.7 * sin(time * 0.23), 0.6 * cos(time * 0.31), 1.0));
     vec3 h = normalize(l + vec3(0.0, 0.0, 1.0));
     float nh = max(dot(n, h), 0.0);
-    col += vec3(1.0) * pow(nh, 120.0) * 0.9;
-    col += mix(col, vec3(1.0), 0.5) * pow(nh, 16.0) * 0.3;
+    col += vec3(1.0) * pow(nh, 120.0) * 0.9 * focus;
+    col += mix(col, vec3(1.0), 0.5) * pow(nh, 16.0) * 0.3 * focus;
     vec3 l2 = normalize(vec3(-0.8 * cos(time * 0.19), 0.7 * sin(time * 0.27), 0.8));
     float nh2 = max(dot(n, normalize(l2 + vec3(0.0, 0.0, 1.0))), 0.0);
-    col += mix(col, vec3(1.0), 0.6) * (pow(nh2, 70.0) * 0.5 + pow(nh2, 10.0) * 0.12);
+    col += mix(col, vec3(1.0), 0.6) * (pow(nh2, 70.0) * 0.5 + pow(nh2, 10.0) * 0.12) * focus;
 
     // tone, and darker toward the edges, as a screen is
     col = 1.0 - exp(-col * 1.6);

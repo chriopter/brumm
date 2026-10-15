@@ -11,6 +11,7 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#000000"
 
     property real rot: 0
     property real steps: 0
@@ -36,9 +37,10 @@ VizEffect {
     // One step of the echoes, drawn into the feedback texture only.
     ShaderEffect {
         id: warp
+        property vector4d activeArea: fx.activeArea
         anchors.fill: parent
         property real time: fx.audio.t
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real steps: fx.steps
         property real rot: fx.rot
         property real twist: 0.025 * fx.dir
@@ -68,12 +70,13 @@ VizEffect {
 
     ShaderEffect {
         anchors.fill: parent
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real beat: fx.audio.beat
         property real bass: fx.audio.bass
         property color ground: fx.colors.darker_background || "#0e0e14"
         property color glow: fx.lit(fx.here)
         property var feed: echoes
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_milkdrop.frag.qsb"
     }
 }

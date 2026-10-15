@@ -7,6 +7,10 @@
 #include <QFontDatabase>
 #include <QFontInfo>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QVector4D>
 #include <QLockFile>
 #include <QProcess>
 #include <QQmlApplicationEngine>
@@ -202,8 +206,27 @@ int main(int argc, char *argv[])
     // a moment after it opens, then quits.
     if (const QString shot = qEnvironmentVariable("BRUMM_GUI_SHOT"); !shot.isEmpty()) {
         QTimer::singleShot(qEnvironmentVariableIntValue("BRUMM_GUI_SHOT_MS") ?: 1500, &app, [&engine, shot] {
-            if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0)))
+            if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
                 w->grabWindow().save(shot);
+                const QString statePath = qEnvironmentVariable("BRUMM_GUI_SCENE_STATE");
+                if (!statePath.isEmpty()) {
+                    QJsonArray scenes;
+                    QList<QQuickItem *> pending{w->contentItem()};
+                    while (!pending.isEmpty()) {
+                        auto *item = pending.takeLast();
+                        pending.append(item->childItems());
+                        if (item->objectName() != "visualizerScene") continue;
+                        const QRectF area = item->property("coverArea").toRectF();
+                        const QVector4D active = item->property("activeArea").value<QVector4D>();
+                        scenes.append(QJsonObject{{"style", item->parentItem()->property("style").toInt()}, {"width", item->width()}, {"height", item->height()},
+                            {"area", QJsonArray{area.x(), area.y(), area.width(), area.height()}},
+                            {"active", QJsonArray{active.x(), active.y(), active.z(), active.w()}}});
+                    }
+                    QFile output(statePath);
+                    if (output.open(QIODevice::WriteOnly))
+                        output.write(QJsonDocument(QJsonObject{{"width", w->width()}, {"height", w->height()}, {"scenes", scenes}}).toJson());
+                }
+            }
             QCoreApplication::quit();
         });
     }

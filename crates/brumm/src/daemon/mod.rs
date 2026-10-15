@@ -4,6 +4,7 @@
 
 mod feedback;
 mod frontends;
+mod history;
 mod known;
 mod library;
 mod playback;
@@ -126,6 +127,7 @@ struct Inner {
     eng: Option<Arc<Engine>>,
     api: Option<Arc<ProviderSession>>,
     state: State,
+    history_song: String,
     conns: HashMap<u64, ConnInfo>,
     booting: bool,
     boot_next: bool,
@@ -754,6 +756,27 @@ impl Daemon {
             };
             let changed = next != i.state;
             let started = es.playing && !i.state.player.playing;
+            if es.playing
+                && es.preview.is_none()
+                && !es.id.is_empty()
+                && !es.title.is_empty()
+                && es.id != i.history_song
+            {
+                let track = crate::music::Track {
+                    id: es.id.clone(),
+                    title: es.title.clone(),
+                    artist: es.artist.clone(),
+                    album: es.album.clone(),
+                    artwork: es.artwork.clone(),
+                    duration: es.dur,
+                    ..Default::default()
+                };
+                if let Err(e) = history::record(&i.lib.directory(), &track) {
+                    eprintln!("listening history: {e}");
+                } else {
+                    i.history_song = es.id.clone();
+                }
+            }
             i.state = next.clone();
             (next, changed, started)
         };
@@ -1089,6 +1112,41 @@ impl Daemon {
                 frontends::place(r.place.as_ref(), reply);
                 return Ok(());
             }
+            ipc::CMD_HISTORY => {
+                let dir = self.lock().lib.directory();
+                let cursor = if r.query.is_empty() {
+                    None
+                } else {
+                    Some(
+                        r.query
+                            .parse::<u64>()
+                            .map_err(|_| err("invalid history cursor"))?,
+                    )
+                };
+                let limit = (r.value as usize).clamp(1, 100);
+                let (mut tracks, next) =
+                    tokio::task::spawn_blocking(move || history::page(&dir, cursor, limit))
+                        .await
+                        .map_err(|e| err(e.to_string()))??;
+                if cursor.is_none()
+                    && next.is_empty()
+                    && let Ok(api) = self.client()
+                {
+                    match self.auth_check(&api, api.recently_played().await).await {
+                        Ok(recent) => {
+                            let mut seen: std::collections::HashSet<_> =
+                                tracks.iter().map(|t| t.id.clone()).collect();
+                            tracks.extend(recent.into_iter().filter(|t| seen.insert(t.id.clone())));
+                        }
+                        Err(crate::error::Error::Unsupported) => {}
+                        Err(e) if tracks.is_empty() => return Err(e),
+                        Err(_) => {}
+                    }
+                }
+                reply.tracks = tracks;
+                reply.next = next;
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -1372,11 +1430,71 @@ impl Daemon {
             self.auth_check(&api, api.add_to_playlist(&r.start, &r.ids).await)
                 .await?;
         }
+        let playlist = if r.start.is_empty() {
+            reply.items.first().cloned()
+        } else {
+            api.lib
+                .items("playlists")
+                .unwrap_or_default()
+                .into_iter()
+                .find(|p| p.id == r.start)
+        };
+        let mut expected = r.ids.len();
+        if let Some(p) = &playlist {
+            if r.start.is_empty() {
+                let mut playlists = api.lib.items(ipc::LIST_PLAYLISTS).unwrap_or_default();
+                if !playlists.iter().any(|old| old.id == p.id) {
+                    playlists.push(p.clone());
+                    api.lib.set_items(ipc::LIST_PLAYLISTS, playlists);
+                }
+            }
+            if let Some(mut tracks) = api
+                .lib
+                .tracks(&p.key())
+                .or_else(|| r.start.is_empty().then(Vec::new))
+            {
+                expected = tracks.len() + r.ids.len();
+                let playing = self.lock().state.player.clone();
+                let current = crate::music::Track {
+                    id: playing.id,
+                    title: playing.title,
+                    artist: playing.artist,
+                    album: playing.album,
+                    artwork: playing.artwork,
+                    duration: playing.dur,
+                    ..Default::default()
+                };
+                tracks.extend(api.lib.known.of(&r.ids, 0, &[current]));
+                api.lib.set_tracks(&p.key(), tracks);
+            }
+            self.library_changed(&api).await;
+        }
         let d = self.clone();
         let generation = self.session.current();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(3)).await; // Apple saves in the background
-            d.refresh_for(generation).await;
+            if let Some(p) = playlist {
+                // Apple acknowledges writes before its read API sees them.
+                // Keep the accepted additions visible until that read catches up.
+                for delay in [1, 3, 6, 10] {
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                    let Ok(_lease) = d.session.read(generation).await else {
+                        return;
+                    };
+                    let (tracks, error) = api.tracks(&p).await;
+                    if d.auth_check(&api, error.map_or(Ok(()), Err)).await.is_err() {
+                        return;
+                    }
+                    let pending_count = api.lib.tracks(&p.key()).map_or(0, |cached| cached.len());
+                    if tracks.len() >= expected.max(pending_count) {
+                        api.lib.set_tracks(&p.key(), tracks);
+                        d.library_changed(&api).await;
+                        return;
+                    }
+                }
+            } else {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                d.refresh_for(generation).await;
+            }
         });
         Ok(())
     }
@@ -1472,6 +1590,7 @@ impl Daemon {
             i.lib = Arc::new(Library::load_at(dir.clone()));
             i.resume = Resume::load_at(dir);
             i.state.player = Player::default();
+            i.history_song.clear();
             i.play_check += 1;
             i.asleep = false;
             i.eng.take()
@@ -1896,6 +2015,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(q.pos, -1, "nothing is queued while the player sleeps");
+    }
+
+    #[tokio::test]
+    async fn history_can_be_paged_without_starting_the_player() {
+        let dir =
+            std::env::temp_dir().join(format!("brumm-history-ipc-{}", getrandom::u64().unwrap()));
+        let d = Arc::new(Daemon::new("dev", Library::load_at(dir.clone()), None));
+        for id in ["one", "two", "three"] {
+            history::record(
+                &dir,
+                &crate::music::Track {
+                    id: id.into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        let mut reply = Message::default();
+        d.handle(
+            0,
+            &Request {
+                cmd: ipc::CMD_HISTORY.into(),
+                value: 2.0,
+                ..Default::default()
+            },
+            &mut reply,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            reply
+                .tracks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            ["three", "two"]
+        );
+        let mut last = Message::default();
+        d.handle(
+            0,
+            &Request {
+                cmd: ipc::CMD_HISTORY.into(),
+                value: 2.0,
+                query: reply.next,
+                ..Default::default()
+            },
+            &mut last,
+        )
+        .await
+        .unwrap();
+        assert_eq!(last.tracks[0].id, "one");
+        assert!(last.next.is_empty());
+        assert!(d.lock().eng.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Explore and Replay cards carry a route, but bulk song actions take

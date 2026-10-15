@@ -3,6 +3,7 @@
 // levels, a halo in the cover's color behind, and the whole mirrored on a
 // glossy floor.
 #version 440
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 qt_TexCoord0;
 layout(location = 0) out vec4 fragColor;
@@ -18,7 +19,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 deep;    // the beam, dim → lit
     vec4 hot;
     vec4 halo;    // the cover's color
+    vec4 activeArea;
 };
+#include "viz_area.glsl"
 layout(binding = 1) uniform sampler2D lines;
 layout(binding = 2) uniform sampler2D trail;
 
@@ -34,8 +37,8 @@ float glow(vec2 uv) {
 }
 
 void main() {
-    vec2 uv = qt_TexCoord0;
-    vec2 c = vec2((uv.x - 0.5) * aspect, uv.y - 0.43);
+    vec2 uv = areaUv(qt_TexCoord0);
+    vec2 c = (qt_TexCoord0 - areaCenter()) * vec2(aspect, 1.0);
 
     // the ground: dark, a halo behind the shape that swells with the bass
     vec3 base = ground.rgb * (1.0 - 0.35 * length(c));

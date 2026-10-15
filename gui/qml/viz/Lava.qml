@@ -13,6 +13,7 @@ import ".."
 
 VizEffect {
     id: fx
+    backgroundColor: "#08050d"
 
     property real phase: 0
     property real tick: 0
@@ -55,7 +56,7 @@ VizEffect {
         blending: false
         property real phase: fx.phase
         property real tick: fx.tick
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real swell: fx.swell
         property real split: fx.split
         property real bass: fx.audio.bass
@@ -77,7 +78,7 @@ VizEffect {
         anchors.fill: parent
         property real phase: fx.phase
         property real tick: fx.tick
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property real pal: fx.pal
         property real old: fx.old
         property real mixing: fx.mixing
@@ -87,6 +88,7 @@ VizEffect {
         property real level: fx.audio.level
         property color tint: fx.here
         property var shape: shape
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_lava.frag.qsb"
     }
 }

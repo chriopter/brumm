@@ -153,4 +153,35 @@ TestCase {
         verify(Number.isFinite(wall.rows))
         verify(wall.cells.length < 100)
     }
+    Component {
+        id: mappedScene
+        Item {
+            width: 900; height: 600
+            property alias panel: panel
+            property alias content: content
+            property alias region: region
+            property alias tracker: tracker
+            Item { id: destination; anchors.fill: parent }
+            Item {
+                id: panel; x: 200; y: 40; width: 650; height: 500
+                Item {
+                    id: content; anchors.centerIn: parent; width: parent.width - 100; height: parent.height - 80
+                    Item { id: region; x: 25; y: 15; width: parent.width - 50; height: parent.height - 30 }
+                }
+            }
+            Brumm.MappedRect { id: tracker; sourceItem: region; targetItem: destination }
+        }
+    }
+
+    function test_activeAreaTracksInitialLayoutAndAncestorChanges() {
+        const scene = createTemporaryObject(mappedScene, this)
+        tryCompare(scene.tracker, "bounds", Qt.rect(275, 95, 500, 390))
+        scene.panel.x = 300
+        tryCompare(scene.tracker, "bounds", Qt.rect(375, 95, 500, 390))
+        scene.panel.width = 450
+        tryCompare(scene.tracker, "bounds", Qt.rect(375, 95, 300, 390))
+        scene.panel.height = 400
+        tryCompare(scene.tracker, "bounds", Qt.rect(375, 95, 300, 290))
+    }
+
 }

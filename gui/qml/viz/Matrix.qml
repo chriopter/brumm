@@ -8,12 +8,13 @@ import QtQuick
 
 VizEffect {
     id: fx
+    backgroundColor: "#000000"
 
     // The grid: a cell a glyph.
     readonly property int cellW: Math.max(8, Math.round(ui.px(15)))
     readonly property int cellH: Math.max(10, Math.round(ui.px(21)))
-    readonly property int cols: Math.max(1, Math.ceil(width / cellW))
-    readonly property int rows: Math.max(1, Math.ceil(height / cellH))
+    readonly property int cols: Math.max(1, Math.ceil(sceneWidth / cellW))
+    readonly property int rows: Math.max(1, Math.ceil(sceneHeight / cellH))
 
     // The rain, moved on once a frame: how fast it falls (rows a second),
     // how far it has fallen, how far the glyphs have churned, and where it
@@ -136,8 +137,9 @@ VizEffect {
         property real flash: fx.flash
         property real time: fx.time
         property real level: fx.level
-        property real aspect: width / Math.max(1, height)
+        property real aspect: fx.sceneAspect
         property color tint: fx.here
+        property vector4d activeArea: fx.activeArea
         fragmentShader: "qrc:/shaders/viz_matrix.frag.qsb"
     }
 }
