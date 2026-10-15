@@ -22,6 +22,9 @@ async fn switching_services_preserves_both_saved_connections() {
     let cfg = Config {
         provider: "apple".into(),
         user_token: "saved-apple-account".into(),
+        spotify_client_id: "saved-spotify-client".into(),
+        spotify_user: "saved-spotify-user".into(),
+        spotify_refresh_token: "saved-spotify-refresh".into(),
         tidal: crate::provider::tidal::auth::Session {
             // Invalid client prevents a fixture from sending live requests.
             client_id: "fixture-client".into(),
@@ -47,6 +50,7 @@ async fn switching_services_preserves_both_saved_connections() {
         let saved = Config::load().unwrap();
         assert_eq!(saved.user_token, cfg.user_token);
         assert_eq!(saved.tidal.refresh_token, cfg.tidal.refresh_token);
+        assert_eq!(saved.spotify_refresh_token, cfg.spotify_refresh_token);
     }
 }
 

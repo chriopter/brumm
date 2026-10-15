@@ -29,9 +29,10 @@ TestCase {
             return { protocolVersion:1, generation:generation, selected:selected,
                 navigation:selected ? appleNavigation : store.utilityNavigation(),
                 capabilities:selected ? appleCapabilities : {},
-                needsChoice:!selected, needsSetup:!configured.apple && !configured.tidal,
+                needsChoice:!selected, needsSetup:!configured.apple && !configured.tidal && !configured.spotify,
                 choices:[{id:"apple",name:"Apple Music",available:true,configured:!!configured.apple},
-                         {id:"tidal",name:"Tidal",available:true,configured:!!configured.tidal}] }
+                         {id:"tidal",name:"Tidal",available:true,configured:!!configured.tidal},
+                         {id:"spotify",name:"Spotify",available:true,configured:!!configured.spotify}] }
         }
         signal state(var value)
         signal library()
@@ -76,7 +77,7 @@ TestCase {
         store.st = { status: "choose-provider" }
         store.askProviders()
         compare(store.selectedProvider, "")
-        compare(store.providers.length, 2)
+        compare(store.providers.length, 3)
         compare(store.cur().key, "search:")
         store.providerKey("enter")
         compare(store.selectedProvider, "apple")
@@ -137,7 +138,7 @@ TestCase {
         compare(store.section, store.secAlbums)
         compare(store.cur().item.id, "resolved")
     }
-    function test_firstRunCanConnectBothServices() {
+    function test_firstRunCanConnectAllServices() {
         fakeDaemon.selected = ""; fakeDaemon.configured = {}; fakeDaemon.generation++
         store.configureProvider(fakeDaemon.info())
         store.st = {status:"choose-provider"}
@@ -149,12 +150,15 @@ TestCase {
         compare(store.connectedProviders.length, 2)
         verify(fakeDaemon.configured.apple)
         verify(fakeDaemon.configured.tidal)
+        store.connectProvider("spotify")
+        compare(store.connectedProviders.length, 3)
+        verify(fakeDaemon.configured.spotify)
         store.finishServices()
         verify(!store.providerChoiceNeeded)
         store.openProviderPicker()
         store.chooseProvider("apple", false)
         compare(store.selectedProvider, "apple")
-        compare(store.connectedProviders.length, 2)
+        compare(store.connectedProviders.length, 3)
     }
 
     function test_navigationCanReorderRenameAndOmit() {

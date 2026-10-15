@@ -122,7 +122,9 @@ impl Resume {
     /// second it stopped.
     pub async fn play(&self, eng: &Engine) -> Result<()> {
         if !self.station.is_empty() {
-            return eng.play_station(&self.station, &self.source).await;
+            return eng
+                .play_station(&self.station, &self.source, &self.id, self.pos)
+                .await;
         }
         eng.play_ids(&self.ids, &self.id, &self.source, self.pos)
             .await

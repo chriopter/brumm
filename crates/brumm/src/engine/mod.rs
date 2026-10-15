@@ -601,9 +601,21 @@ impl Engine {
     }
 
     /// Plays a radio station: endless, chosen by Apple.
-    pub async fn play_station(&self, id: &str, source: &str) -> Result<()> {
-        self.call(&format!("brumm.playStation({}, {})", js(id), js(source)))
-            .await
+    pub async fn play_station(
+        &self,
+        id: &str,
+        source: &str,
+        start_id: &str,
+        start_at: f64,
+    ) -> Result<()> {
+        self.call(&format!(
+            "brumm.playStation({}, {}, {}, {})",
+            js(id),
+            js(source),
+            js(start_id),
+            num(start_at)
+        ))
+        .await
     }
 
     /// Looks songs up in the page ahead of a play, so starting one of them
@@ -615,6 +627,17 @@ impl Engine {
     /// Lets similar music play on when the queue runs out.
     pub async fn set_autoplay(&self, on: bool) -> Result<()> {
         self.call(&format!("brumm.autoplay({on})")).await
+    }
+
+    pub async fn describe(&self, tracks: &[Track]) -> Result<()> {
+        if tracks.is_empty() {
+            return Ok(());
+        }
+        self.call(&format!(
+            "if (typeof brumm.describe === 'function') brumm.describe({})",
+            script_json(&json!(tracks))
+        ))
+        .await
     }
 
     pub async fn queue(&self, n: i64) -> Result<Queue> {

@@ -230,7 +230,7 @@ func main() {
 					}
 				case "provider":
 					mu.Lock()
-					if r.Query == "apple" || r.Query == "tidal" {
+					if r.Query == "apple" || r.Query == "tidal" || r.Query == "spotify" {
 						selected = r.Query
 						tidal = selected == "tidal"
 						generation++

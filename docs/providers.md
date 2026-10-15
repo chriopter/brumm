@@ -181,3 +181,31 @@ fictional provider data and does not require personal credentials.
 For a fictional Tidal preview, run `tmp/fakedaemon` with
 `BRUMM_FIXTURE_PROVIDER=tidal` inside omabox, then launch the Qt frontend in the
 same box. The default fixture remains Apple.
+
+
+## Spotify
+
+Spotify connects from the same service setup as Apple Music and Tidal.
+Create your own app in the [Spotify developer dashboard](https://developer.spotify.com/dashboard),
+select Web API and Web Playback SDK, and register
+`http://127.0.0.1:7777/spotify/callback` as its redirect URI. The browser
+sign-in page asks for the Client ID; no client secret is needed. If you use
+another account, allow it under User Management. Playback needs Premium.
+
+Spotify's development mode currently requires a Premium app owner and limits
+new apps to five users. Each user creates an app because a shared development
+app cannot serve brumm's users. See the [official quota rules](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
+
+Library, search, albums, artists, playlists, liked songs, queue controls and
+media keys work. Followed playlists play as a whole; only owned or collaborative
+playlists expose their tracks. Search returns up to ten results per kind.
+Home shows recent music and top tracks/artists. Radio, Explore, previews,
+Replay, folders and autoplay are unavailable. The visualizer runs without
+an audio spectrum because the SDK keeps playback in its own frame.
+See [Spotify's API migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide).
+
+Tokens refresh through the account-bound playback bridge, including after
+suspend. Rotated tokens cannot overwrite a different account's session.
+Library and resume files use the same provider/account isolation as the other
+services. Live playback validation needs a Premium account and developer app;
+the automated suite uses HTTP and SDK stand-ins.

@@ -179,6 +179,12 @@ pub struct Config {
     pub developer_token: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_token: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spotify_client_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spotify_refresh_token: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spotify_user: String,
 }
 
 fn config_path() -> PathBuf {

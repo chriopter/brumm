@@ -4,7 +4,7 @@
 
 **Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
-- 🎧 Supported Services: Apple Music by [@chriopter](https://github.com/chriopter), Tidal by [@keylimesoda](https://github.com/keylimesoda)
+- 🎧 Supported Services: Apple Music by [@chriopter](https://github.com/chriopter), Tidal by [@keylimesoda](https://github.com/keylimesoda), Spotify by [@sean-imus](https://github.com/sean-imus)
 - 🎵 Library, catalog, search as you type
 - 🏠 Home: recent, heavy rotation, picks
 - 🧭 Explore: charts, genres, videos, countries
@@ -62,10 +62,12 @@ Visuals
 
 Not possible with Apple's API: deleting or renaming playlists, lyrics, lossless.
 Features vary by service; radio, Replay and playlist folders are Apple Music features.
+Spotify needs your own [developer app](https://developer.spotify.com/dashboard) and Premium.
+Its visualizer has no access to the audio. See [service setup and limits](docs/providers.md).
 
 ## More
 
-- 🔑 Needs an Apple Music or Tidal subscription. Connect one or both on first start.
+- 🔑 Needs an Apple Music, Tidal or Spotify Premium subscription. Connect your services on first start.
 - ⇄ Click the service name or press <kbd>Ctrl</kbd>+<kbd>o</kbd> to switch or add services later.
 - ▶️ Later: `brumm`, the launcher, or the bar widget — whichever face you used last
 - 🔄 Updates: <kbd>U</kbd> when offered, or `brumm update`
@@ -79,7 +81,7 @@ gh attestation verify install.sh -R chriopter/brumm && bash install.sh
 ## Development
 
 The [music provider guide](docs/providers.md) describes the Rust API boundary
-and the Apple Music and Tidal integrations.
+and the Apple Music, Tidal and Spotify integrations.
 
 The daemon and terminal player use Rust; the window uses Qt Quick/QML
 with Rust for shared calculations. Building needs Rust 1.89 or newer,
@@ -102,7 +104,7 @@ One background service is the core — music, queue, library, options, sign-in, 
 | brumm daemon  |  Rust / Tokio                          |
 | systemd background service                             |
 |                                                        |
-| Apple Music / Tidal / library / queue / sign-in / options |
+| Apple Music / Tidal / Spotify / library / queue / sign-in / options |
 +--+-----------------------------------------------------+
    |
    +-- playback --> Chrome / Widevine

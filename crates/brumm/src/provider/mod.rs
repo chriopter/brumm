@@ -99,3 +99,7 @@ pub(crate) mod tests;
 pub mod registry;
 
 pub mod session;
+
+pub mod spotify;
+#[cfg(test)]
+pub(crate) mod testserver;
