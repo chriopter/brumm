@@ -18,7 +18,7 @@ use crate::error::{Result, err};
 /// BRUMM_EMBED_DEV_TOKEN=<jwt> cargo build --release
 /// ```
 ///
-/// It is kept as one plain string in the program, so `bin/setup` can carry
+/// It is kept as one plain string in the program, so `dev/setup` can carry
 /// it over from an installed release. A developer_token in the config
 /// file takes precedence, so a local token can be rotated without a
 /// rebuild.

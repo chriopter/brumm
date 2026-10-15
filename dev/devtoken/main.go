@@ -2,7 +2,7 @@
 // key and prints it. The key never touches disk: pass its PEM through the
 // environment, e.g. straight from 1Password.
 //
-//	APPLE_KEY_ID=… APPLE_TEAM_ID=… APPLE_PRIVATE_KEY="$(op read …)" go run ./tools/devtoken
+//	APPLE_KEY_ID=… APPLE_TEAM_ID=… APPLE_PRIVATE_KEY="$(op read …)" go -C dev run ./devtoken
 package main
 
 import (

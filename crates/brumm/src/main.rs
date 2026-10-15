@@ -145,7 +145,7 @@ fn login() -> Result<()> {
 fn self_update() -> Result<()> {
     if !update::managed(VERSION) {
         return Err(err(format!(
-            "this brumm ({VERSION}) was not installed from a release; use bin/update in the source checkout"
+            "this brumm ({VERSION}) was not installed from a release; use packaging/update in the source checkout"
         )));
     }
     let rt = runtime(2);

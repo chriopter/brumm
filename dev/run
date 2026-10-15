@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run a development build: `bin/dev` starts the daemon in the foreground with
-# its logs; `bin/dev ui` opens the TUI against it, `bin/dev gui` the window.
+# Run a development build: `dev/run` starts the daemon in the foreground with
+# its logs; `dev/run ui` opens the TUI against it, `dev/run gui` the window.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -11,7 +11,7 @@ if [[ ${1:-} == ui ]]; then
   exec tmp/brumm --tui
 fi
 if [[ ${1:-} == gui ]]; then
-  bin/build-gui tmp
+  dev/build-gui tmp
   exec tmp/brumm-gui
 fi
 # The installed daemon would hold the socket and the MPRIS name.

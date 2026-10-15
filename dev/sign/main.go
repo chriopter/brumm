@@ -1,6 +1,6 @@
 // sign writes an Ed25519 signature of a file, for the release workflow:
 //
-//	BRUMM_SIGNING_KEY=<base64 seed> go run ./tools/sign SHA256SUMS > SHA256SUMS.sig
+//	BRUMM_SIGNING_KEY=<base64 seed> go -C dev run ./sign ../SHA256SUMS > SHA256SUMS.sig
 //
 // With -new it instead prints a fresh key pair (seed, then public key),
 // both base64. brumm's updater checks releases against the public key

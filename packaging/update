@@ -4,4 +4,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 git pull --ff-only
-exec bin/setup
+exec dev/setup

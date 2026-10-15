@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 build=tmp/live-preview-build
-GUI_BUILD="$build" bin/build-gui "$build"
+GUI_BUILD="$build" dev/build-gui "$build"
 run=$(mktemp -d /tmp/brumm-live-preview.XXXXXX)
 chmod 700 "$run"
 trap 'rm -rf "$run"' EXIT

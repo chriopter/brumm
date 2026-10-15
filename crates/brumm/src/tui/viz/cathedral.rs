@@ -36,6 +36,9 @@ const VAULT: f64 = 12.6;
 /// The window flat, x −0.5 … 0.5, y 0 … H up from the sill, laid out once
 /// per design into a map of MAP_W × MAP_H cells.
 const H: f64 = 1.55;
+// Leave stone between the complete oculus and the pointed outer arch.
+const OCULUS_Y: f64 = 0.93;
+const OCULUS_RADIUS: f64 = 0.42;
 const MAP_W: usize = 128;
 const MAP_H: usize = 198;
 /// The pieces are cut coarser than the window's shader cuts them, so that
@@ -310,7 +313,7 @@ fn window_at(x: f64, y: f64, design: usize) -> (u8, u8) {
                 .unwrap_or((TRACERY, 0))
         }
         _ => {
-            if let Some(g) = rose(x, y, 0.0, 0.97, 0.47, (21.0, 5.0)) {
+            if let Some(g) = rose(x, y, 0.0, OCULUS_Y, OCULUS_RADIUS, (21.0, 5.0)) {
                 return g;
             }
             let i = ((x + 0.5) / 0.2).floor().clamp(0.0, 4.0);
@@ -778,5 +781,37 @@ impl Visualizer {
             }
         }
         self.pix_flush(0, h);
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn all_roses_fit_inside_the_pointed_arch() {
+        for (cx, cy, radius) in [
+            (0.0, 1.17, 0.27),
+            (-0.17, 1.235, 0.105),
+            (0.17, 1.235, 0.105),
+            (0.0, 1.40, 0.075),
+            (0.0, OCULUS_Y, OCULUS_RADIUS),
+        ] {
+            for step in 0..720 {
+                let angle = 2.0 * PI * step as f64 / 720.0;
+                let x = cx + radius * angle.cos();
+                let y = cy + radius * angle.sin();
+                assert!(
+                    arch(x, y, 0.5, 0.0, H - 0.866) > 0.015,
+                    "rose at ({cx}, {cy}) touches the arch at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn oculus_clears_the_lancets_below_it() {
+        let lancet_top = 0.04 + 0.26 + 3.0_f64.sqrt() * 0.072;
+        assert!(OCULUS_Y - OCULUS_RADIUS > lancet_top + 0.02);
     }
 }

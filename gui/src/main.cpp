@@ -207,7 +207,7 @@ int main(int argc, char *argv[])
             QCoreApplication::quit();
         });
     }
-    // For measuring (bin/bench): BRUMM_GUI_PACE=HZ paces the frames as a
+    // For measuring (dev/bench): BRUMM_GUI_PACE=HZ paces the frames as a
     // display of HZ would (off screen, nothing waits for one), and
     // BRUMM_GUI_FRAMES=FILE keeps the count of frames drawn in FILE, with
     // the milliseconds it was taken at, written once a second.

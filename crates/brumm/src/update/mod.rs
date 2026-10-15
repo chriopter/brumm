@@ -563,7 +563,7 @@ pub fn install(from: &Path) -> Result<()> {
 }
 
 /// Serializes installs across processes: the daemon, `brumm update` and
-/// bin/setup may otherwise run at once. Held until dropped.
+/// dev/setup may otherwise run at once. Held until dropped.
 fn lock() -> Result<fs::File> {
     let path = share_dir()
         .parent()

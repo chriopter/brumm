@@ -30,6 +30,9 @@ layout(binding = 1) uniform sampler2D spectrum;
 
 const float PI = 3.14159265;
 const float H = 1.55; // the window's height; it is 1 wide
+// Same geometry as the TUI: the whole oculus clears the pointed arch.
+const float OCULUS_Y = 0.93;
+const float OCULUS_RADIUS = 0.42;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 vec2 hash2(vec2 p) {
@@ -224,7 +227,7 @@ vec4 window(vec2 p, int w) {
         return rose(p, vec2(0.0, 1.40), 0.075, vec2(3.0, 9.0));
     }
     // an oculus: a great rose over a row of five small lights
-    vec4 a = rose(p, vec2(0.0, 0.97), 0.47, vec2(21.0, 5.0));
+    vec4 a = rose(p, vec2(0.0, OCULUS_Y), OCULUS_RADIUS, vec2(21.0, 5.0));
     if (a.a > 0.0) return a;
     float i = clamp(floor((p.x + 0.5) / 0.2), 0.0, 4.0);
     vec2 q = vec2(p.x - (-0.4 + i * 0.2), p.y - 0.04);

@@ -63,7 +63,7 @@ pub fn gui_path() -> Result<PathBuf> {
         }
     }
     which(GUI_NAME).ok_or_else(|| {
-        err("brumm's window (brumm-gui) is not installed: brumm update brings it; from source, bin/setup builds it (needs qt6-declarative)")
+        err("brumm's window (brumm-gui) is not installed: brumm update brings it; from source, dev/setup builds it (needs qt6-declarative)")
     })
 }
 

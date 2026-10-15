@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Screenshot the window against a stand-in daemon (tools/fakedaemon), off
+# Screenshot the window against a stand-in daemon (dev/fakedaemon), off
 # screen and apart from the real brumm:
-#   bin/gui-shot out.png ["KEYS"] [WxH]
+#   dev/screenshot out.png ["KEYS"] [WxH]
 # KEYS are pressed first, named as the players name them ("o", "3 enter");
 # GUI_SHOT_MS is how long after the start the picture is taken (1500),
 # GUI_BUILD the build directory (tmp/gui-build), so builds can run side by
@@ -11,8 +11,8 @@ cd "$(dirname "$0")/.."
 
 out=$(realpath -m "$1")
 build=${GUI_BUILD:-tmp/gui-build}
-bin/build-gui "$build"
-go build -o "$build/fakedaemon" ./tools/fakedaemon
+dev/build-gui "$build"
+go -C dev build -o "$(realpath -m "$build/fakedaemon")" ./fakedaemon
 run=$(mktemp -d)
 trap 'kill $fake 2>/dev/null; rm -rf "$run"' EXIT
 XDG_RUNTIME_DIR=$run "$build/fakedaemon" 2>/dev/null &

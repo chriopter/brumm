@@ -92,7 +92,7 @@ impl Daemon {
     pub(super) async fn install_update(&self) -> Result<()> {
         if !update::managed(&self.version) {
             return Err(err(format!(
-                "this brumm ({}) was built from source; update it with bin/update",
+                "this brumm ({}) was built from source; update it with packaging/update",
                 self.version
             )));
         }
@@ -123,7 +123,7 @@ impl Daemon {
     }
 
     /// Restarts the daemon into a replaced program — by an update or by
-    /// bin/setup — at a moment nobody hears: while paused, or right as a
+    /// dev/setup — at a moment nobody hears: while paused, or right as a
     /// song ends, in which case the new daemon carries on playing.
     pub(super) async fn watch_self(self: Arc<Self>) {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -197,7 +197,7 @@ impl Daemon {
         reply.version.clone_from(&current);
         if !update::managed(&self.version) {
             return Err(err(format!(
-                "this brumm ({}) was built from source; update it with bin/update",
+                "this brumm ({}) was built from source; update it with packaging/update",
                 self.version
             )));
         }

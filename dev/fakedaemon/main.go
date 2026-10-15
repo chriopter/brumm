@@ -2,11 +2,11 @@
 // playing, and covers drawn on the fly, served on brumm's socket. It lets
 // the players be run and looked at without Apple Music:
 //
-//	XDG_RUNTIME_DIR=/tmp/x go run ./tools/fakedaemon
+//	XDG_RUNTIME_DIR=/tmp/x go -C dev run ./fakedaemon
 //
 // FAKE_PAUSED=1 has the song paused.
 //
-// bin/gui-shot uses it for screenshots of the window.
+// dev/screenshot uses it for screenshots of the window.
 package main
 
 import (

@@ -3,9 +3,9 @@ CONFIG += c++17 release
 TARGET = brumm-gui
 TEMPLATE = app
 
-# bin/build-gui builds the Rust calculations first and supplies their path.
+# dev/build-gui builds the Rust calculations first and supplies their path.
 isEmpty(BRUMM_SHARED_LIB): BRUMM_SHARED_LIB = $$PWD/../target/release/libbrumm_shared.a
-!exists($$BRUMM_SHARED_LIB): error("Build crates/brumm-shared first (bin/build-gui)")
+!exists($$BRUMM_SHARED_LIB): error("Build crates/brumm-shared first (dev/build-gui)")
 LIBS += $$quote($$BRUMM_SHARED_LIB) -ldl -lpthread -lm
 PRE_TARGETDEPS += $$quote($$BRUMM_SHARED_LIB)
 
