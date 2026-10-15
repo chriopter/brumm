@@ -2,14 +2,14 @@
 # Isolated API navigation prototype. Never touches the real player/account.
 # g switches between GUI and TUI while the same fixture daemon stays running.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 if ! go version >/dev/null 2>&1 && command -v mise >/dev/null; then
   export PATH="$(mise where go)/bin:$PATH"
 fi
 export GOCACHE=${GOCACHE:-/tmp/brumm-go-cache}
 build=${BRUMM_PROTOTYPE_BUILD:-tmp/prototype-build}
-GUI_BUILD="$build" bin/build-gui "$build"
-go build -o "$build/fakedaemon" ./tools/fakedaemon
+GUI_BUILD="$build" dev/build-gui "$build"
+go -C dev build -o "$(realpath -m "$build/fakedaemon")" ./fakedaemon
 cargo build --release --locked -p brumm
 cp "${CARGO_TARGET_DIR:-target}/release/brumm" "$build/.brumm.new"
 mv -f "$build/.brumm.new" "$build/brumm"

@@ -4,50 +4,7 @@
 
 **Music player for [Omarchy](https://omarchy.org) & Linux, with GUI & TUI**
 
-- <details>
-  <summary>🎧 Apple Music by <a href="https://github.com/chriopter">@chriopter</a></summary>
-
-  Requires an Apple Music subscription. Connect through Music Services
-  (<kbd>Ctrl</kbd>+<kbd>o</kbd>).
-
-  Includes radio, Replay and playlist folders. Playlist deletion and renaming,
-  lyrics and lossless playback are not available in brumm.
-
-  </details>
-
-- <details>
-  <summary>🎧 Tidal by <a href="https://github.com/keylimesoda">@keylimesoda</a></summary>
-
-  Requires a Tidal subscription. Connect through Music Services
-  (<kbd>Ctrl</kbd>+<kbd>o</kbd>) and complete the device sign-in.
-
-  Includes library, search, favorites and playlist creation. Advanced playlist
-  edits, Replay, folders, radio, autoplay and video previews are not available.
-
-  </details>
-
-- <details>
-  <summary>🎧 Spotify by <a href="https://github.com/sean-imus">@sean-imus</a></summary>
-
-  Requires Spotify Premium and your own
-  <a href="https://developer.spotify.com/dashboard">developer app</a> with
-  Web API and Web Playback SDK enabled. Register
-  `http://127.0.0.1:7777/spotify/callback` as the redirect URI, then connect
-  through Music Services (<kbd>Ctrl</kbd>+<kbd>o</kbd>) using the Client ID.
-  No client secret is needed.
-
-  Radio, Explore, Replay, folders, autoplay and previews are not available.
-  The visualizer has no access to Spotify's audio spectrum.
-  If another account signs in, add it under User Management in your app's
-  dashboard. Development-mode access follows Spotify's
-  [quota rules](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
-
-  Home shows recent music and top tracks/artists. Followed playlists can play
-  as a whole; only owned or collaborative playlists expose individual tracks.
-  Search returns up to ten results per kind.
-
-  </details>
-
+- 🎧 Supported services: Apple Music by [@chriopter](https://github.com/chriopter), Tidal by [@keylimesoda](https://github.com/keylimesoda), Spotify by [@sean-imus](https://github.com/sean-imus). [Details](#music-services)
 - ⇄ GUI and TUI: press <kbd>g</kbd> to switch while music keeps playing
 - 🎵 Library, playlists, favorites and search as you type
 - 🧭 Home and Explore: recommendations, charts, artists and radio
@@ -141,12 +98,58 @@ Run `brumm keys off` to restore the previous music-key behavior.
 
 ## Guide
 
-<details>
-<summary>Connect services and switch interfaces</summary>
+### Music services
 
 Choose your services on first start. Open **Music Services** in the menu under
 **Options**, or press <kbd>Ctrl</kbd> + <kbd>O</kbd>, to add or switch a connection
-later. Setup requirements and limitations are in the service entries above.
+later.
+
+<details>
+<summary>🎧 Apple Music by <a href="https://github.com/chriopter">@chriopter</a></summary>
+
+Requires an Apple Music subscription. Connect through Music Services
+(<kbd>Ctrl</kbd>+<kbd>o</kbd>).
+
+Includes radio, Replay and playlist folders. Playlist deletion and renaming,
+lyrics and lossless playback are not available in brumm.
+
+</details>
+
+<details>
+<summary>🎧 Tidal by <a href="https://github.com/keylimesoda">@keylimesoda</a></summary>
+
+Requires a Tidal subscription. Connect through Music Services
+(<kbd>Ctrl</kbd>+<kbd>o</kbd>) and complete the device sign-in.
+
+Includes library, search, favorites and playlist creation. Advanced playlist
+edits, Replay, folders, radio, autoplay and video previews are not available.
+
+</details>
+
+<details>
+<summary>🎧 Spotify by <a href="https://github.com/sean-imus">@sean-imus</a></summary>
+
+Requires Spotify Premium and your own
+<a href="https://developer.spotify.com/dashboard">developer app</a> with
+Web API and Web Playback SDK enabled. Register
+`http://127.0.0.1:7777/spotify/callback` as the redirect URI, then connect
+through Music Services (<kbd>Ctrl</kbd>+<kbd>o</kbd>) using the Client ID.
+No client secret is needed.
+
+Radio, Explore, Replay, folders, autoplay and previews are not available.
+The visualizer has no access to Spotify's audio spectrum.
+If another account signs in, add it under User Management in your app's
+dashboard. Development-mode access follows Spotify's
+[quota rules](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
+
+Home shows recent music and top tracks/artists. Followed playlists can play
+as a whole; only owned or collaborative playlists expose individual tracks.
+Search returns up to ten results per kind.
+
+</details>
+
+<details>
+<summary>Connect services and switch interfaces</summary>
 
 One service is active at a time. Switching services stops its playback, keeps
 its sign-in and saves its queue. Returning to a service restores its queue
@@ -227,22 +230,22 @@ Building needs Rust 1.89+, Qt 6 and a C++ compiler. Demo data needs Go;
 rebuilding the Tidal adapter needs Node.js/npm. The GUI uses Qt Declarative,
 Shader Tools and Multimedia.
 
-`bin/` contains the development scripts:
+`dev/` contains development commands and their helper programs:
 
 ```sh
-bin/setup        # build and install this checkout
-bin/dev          # foreground daemon; add ui or gui to open a player
-bin/build-gui    # build the Qt frontend
-bin/build-tidal  # rebuild after changes to the Tidal web adapter
+dev/setup        # build and install this checkout
+dev/run          # foreground daemon; add ui or gui to open a player
+dev/build-gui    # build the Qt frontend
+dev/build-tidal  # rebuild after changes to the Tidal web adapter
 ```
 
-`bin/setup` installs the program, launcher, user service and widget.
-`bin/dev` stops an installed brumm user service while developing.
+`dev/setup` installs the program, launcher, user service and widget.
+`dev/run` stops an installed brumm user service while developing.
 
 Local builds can reuse the Apple Music developer token from the installed
 release. Set `BRUMM_TOKEN_FROM=/path/to/brumm` to use another binary.
 To sign a new token, provide `APPLE_KEY_ID`, `APPLE_TEAM_ID` and
-`APPLE_PRIVATE_KEY` to `bin/setup`; `tools/devtoken` handles signing.
+`APPLE_PRIVATE_KEY` to `dev/setup`; `dev/devtoken` handles signing.
 Keep signing keys and user credentials out of source control.
 
 </details>
@@ -251,16 +254,15 @@ Keep signing keys and user credentials out of source control.
 <summary>Preview and demo</summary>
 
 ```sh
-bin/preview                  # isolated preview with the real account
-bin/prototype                # isolated preview with sample music
-bin/gui-shot out.png         # screenshot with sample data
-tools/demo-services          # first start with fake music services
-tools/demo-services connected  # all three services connected
-tools/demo-services tidal    # start with Tidal selected
-tools/demo-services spotify  # start with Spotify selected
+dev/preview             # isolated preview with the real account
+dev/screenshot out.png  # screenshot with sample data
+dev/demo                # first start with fake music services
+dev/demo connected      # all three services connected
+dev/demo tidal          # start with Tidal selected
+dev/demo spotify        # start with Spotify selected
 ```
 
-The service demo builds the current source and starts `tools/fakedaemon` with
+The service demo builds the current source and starts `dev/fakedaemon` with
 sample music, generated covers and a simulated playback clock. It needs no
 account and plays no audio. Every run starts fresh. Connect and switch services
 with <kbd>Ctrl</kbd> + <kbd>O</kbd>; <kbd>g</kbd> switches GUI/TUI. A terminal such
@@ -270,7 +272,7 @@ Set `BRUMM_PROTOTYPE_BUILD` to reuse a demo build directory. For standalone
 fixtures, use `BRUMM_FIXTURE_FIRST_RUN`, `BRUMM_FIXTURE_ALL_SERVICES` and
 `BRUMM_FIXTURE_PROVIDER=apple|tidal|spotify`.
 
-`bin/preview` needs Python 3 and an existing Apple Music sign-in. It copies
+`dev/preview` needs Python 3 and an existing Apple Music sign-in. It copies
 credentials into a private temporary configuration, with its own daemon,
 socket and caches. It uses the real account: favorites, playlists and other
 changes in the preview affect that account. The developer token can come from
@@ -330,7 +332,7 @@ page. Its separate favorite and library states must remain distinct.
 
 **Tidal** uses device sign-in with the compatibility client from Untidy; this
 is a compatibility dependency, not official application approval. Its bundled
-official SDK adapter lives in `web/tidal/`. Home uses native page modules where
+official SDK adapter lives in `crates/brumm/src/provider/tidal/web/`. Home uses native page modules where
 available and independent personal-mix fallbacks; Explore can use legacy
 editorial pages. History mixes mean most-listened music, not recently played.
 One collection action covers favorites. Owned and favorited playlists are
@@ -350,7 +352,7 @@ separate verification.
 
 **Spotify** uses the Web Playback SDK and account-bound token refresh, including
 after suspend. Its SDK frame does not expose audio samples to the visualizer.
-Service setup is documented in the Spotify entry at the top of this README.
+Service setup is documented in the [Spotify entry](#music-services) in the guide.
 
 When adding a provider, implement its definition, auth, API mapping and playback
 page through these boundaries, then register it. Check stale work during
@@ -391,6 +393,29 @@ writes and Apple → Tidal → Spotify switching with suitable accounts.
 
 These notes describe the releases as shipped; current controls and service
 support are documented above.
+
+<details>
+<summary>1.4: Tidal and Spotify</summary>
+
+![Cathedral visualizer](assets/release-1.4.0-cathedral.png)
+![Choose your music services](assets/release-1.4.0-services.png)
+
+### New
+- 🎵 Tidal support. Thanks, @keylimesoda!
+- 🎵 Spotify support. Thanks, @sean-imus!
+- 🎧 Add and switch services with <kbd>Ctrl</kbd>+<kbd>O</kbd>.
+
+### Changed
+- 🎛️ Visualizer settings share one menu, including frame rate.
+
+### Fixed
+- ⛪ The cathedral's round window fits inside its arch.
+- 📋 Now Playing shows the queue in GUI and TUI.
+- ⇄ Press <kbd>g</kbd> to switch and keep the same visualizer.
+
+**Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
+
+</details>
 
 <details>
 <summary>1.3: a cathedral visualizer</summary>

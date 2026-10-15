@@ -20,10 +20,8 @@ fn apple_definition_preserves_navigation_and_private_playback_setup() {
     let refresh = page.refresh.unwrap();
     assert_eq!(refresh.method, "brumm.setToken");
     assert_eq!(refresh.args, vec![serde_json::json!("fictional-user")]);
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../tools/fakedaemon/provider.json"
-    ))
-    .unwrap();
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../../dev/fakedaemon/provider.json")).unwrap();
     let entries: Vec<NavigationEntry> =
         serde_json::from_value(fixture["navigation"].clone()).unwrap();
     assert_eq!(navigation(provider.navigation()), entries);

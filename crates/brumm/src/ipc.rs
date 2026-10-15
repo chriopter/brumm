@@ -2,7 +2,7 @@
 //! JSON over a unix socket. Players send Requests; the daemon answers each
 //! with a Message carrying the same id, and pushes state and spectrum
 //! Messages to connections that subscribed. The window (gui/src/daemon.cpp)
-//! and the stand-in daemon (tools/fakedaemon) speak it too.
+//! and the stand-in daemon (dev/fakedaemon) speak it too.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicI64, Ordering};

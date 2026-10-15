@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const html = fs.readFileSync(new URL('../../crates/brumm/src/provider/spotify/player.html', import.meta.url), 'utf8');
+const html = fs.readFileSync(new URL('../player.html', import.meta.url), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace('__BRUMM_CFG__', '{version:"test"}');
 const A='1111111111111111111111', B='2222222222222222222222';
 function setup({firstFails=false}={}) {

@@ -7,7 +7,7 @@ case "${1:-first-run}" in
   first-run) export BRUMM_FIXTURE_FIRST_RUN=1 ;;
   connected) export BRUMM_FIXTURE_ALL_SERVICES=1 ;;
   apple|tidal|spotify) export BRUMM_FIXTURE_PROVIDER="$1" BRUMM_FIXTURE_ALL_SERVICES=1 ;;
-  *) echo 'Usage: tools/demo-services [first-run|connected|apple|tidal|spotify]' >&2; exit 2 ;;
+  *) echo 'Usage: dev/demo [first-run|connected|apple|tidal|spotify]' >&2; exit 2 ;;
 esac
 export BRUMM_PROTOTYPE_BUILD=${BRUMM_PROTOTYPE_BUILD:-tmp/services-demo}
-exec bin/prototype
+exec dev/fakedaemon/run

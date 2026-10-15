@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
       - name: Build
         run: |
-          bin/build-gui dist
+          dev/build-gui dist
           readelf --version-info dist/brumm-gui | awk '
             /Name: Qt_6\./ {
               split($3, version, ".")
@@ -79,6 +79,9 @@ jobs:
             }
             END { exit incompatible }
           '
+      - name: Test GUI
+        run: |
+          QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software /usr/lib/qt6/bin/qmltestrunner -input gui/tests
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: brumm-gui
@@ -100,7 +103,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: needs.version.outputs.tag != ''
         with:
-          go-version-file: go.mod
+          go-version-file: dev/go.mod
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: needs.version.outputs.tag != ''
@@ -125,7 +128,9 @@ jobs:
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked
-          go test ./tools/...
+          go -C dev test ./...
+          node --test crates/brumm/src/provider/tidal/web/player.test.mjs crates/brumm/src/provider/spotify/web/player.test.mjs
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 
       - name: Build
         if: needs.version.outputs.tag != ''
@@ -135,16 +140,20 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_PRIVATE_KEY: ${{ secrets.APPLE_PRIVATE_KEY }}
         run: |
-          token=$(go run ./tools/devtoken)
+          token=$(go -C dev run ./devtoken)
           echo "::add-mask::$token"
           mkdir -p dist/brumm
           chmod 755 dist/brumm/brumm-gui # artifacts lose the mode
           BRUMM_VERSION="$TAG" BRUMM_EMBED_DEV_TOKEN="$token" RUSTFLAGS="-C target-feature=+crt-static" \
             cargo build --release --locked --target x86_64-unknown-linux-musl -p brumm
           cp target/x86_64-unknown-linux-musl/release/brumm dist/brumm/brumm
-          cp -r omarchy LICENSE README.md dist/brumm/
+          # Keep the archive layout compatible with installed updaters.
+          mkdir -p dist/brumm/omarchy
+          cp packaging/brumm.service packaging/brumm.desktop dist/brumm/omarchy/
+          cp -r integrations/omarchy/plugin dist/brumm/omarchy/
+          cp -r LICENSE README.md assets dist/brumm/
           tar -C dist -czf brumm-linux-amd64.tar.gz brumm
-          cp bin/install install.sh
+          cp packaging/install install.sh
 
       # brumm's updater installs only releases whose SHA256SUMS carries a
       # valid signature from this key; the public half is in the program.
@@ -157,7 +166,7 @@ jobs:
           BRUMM_SIGNING_KEY: ${{ secrets.BRUMM_SIGNING_KEY }}
         run: |
           { echo "version $TAG"; sha256sum brumm-linux-amd64.tar.gz install.sh; } > SHA256SUMS
-          go run ./tools/sign SHA256SUMS > SHA256SUMS.sig
+          go -C dev run ./sign ../SHA256SUMS > SHA256SUMS.sig
 
       # Provenance anyone can check: gh attestation verify <file> -R chriopter/brumm
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

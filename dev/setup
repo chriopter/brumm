@@ -6,7 +6,7 @@
 #
 # To embed a fresh Apple Music developer token, pass the MusicKit key, e.g.
 # from 1Password:
-#   APPLE_KEY_ID=… APPLE_TEAM_ID=… APPLE_PRIVATE_KEY="$(op read op://…)" bin/setup
+#   APPLE_KEY_ID=… APPLE_TEAM_ID=… APPLE_PRIVATE_KEY="$(op read op://…)" dev/setup
 # Without it, the token of the brumm installed now is kept; failing that,
 # brumm uses developer_token from ~/.config/brumm/config.json.
 set -euo pipefail
@@ -20,7 +20,7 @@ build_version="dev-$(git describe --tags --always --dirty 2>/dev/null || echo lo
 installed="${BRUMM_TOKEN_FROM:-${XDG_BIN_HOME:-$HOME/.local/bin}/brumm}"
 if [[ -n ${APPLE_PRIVATE_KEY:-} ]]; then
   command -v go >/dev/null || { echo "signing a developer token needs Go" >&2; exit 1; }
-  token=$(go run ./tools/devtoken)
+  token=$(go -C dev run ./devtoken)
   echo "embedded a new developer token (valid six months)"
 elif [[ -x $installed ]]; then
   # Keep the token of the brumm installed now (a release, or an earlier
@@ -59,11 +59,14 @@ if command -v qmake6 >/dev/null; then
     fi
   fi
   echo "building the window"
-  bin/build-gui "$stage"
+  dev/build-gui "$stage"
 else
   echo "skipping the window (brumm --gui): it needs qt6-declarative, qt6-shadertools and base-devel" >&2
 fi
-cp -r omarchy "$stage/"
+# The release archive layout remains compatible with installed updaters.
+mkdir -p "$stage/omarchy"
+cp packaging/brumm.service packaging/brumm.desktop "$stage/omarchy/"
+cp -r integrations/omarchy/plugin "$stage/omarchy/"
 "$stage/brumm" setup "$stage"
 
 # Pick up the new build now rather than at the next pause.

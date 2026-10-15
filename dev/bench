@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Measure what the players cost: the terminal player and the window, each
-# against the stand-in daemon (tools/fakedaemon) — paused, playing, and
+# against the stand-in daemon (dev/fakedaemon) — paused, playing, and
 # with the visualizer — as the share of one CPU core they use, averaged
 # over SECONDS (10), and for the window the frames it draws a second.
 # Off screen no display paces the window, so it is paced as a 60 Hz one
 # would. Prints a Markdown table.
-#   bin/bench [SECONDS]
+#   dev/bench [SECONDS]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 secs=${1:-10}
 build=${GUI_BUILD:-tmp/gui-build-bench}
-bin/build-gui "$build" >/dev/null
-go build -o "$build/fakedaemon" ./tools/fakedaemon
+dev/build-gui "$build" >/dev/null
+go -C dev build -o "$(realpath -m "$build/fakedaemon")" ./fakedaemon
 cargo build --release --locked -p brumm
 cp "${CARGO_TARGET_DIR:-target}/release/brumm" "$build/brumm"
 

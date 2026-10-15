@@ -3,4 +3,4 @@
 /target/
 *.p8
 
-/web/tidal/node_modules/
+/crates/brumm/src/provider/tidal/web/node_modules/
