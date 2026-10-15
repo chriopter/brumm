@@ -268,7 +268,7 @@ Item {
         const rows = []
         if (st.status === "logged-out")
             rows.push({ act: "L", icon: "󰍂", label: "Sign In to " + providerName + "…" }, { sep: true })
-        rows.push({ act: "ctrl+o", icon: "󰎈", label: "Music Services…" })
+        rows.push({ act: "ctrl+o", icon: "󰎈", label: "Music Services…", keys: "Ctrl+O" })
         rows.push({ act: "f", icon: "󰊓", label: "Visualizer", keys: "f · F" },
                   { act: "g", icon: "󰆍", label: "TUI" },
                   { act: "y", icon: "󰌷", label: "Copy Link" },

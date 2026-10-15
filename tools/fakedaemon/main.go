@@ -22,7 +22,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -223,9 +222,8 @@ func main() {
 				case CmdShow:
 					if os.Getenv("BRUMM_PROTOTYPE") != "" {
 						self, _ := os.Executable()
-						cmd := exec.Command(filepath.Join(filepath.Dir(self), "brumm"), "open", r.Query)
-						if out, err := cmd.CombinedOutput(); err != nil {
-							m.Error = fmt.Sprintf("%v: %s", err, out)
+						if err := startPreview(filepath.Join(filepath.Dir(self), "brumm"), r.Query); err != nil {
+							m.Error = err.Error()
 						}
 					}
 				case "provider":

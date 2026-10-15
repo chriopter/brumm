@@ -1,40 +1,58 @@
 #!/usr/bin/env bash
 # Build and open the current code with the real account on workspace 4.
 # Credentials, socket and caches remain private in a separate runtime.
+# Keep the installed developer token; g switches faces without ending the session.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 build=tmp/live-preview-build
 GUI_BUILD="$build" bin/build-gui "$build"
-cargo build --release --locked -p brumm
-cp "${CARGO_TARGET_DIR:-target}/release/brumm" "$build/brumm"
 run=$(mktemp -d /tmp/brumm-live-preview.XXXXXX)
 chmod 700 "$run"
+trap 'rm -rf "$run"' EXIT
 python3 - "$run" <<'PY'
 import os,sys,json,re,base64,time
 root=sys.argv[1]
 source=os.path.join(os.environ.get('XDG_CONFIG_HOME',os.path.expanduser('~/.config')),'brumm','config.json')
 c=json.load(open(source))
-if not c.get('developer_token'):
-    installed=os.path.join(os.environ.get('XDG_BIN_HOME',os.path.expanduser('~/.local/bin')),'brumm')
-    tokens=re.findall(rb'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}',open(installed,'rb').read())
-    valid=[]
+if os.environ.get('BRUMM_PREVIEW_PROVIDER'):
+    c['provider']=os.environ['BRUMM_PREVIEW_PROVIDER']
+def valid(token):
+    try:
+        if not isinstance(token,str):return False
+        head,payload,signature=token.split('.')
+        return (len(signature)==86 and
+            json.loads(base64.urlsafe_b64decode(head+'==='))['alg']=='ES256' and
+            json.loads(base64.urlsafe_b64decode(payload+'==='))['exp']>time.time())
+    except (ValueError,KeyError,TypeError):
+        return False
+if not valid(c.get('developer_token','')):
+    installed=os.environ.get('BRUMM_TOKEN_FROM') or os.path.join(os.environ.get('XDG_BIN_HOME',os.path.expanduser('~/.local/bin')),'brumm')
+    tokens=re.findall(rb'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{86}',open(installed,'rb').read())
+    candidates=[]
     for token in set(tokens):
         try:
             exp=json.loads(base64.urlsafe_b64decode(token.split(b'.')[1]+b'==='))['exp']
-            if exp>time.time():valid.append((exp,token.decode()))
+            if valid(token.decode()):candidates.append((exp,token.decode()))
         except (ValueError,KeyError):pass
-    if valid:c['developer_token']=max(valid)[1]
-if not c.get('developer_token') or not c.get('user_token'):raise SystemExit('Sign in to brumm before opening the live preview.')
+    if candidates:c['developer_token']=max(candidates)[1]
+if not valid(c.get('developer_token','')) or not c.get('user_token'):raise SystemExit('Sign in to brumm before opening the live preview.')
 p=os.path.join(root,'config','brumm');os.makedirs(p,mode=0o700)
 fd=os.open(os.path.join(p,'config.json'),os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(fd,'w') as f:json.dump(c,f)
 PY
+# Only the developer token belongs in the executable. The user's token stays
+# in this preview's private config, shared by its GUI, TUI and daemon.
+token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["developer_token"])' "$run/config/brumm/config.json")
+BRUMM_EMBED_DEV_TOKEN="$token" cargo build --release --locked -p brumm
+unset token
+cp "${CARGO_TARGET_DIR:-target}/release/brumm" "$build/.brumm.new"
+mv -f "$build/.brumm.new" "$build/brumm"
 desktop_runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 if [[ -n ${WAYLAND_DISPLAY:-} && $WAYLAND_DISPLAY != /* ]]; then
   export WAYLAND_DISPLAY="$desktop_runtime/$WAYLAND_DISPLAY"
 fi
 export PULSE_SERVER="${PULSE_SERVER:-unix:$desktop_runtime/pulse/native}" PIPEWIRE_RUNTIME_DIR="${PIPEWIRE_RUNTIME_DIR:-$desktop_runtime}"
-export XDG_RUNTIME_DIR="$run" XDG_CONFIG_HOME="$run/config" XDG_CACHE_HOME="$run/cache" BRUMM_PREVIEW=1 BRUMM_DESKTOP_RUNTIME="$desktop_runtime"
+export XDG_RUNTIME_DIR="$run" XDG_CONFIG_HOME="$run/config" XDG_CACHE_HOME="$run/cache" XDG_DATA_HOME="$run/data" BRUMM_PREVIEW=1 BRUMM_DESKTOP_RUNTIME="$desktop_runtime"
 unset BRUMM_PROTOTYPE
 "$build/brumm" daemon >"$run/daemon.log" 2>&1 &
 player=$!
@@ -48,11 +66,12 @@ done
 if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && command -v hyprctl >/dev/null; then
   {
     printf '#!/usr/bin/env bash\nexec env '
-    printf '%q ' "XDG_RUNTIME_DIR=$run" "XDG_CONFIG_HOME=$run/config" "XDG_CACHE_HOME=$run/cache" "BRUMM_PREVIEW=1" "PULSE_SERVER=$PULSE_SERVER" "PIPEWIRE_RUNTIME_DIR=$PIPEWIRE_RUNTIME_DIR" "BRUMM_PROTOTYPE=" "BRUMM_DESKTOP_RUNTIME=$desktop_runtime" "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" "$(realpath "$build/brumm-gui")"
+    printf '%q ' "XDG_RUNTIME_DIR=$run" "XDG_CONFIG_HOME=$run/config" "XDG_CACHE_HOME=$run/cache" "XDG_DATA_HOME=$run/data" "BRUMM_PREVIEW=1" "PULSE_SERVER=$PULSE_SERVER" "PIPEWIRE_RUNTIME_DIR=$PIPEWIRE_RUNTIME_DIR" "BRUMM_PROTOTYPE=" "BRUMM_DESKTOP_RUNTIME=$desktop_runtime" "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" "$(realpath "$build/brumm-gui")"
     printf '\n'
   } > "$run/start-gui"
   XDG_RUNTIME_DIR="$desktop_runtime" hyprctl dispatch "hl.dsp.exec_cmd(\"exec bash $run/start-gui\", { workspace = \"4 silent\", no_initial_focus = true })"
   wait "$player"
 else
-  "$build/brumm-gui"
+  "$build/brumm-gui" &
+  wait "$player"
 fi
