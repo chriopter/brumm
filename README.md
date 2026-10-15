@@ -393,23 +393,15 @@ These notes describe the releases as shipped; current controls and service
 support are documented above.
 
 <details>
-<summary>1.4: Tidal and Spotify</summary>
+<summary>1.4: now with Tidal and Spotify</summary>
 
-![Cathedral visualizer](assets/release-1.4.0-cathedral.png)
 ![Choose your music services](assets/release-1.4.0-services.png)
+![Cathedral visualizer](assets/release-1.4.0-cathedral.png)
 
 ### New
-- 🎵 Tidal support. Thanks, @keylimesoda!
-- 🎵 Spotify support. Thanks, @sean-imus!
-- 🎧 Add and switch services with <kbd>Ctrl</kbd>+<kbd>O</kbd>.
-
-### Changed
-- 🎛️ Visualizer settings share one menu, including frame rate.
-
-### Fixed
-- ⛪ The cathedral's round window fits inside its arch.
-- 📋 Now Playing shows the queue in GUI and TUI.
-- ⇄ Press <kbd>g</kbd> to switch and keep the same visualizer.
+- 🌊 Tidal is here. Thank you, [@keylimesoda](https://github.com/keylimesoda)!
+- 🟢 Spotify too. Thank you, [@sean-imus](https://github.com/sean-imus)!
+- 🎧 Pick your services. Press <kbd>Ctrl</kbd>+<kbd>O</kbd> to switch.
 
 **Update:** press <kbd>U</kbd> when brumm offers it, or run `brumm update`.
 
