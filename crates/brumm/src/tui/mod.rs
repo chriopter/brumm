@@ -155,7 +155,12 @@ fn run_loop(
     tx: &Sender<Msg>,
 ) -> Result<()> {
     let mut term = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    term.clear()?;
+    // Not term.clear(): since ratatui 0.30 it asks the terminal where the
+    // cursor is, and the input thread, already reading, takes the answer.
+    execute!(
+        term.backend_mut(),
+        terminal::Clear(terminal::ClearType::All)
+    )?;
     let min_frame = Duration::from_nanos(1_000_000_000 / MAX_FPS);
     let mut dirty = true;
     let mut last_draw: Option<Instant> = None;
