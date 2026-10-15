@@ -16,7 +16,10 @@ Flickable {
         spacing: ui.px(20)
         Repeater {
             id: cards
-            model: store.rows
+            objectName: "discoveryCards"
+            // The list and grid share the browser. Hidden grid cards still
+            // relayout on every divider/window resize unless removed here.
+            model: grid.visible ? store.rows : []
             delegate: Item {
                 id: card
                 required property var modelData
