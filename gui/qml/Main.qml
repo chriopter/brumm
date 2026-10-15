@@ -249,11 +249,11 @@ Window {
 
         Browser {
             id: browser
-            visible: !win.compact
+            visible: !win.compact || store.compactBrowser
             discovery: win.discovering
             onFilterFinished: keys.forceActiveFocus()
-            anchors { left: sidebar.right; leftMargin: 0; top: topNavigation.bottom; topMargin: ui.px(14); bottom: footer.top; bottomMargin: ui.px(4) }
-            width: win.discovering ? parent.width : Math.round(Math.max(ui.px(160), Math.min(parent.width - sidebar.width - ui.px(420), parent.width * store.split)))
+            anchors { left: sidebar.right; leftMargin: 0; top: topNavigation.bottom; topMargin: ui.px(14); bottom: win.compact ? compactControls.top : footer.top; bottomMargin: ui.px(4) }
+            width: win.compact || win.discovering ? parent.width : Math.round(Math.max(ui.px(160), Math.min(parent.width - sidebar.width - ui.px(420), parent.width * store.split)))
         }
 
         // The line between the list and the stage: invisible, but pointed
@@ -279,6 +279,7 @@ Window {
 
         Stage {
             id: playbackStage
+            visible: !win.compact || !store.compactBrowser
             compact: win.discovering && !win.compact
             readonly property real originalBrowserWidth: Math.round(Math.max(ui.px(160), Math.min(body.width - sidebar.width - ui.px(420), body.width * store.split)))
             x: win.compact ? 0 : originalBrowserWidth + ui.gap * 1.6
@@ -292,11 +293,23 @@ Window {
             visible: !win.compact
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         }
+        Controls {
+            id: compactControls
+            visible: win.compact && store.compactBrowser
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+            height: ui.px(48)
+        }
     }
 
     MenuButton {
+        id: compactMenu
         visible: win.compact && !store.full
         anchors { left: parent.left; top: parent.top; margins: ui.px(12) }
+    }
+    NavigationMenu {
+        visible: compactMenu.visible
+        anchors { left: compactMenu.right; leftMargin: ui.px(8); verticalCenter: compactMenu.verticalCenter }
+        onActivated: keys.forceActiveFocus()
     }
 
     FullStage {

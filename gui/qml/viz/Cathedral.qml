@@ -11,6 +11,7 @@
 // one shader (shaders/viz_cathedral.frag): the shafts in the air at
 // a third of the size, fifteen times a second, the church at half, the glass over it at full size.
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -24,7 +25,7 @@ VizEffect {
     property int old: 0
     property real mixing: 1
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: {
             const a = fx.audio, dt = Math.min(frameTime, 0.1)

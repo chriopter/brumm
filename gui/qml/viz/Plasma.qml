@@ -8,6 +8,7 @@
 // jump on a little. One pass (shaders/viz_plasma.frag); the ring of colors
 // is a small gradient texture, drawn again only when the theme changes.
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -24,7 +25,7 @@ VizEffect {
     property vector4d sources: Qt.vector4d(62, 0, -66, 0)
     property vector4d ripples: Qt.vector4d(-1, -1, -1, -1)
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: {
             const a = fx.audio, dt = Math.min(frameTime, 0.1)

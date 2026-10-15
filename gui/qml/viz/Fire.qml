@@ -10,6 +10,7 @@
 // (shaders/viz_fire_sim.frag), then the picture (shaders/viz_fire.frag).
 // The few numbers they share are kept here, once a frame.
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -37,7 +38,7 @@ VizEffect {
     property real huesTo: 0
     property real huesMix: 1
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: {
             const a = fx.audio, dt = Math.min(frameTime, 0.1)
@@ -99,13 +100,13 @@ VizEffect {
         property var spectrum: fx.spectrum
         fragmentShader: "qrc:/shaders/viz_fire_sim.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: heat
         sourceItem: burn
         hideSource: true
         visible: false
         recursive: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
         textureSize: Qt.size(Math.max(1, fx.width / 2), Math.max(1, fx.height / 2))

@@ -58,7 +58,8 @@ Item {
         }
     }
     property bool playerView: false
-    function showPlayer() { switchTo(secQueue); playerView = true }
+    property bool compactBrowser: false
+    function showPlayer() { switchTo(secQueue); playerView = true; compactBrowser = false }
     property var video: null
     property string resumeVideoSong: ""
     function closeVideo() {
@@ -378,11 +379,21 @@ Item {
     // The style shown last, in either player; the showpiece at first.
     function vizLast() { return Math.max(0, vizNames.indexOf(daemon.options.viz || "")) }
     function vizStep(d) { vizShow(vizStyle + d) }
+    function vizRate(refresh) {
+        const rate = daemon.options.viz_fps || 0
+        return rate === -1 ? Math.max(30, Math.min(240, Math.round(refresh) || 60)) : rate === 60 || rate === 120 ? rate : 30
+    }
+    function vizRateLabel(refresh) { return ((daemon.options.viz_fps || 0) === -1 ? "Auto · " : "") + vizRate(refresh) + " FPS" }
+    function vizRateStep() {
+        const rates = [0, 60, 120, -1]
+        daemon.setOption("viz_fps", rates[(rates.indexOf(daemon.options.viz_fps || 0) + 1) % rates.length])
+    }
     function vizPick(i) { vizList = false; vizShow(i) }
 
     // vizKey answers a key while the visualizer shows, as the terminal
     // player's fullKey; false when it is not the visualizer's.
     function vizKey(k) {
+        if (k === "ctrl+f") { vizRateStep(); return true }
         if (k === "F") { win.toggleVizFullscreen(); return true }
         const n = vizNames.length
         const digit = k.length === 1 && k >= "0" && k <= "9" ? (k === "0" ? 9 : parseInt(k) - 1) : -1
@@ -901,6 +912,7 @@ Item {
         const named = stable >= 0 ? stable : sectionNames.indexOf(p.sectionName || "")
         const sec = named >= 0 ? named : Math.max(0, Math.min(p.section | 0, sectionNames.length - 1))
         playerView = !!p.playerView
+        compactBrowser = !playerView
         vizList = false
         const style = vizNames.indexOf(p.visualizer || "")
         if (p.full && style >= 0) vizShow(style, true)

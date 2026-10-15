@@ -9,6 +9,7 @@
 // (shaders/viz_lava_wax.frag), and the lamp around it with all its light
 // (shaders/viz_lava.frag), bloomed from the shape's mip levels.
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -24,7 +25,7 @@ VizEffect {
     property int old: 0
     property real mixing: 1
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: {
             const a = fx.audio, dt = Math.min(frameTime, 0.1)
@@ -62,11 +63,11 @@ VizEffect {
         property var spectrum: fx.spectrum
         fragmentShader: "qrc:/shaders/viz_lava_wax.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: shape
         sourceItem: march
         hideSource: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
         textureSize: Qt.size(Math.max(2, Math.round(fx.width / 2)), Math.max(2, Math.round(fx.height / 2)))

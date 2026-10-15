@@ -136,12 +136,15 @@ func sound(bands, wave, fps int, stop chan struct{}, send func(Message) error) {
 }
 
 func main() {
-	tidal := os.Getenv("BRUMM_FIXTURE_PROVIDER") == "tidal"
-	selected := "apple"
-	if tidal {
-		selected = "tidal"
+	selected := os.Getenv("BRUMM_FIXTURE_PROVIDER")
+	if selected != "tidal" && selected != "spotify" {
+		selected = "apple"
 	}
+	tidal := selected == "tidal"
 	configured := map[string]bool{selected: true}
+	if os.Getenv("BRUMM_FIXTURE_ALL_SERVICES") != "" {
+		configured = map[string]bool{"apple": true, "tidal": true, "spotify": true}
+	}
 	if os.Getenv("BRUMM_FIXTURE_FIRST_RUN") != "" {
 		selected = ""
 		configured = map[string]bool{}
