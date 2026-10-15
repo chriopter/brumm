@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -29,6 +30,9 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+//go:embed provider.json
+var providerFixture json.RawMessage
 
 var albums = [][2]string{
 	{"Random Access Memories", "Daft Punk"}, {"Discovery", "Daft Punk"}, {"Currents", "Tame Impala"},
@@ -205,7 +209,10 @@ func main() {
 							m.Error = fmt.Sprintf("%v: %s", err, out)
 						}
 					}
+				case "provider":
+					m.Provider = providerFixture
 				case CmdSubscribe:
+					m.Provider = providerFixture
 					mu.Lock()
 					snapshot := st
 					mu.Unlock()

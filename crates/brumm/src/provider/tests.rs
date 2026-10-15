@@ -5,6 +5,7 @@ use std::sync::Arc;
 #[derive(Default)]
 pub(crate) struct Fixture {
     pub failure: Option<Error>,
+    pub playlists_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
 }
 impl Catalog for Fixture {
     fn search<'a>(&'a self, term: &'a str) -> Reply<'a, Result<Vec<Shelf>>> {
@@ -70,6 +71,10 @@ impl Catalog for Fixture {
 impl Library for Fixture {
     fn playlists<'a>(&'a self) -> Reply<'a, Listing<Item>> {
         Box::pin(async move {
+            if let Some(gate) = &self.playlists_gate {
+                gate.0.notify_one();
+                gate.1.notified().await;
+            }
             (
                 vec![Item {
                     kind: crate::music::KIND_PLAYLIST.into(),
@@ -96,6 +101,7 @@ impl Api for Fixture {}
 async fn independent_provider_is_object_safe_and_preserves_partial_results() {
     let api: Arc<dyn Api> = Arc::new(Fixture {
         failure: Some(Error::Partial),
+        ..Default::default()
     });
     let (items, failure) = api.playlists().await;
     assert_eq!(items[0].id, "fixture-playlist");

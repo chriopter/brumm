@@ -152,6 +152,15 @@ fn daemon_answers_without_credentials_and_quits() {
     assert!(String::from_utf8_lossy(&second.stderr).contains("already running"));
 
     let mut c = Conn::open(&sock);
+    let unsupported = c.ask(json!({"cmd":"provider","protocolVersion":99}));
+    assert!(
+        unsupported["error"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported socket protocol")
+    );
+    let supported = c.ask(json!({"cmd":"provider","protocolVersion":1}));
+    assert_eq!(supported["provider"]["protocolVersion"], 1);
     let sub = c.ask(json!({"cmd": "subscribe"}));
     let st = &sub["state"];
     assert!(st["status"].is_string(), "{sub}");

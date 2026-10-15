@@ -26,6 +26,8 @@ elif [[ -x $installed ]]; then
   # Keep the token of the brumm installed now (a release, or an earlier
   # setup), so a local build plays like the release it replaces. Release
   # binaries carry it in plain text; the newest-expiring JWT wins.
+  # ES256 signatures encode to exactly 86 unpadded base64url characters.
+  # A greedy suffix can swallow the adjacent binary string and invalidate it.
   token=""
   best=0
   while read -r jwt; do
@@ -35,7 +37,7 @@ elif [[ -x $installed ]]; then
       best=$exp
       token=$jwt
     fi
-  done < <(grep -aoE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}' "$installed" | sort -u)
+  done < <(grep -aoE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{86}' "$installed" | sort -u)
   if [[ -n $token ]]; then
     echo "kept the developer token of $installed (valid until $(date -d "@$best" +%F))"
   else

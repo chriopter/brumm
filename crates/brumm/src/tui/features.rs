@@ -6,7 +6,7 @@ use super::model::{Key, Model, Msg, Row, View};
 use super::text::*;
 use super::view::{MARGIN, box_lines};
 use crate::ipc::{self, Request};
-use crate::music::{Item, KIND_ALBUM, KIND_ARTIST, KIND_PLAYLIST, KIND_SHELF};
+use crate::music::{Item, KIND_SHELF};
 
 /// A one-line form for an action row.
 #[derive(Clone, Debug, Default)]
@@ -180,10 +180,11 @@ impl Model {
             page.rows
                 .push(Row::note("No additional metadata available."));
         }
-        let favorable = r.track.is_some()
-            || r.item.as_ref().is_some_and(|it| {
-                matches!(it.kind.as_str(), KIND_ALBUM | KIND_ARTIST | KIND_PLAYLIST)
-            });
+        let favorable = self.capabilities.favorites
+            && (r.track.is_some()
+                || r.item
+                    .as_ref()
+                    .is_some_and(|it| self.capabilities.favorite_kinds.contains(&it.kind)));
         if favorable {
             let kind = r
                 .item

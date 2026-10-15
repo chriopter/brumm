@@ -15,7 +15,7 @@
 //! groups, the play button the one filled element.
 
 use super::keys::Badge;
-use super::model::{Model, SEC_QUEUE};
+use super::model::Model;
 use super::text::*;
 use super::view::{
     Hit, IC_MUTED, IC_NEXT, IC_PAUSE, IC_PLAY, IC_PREV, IC_QUEUE, IC_REPEAT, IC_REPEAT_ONE,
@@ -239,7 +239,7 @@ impl Model {
         ]);
         let volume = cat(
             line(vec![
-                lit(self.section == SEC_QUEUE, IC_QUEUE),
+                lit(self.section == self.sec("queue"), IC_QUEUE),
                 sp("  ", PLAIN),
             ]),
             self.volume_label(),

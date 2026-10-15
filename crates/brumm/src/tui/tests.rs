@@ -36,6 +36,13 @@ fn ready() -> State {
 /// A w×h screen, nothing playing.
 fn model(w: i64, h: i64) -> Model {
     let mut m = Model::new(None, ready());
+    use crate::provider::session::Definition;
+    m.configure_navigation(crate::provider::session::navigation(
+        crate::provider::apple::session::Apple.navigation(),
+    ));
+    m.capabilities = crate::provider::apple::session::Apple.capabilities();
+    m.section = 0;
+    m.provider_name = "Apple Music".into();
     m.width = w;
     m.height = h;
     m.split = 0.5;
@@ -170,34 +177,53 @@ fn section_order_matches_the_gui() {
         "/../../gui/qml/Store.qml"
     ))
     .expect("gui/qml/Store.qml");
-    let names = qml
-        .lines()
-        .find_map(|l| l.split_once("sectionNames:").map(|(_, r)| r.trim()))
-        .expect("sectionNames in Store.qml");
-    let gui: Vec<String> =
-        serde_json::from_str(names.trim_end_matches(';')).expect("sectionNames is a list");
-    assert_eq!(gui, SECTION_NAMES.to_vec());
-    for (name, n) in [
-        ("secHome", SEC_HOME),
-        ("secExplore", SEC_EXPLORE),
-        ("secPlaylists", SEC_PLAYLISTS),
-        ("secAlbums", SEC_ALBUMS),
-        ("secArtists", SEC_ARTISTS),
-        ("secSongs", SEC_SONGS),
-        ("secRadio", SEC_RADIO),
-        ("secSearch", SEC_SEARCH),
-        ("secQueue", SEC_QUEUE),
-    ] {
-        let at = qml
-            .find(&format!("{name}:"))
-            .unwrap_or_else(|| panic!("{name} in Store.qml"));
-        let digits: String = qml[at + name.len() + 1..]
-            .trim_start()
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        assert_eq!(digits, n.to_string(), "{name}");
-    }
+    use crate::provider::session::Definition;
+    let entries =
+        crate::provider::session::navigation(crate::provider::apple::session::Apple.navigation());
+    assert_eq!(
+        entries.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(),
+        SECTION_NAMES
+    );
+    assert!(qml.contains("sectionNames: navigation.map(e => e.label)"));
+    assert!(qml.contains("sectionId: navigation[section].id"));
+}
+
+#[test]
+fn provider_navigation_can_reorder_rename_and_omit_sections() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(120, 40);
+    let mut entries = m.navigation[..7].to_vec();
+    entries.retain(|entry| entry.id != "radio");
+    entries.swap(0, SEC_ARTISTS);
+    entries[0].label = "My Artists".into();
+    m.section = SEC_ALBUMS;
+    m.configure_navigation(crate::provider::session::navigation(entries));
+    assert_eq!(m.navigation[0].label, "My Artists");
+    assert_eq!(m.navigation[m.section].id, "albums");
+    assert_eq!(m.sec("artists"), 0);
+    assert_eq!(m.navigation.len(), SEC_QUEUE);
+    assert!(!m.navigation.iter().any(|e| e.id == "radio"));
+    let place = m.here();
+    assert_eq!(place.section_id, "albums");
+    m.switch_to(m.sec("queue"));
+    m.go_place(place);
+    assert_eq!(m.navigation[m.section].id, "albums");
+}
+
+#[test]
+fn provider_capabilities_gate_actions_without_service_checks() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = playing(120, 40);
+    m.capabilities = Default::default();
+    m.rate(1);
+    m.play_station();
+    m.toggle_preview();
+    assert!(m.rating.is_empty());
+    assert!(!m.previewing);
 }
 
 /// Terminal keys get the names the handlers match.
@@ -1733,7 +1759,7 @@ fn discovery_cards() {
             }],
             ..Default::default()
         },
-        groups: Default::default(),
+        groups: vec![Vec::new()],
     });
     let shelves = vec![Shelf {
         title: "New".into(),

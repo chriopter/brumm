@@ -1,123 +1,92 @@
-# Music API providers
+# Music providers
 
-The Rust core separates the REST API from Apple Music. New installations ask
-for a provider at startup; existing Apple sessions keep their selection.
-A Tidal API adapter does not by itself add Tidal login or audio playback.
+Brumm keeps the existing Rust core, Unix socket, Qt frontend, terminal
+frontend, and shared player. Provider implementations are built in and run
+inside the daemon. The current branch makes Apple Music use the provider
+contract end to end; Tidal remains unavailable pending its own authentication,
+API, and playback implementation.
 
-## Module boundaries
+## Boundaries in this branch
 
 ```text
 crates/brumm/src/
-├── music.rs              Shared browse documents
 ├── provider/
-│   ├── mod.rs            Catalog, Library and Api contracts
-│   ├── registry.rs       Available services and first-run selection
-│   └── apple/            Apple REST, mapping and navigation
+│   ├── session.rs          Provider definition, navigation and capabilities
+│   ├── registry.rs         Built-in choices and selection payload
+│   └── apple/
+│       ├── session.rs      Apple provider definition and playback page
+│       ├── auth.rs         Apple sign-in flow
+│       ├── provider.rs     Apple API adapter
+│       └── features.rs     Apple-specific browse pages
 ├── daemon/
-│   └── apple.rs          API composition point
-├── ipc.rs                Provider-independent socket protocol
-├── tui/                  Terminal frontend
-├── engine/               MusicKit playback and Chrome/CDP
-├── login/                Apple sign-in
-└── config.rs             Options and Apple credentials
+│   ├── providers.rs        Construct the selected provider API
+│   └── mod.rs              Shared commands, lifecycle and socket
+├── engine/                 Shared Chrome/CDP lifecycle and controls
+├── login/mod.rs            Generic login command and progress bridge
+├── ipc.rs                  Versioned newline-delimited JSON socket messages
+├── tui/                    Dynamic provider navigation and rendering
+└── config.rs               Provider selection and account-scoped cache paths
 
-gui/                      Qt frontend
-crates/brumm-shared/       Existing shared audio/accent code and Qt FFI
+gui/                        Qt frontend; consumes provider metadata over IPC
+tools/fakedaemon/            Deterministic provider fixture for frontend checks
 ```
 
-`music` owns `Item`, `Track`, `Ref`, `Shelf`, `Detail` and `ExplorePage`.
-Both frontends, IPC, the cache and the player use these documents without
-importing an API implementation. Playback state remains in `ipc::Player`.
-The daemon holds `Arc<dyn provider::Api>`. Only its composition module,
-`daemon/apple.rs`, constructs the Apple client.
+`provider::session::Definition` describes a provider's stable ID, navigation,
+capabilities, sign-in state, API client, playback page, and authentication
+entry point. The registry is the only place that constructs a definition.
+Navigation destinations are typed as home, page route, library list, container,
+search, or queue. Frontends render the supplied order, labels, and semantic
+icons; they do not choose Apple shelf titles or infer resource behavior from
+Apple ID prefixes.
 
-## Implementing another API
+The socket remains the GUI/TUI-to-daemon boundary. Provider implementations do
+not expose another socket. The provider selection response includes a protocol
+version, navigation, capabilities, and the existing provider choices. Unknown
+or incompatible protocol versions produce a visible error. Apple keeps its
+legacy Home command while other typed destinations use shared browse commands.
 
-Add `provider/tidal` and declare the module in `provider/mod.rs`. Implement
-`Catalog` and `Library`, then implement `Api` for your client. Once credentials
-and provider selection exist, the composition point can return:
+Apple owns the MusicKit login page, callback flow, API composition, feature
+routes, and HTML playback page under `provider/apple/`. The shared engine owns
+Chrome/CDP startup and common playback controls. It receives an opaque playback
+page from the selected provider instead of loading Apple credentials itself.
+The generic login command reports provider progress and cancellation without
+knowing Apple's token format.
 
-```rust
-Arc::new(tidal::Client::new(/* provider-specific credentials */))
-```
+## Navigation and capabilities
 
-`Catalog` supports search, container tracks, a song's album and artist,
-share links, and resolving a share link to a container plus its selected song.
-`Library` lists playlists, albums, artists and songs. Their successful empty
-lists mean the collection is empty, not that the operation is unsupported.
+The Apple definition preserves its current order: Home, Explore, Playlists,
+Albums, Artists, Songs, and Radio. Brumm appends Search and Queue as shared
+utilities. Capabilities declare which resource kinds support ratings,
+favorites, and collection edits, plus features such as stations and previews.
+Both frontends use these declarations to hide unavailable actions.
 
-Calls return `provider::Reply`, a boxed `Send` future. This keeps the contracts
-object-safe without adding an async-trait dependency. For example, a search
-implementation has this signature:
+Cache files use a provider and account-derived namespace. Legacy Apple library
+and resume files migrate once into the first namespace and remain in place for
+rollback. The current Apple account key is a digest of the Music User Token,
+not a stable Apple account identifier; signing in again with a rotated token can
+create a fresh cache namespace. Stable account identity and a full provider
+switch lifecycle belong to the next phase. Each API session retains its own
+library and fixed cache path; a fresh login replaces the active session and
+rejects late API replies and authorization errors from the previous one.
+Persisted queues also retain the cache path assigned when created or loaded.
 
-```rust
-fn search<'a>(&'a self, term: &'a str)
-    -> provider::Reply<'a, Result<Vec<music::Shelf>>>
-```
+## Next steps
 
-Return `Box::pin(async move { ... })` from each method. Every borrowed input
-shares the call's lifetime; the future must be safe to run on Tokio's workers.
+1. Complete and review provider switching, including stale request and callback
+   handling, session restoration, and account identity.
+2. Add Tidal authentication, API mapping, navigation, capabilities, and a
+   playback backend behind the same contracts.
+3. Validate live sign-in and audible playback with eligible accounts, then
+   prepare the upstream pull request.
 
-`Api` supplies defaults for optional browsing, radio, ratings, library edits,
-favorites, folder creation and Explorer pages. Override the operations your
-provider supports. The defaults return `Error::Unsupported` and never call
-Apple. The current frontends display that error; capability-based hiding of
-unsupported controls is a later integration step.
+Apple's catalog token and fixture-backed browsing can be checked without a
+subscription. This branch has not verified Apple Music subscription playback;
+the available environment has no Apple Music subscription. The clean
+architecture plan and phase roadmap are in
+[`provider-abstraction-plan.md`](provider-abstraction-plan.md).
 
-Use `Error::Unauthorized` when the session needs a fresh login. List and track
-calls return `Listing<T>`, `(Vec<T>, Option<Error>)`, preserving the existing
-partial-result contract. Return the usable prefix with `Some(Error::Partial)`
-when pagination fails. The daemon shows those results without caching them as
-complete. Return an ordinary error when the operation produced no usable data.
+## Development checks
 
-Keep IDs opaque. `Item.catalog` distinguishes library and catalog resources
-without inferring that distinction from Apple's ID prefixes. `Item.route`,
-`Shelf.route` and `ExplorePage.next` are provider-owned navigation handles.
-Clients pass them back unchanged, including folder parent handles in create
-requests. Validate handles before authenticated requests. Do not place tokens
-in documents, handles or links.
-
-`Api::feature` handles brumm's named entry points, including `app:discover`
-and `app:favorites`, plus navigation handles returned by the provider.
-`ExplorePage.visuals` supplies up to two named pages the frontends load as
-artwork rows. `Shelf.route` opens the complete row. Frontends do not construct
-Apple chart URLs or parse Apple folder IDs. Another provider need not offer
-Apple Replay or Apple's lookup actions.
-
-## Completing Tidal support
-
-On a new installation, both frontends ask for the music provider before
-starting sign-in. The choice is saved as `provider` in the private config.
-Existing configurations with an Apple user token remain Apple sessions without
-an extra prompt. `CMD_PROVIDER` reads the registry or selects an available
-provider using `query`. Apple Music is available; Tidal is shown as coming soon
-and cannot be selected until its adapter exists. Invalid or unavailable choices
-leave the configuration untouched.
-
-Before enabling a second provider in a running application:
-
-1. Add its login, private credential storage and token refresh, then wire its
-   factory and enable its registry entry. Replace the Apple-only boot/reload
-   credential checks in the composition path.
-2. Add the required playback adapter. The current engine still embeds
-   MusicKit; API methods return metadata, not audio.
-3. Partition cache files, persisted queues and resume state by provider and
-   account. Existing single-provider item keys and JSON fields retain their
-   old format. Do not switch providers against an unpartitioned cache.
-4. Advertise capabilities and hide unsupported frontend actions.
-
-The optional `visuals` and shelf `route` fields are additive. Existing Rust/Qt
-FFI, audio code and release packaging are preserved. Mixed-provider queues
-are not part of this first extraction.
-
-## Validation
-
-Run `cargo test --workspace --locked` and `cargo fmt --all -- --check`.
-The Apple HTTP fixtures live beside the adapter. Independent provider,
-daemon and terminal tests exercise the contracts without an Apple account.
-Build Qt with `bin/build-gui`. The GUI provider tests run without a real daemon:
-
-```sh
-QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_BACKEND=software \
-  QT_STYLE_OVERRIDE=Basic /usr/lib/qt6/bin/qmltestrunner -input gui/tests
-```
+Run Rust and QML tests in the Omarchy test box when they may touch the desktop
+session. Build the Qt frontend with `bin/build-gui`. `tools/fakedaemon` supplies
+fictional provider data and does not require personal credentials.

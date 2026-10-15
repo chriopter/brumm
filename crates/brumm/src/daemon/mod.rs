@@ -2,11 +2,11 @@
 //! MPRIS server for media keys and the bar, and a unix socket the players
 //! talk to. Music keeps playing when the players are closed.
 
-mod apple;
 mod feedback;
 mod frontends;
 mod library;
 mod playback;
+mod providers;
 mod resume;
 mod selfupdate;
 
@@ -20,7 +20,7 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, Semaphore};
 
-use self::apple::new_api;
+use self::providers::new_api;
 use crate::config::{self, Config, Options};
 use crate::engine::{self, CdpError, Engine};
 use crate::error::{Error, Result, err};
@@ -103,10 +103,25 @@ struct CachedPage {
     at: Instant,
 }
 
+/// An API and its cache share a lifetime, even while a new login takes over.
+struct ProviderSession {
+    api: Arc<dyn Api>,
+    lib: Arc<Library>,
+}
+
+impl std::ops::Deref for ProviderSession {
+    type Target = dyn Api;
+    fn deref(&self) -> &Self::Target {
+        self.api.as_ref()
+    }
+}
+
 #[derive(Default)]
 struct Inner {
+    lib: Arc<Library>,
+    login_task: Option<tokio::task::AbortHandle>,
     eng: Option<Arc<Engine>>,
-    api: Option<Arc<dyn Api>>,
+    api: Option<Arc<ProviderSession>>,
     state: State,
     conns: HashMap<u64, ConnInfo>,
     booting: bool,
@@ -142,7 +157,6 @@ struct Inner {
 pub struct Daemon {
     version: String,
     mpris: OnceLock<mpris::Server>,
-    lib: Library,
     inner: Mutex<Inner>,
     /// True once the daemon is to stop.
     quit: tokio::sync::watch::Sender<bool>,
@@ -173,7 +187,19 @@ fn same(a: &Option<Arc<Engine>>, b: &Arc<Engine>) -> bool {
 pub async fn run(version: &str) -> Result<()> {
     let ln = listen().await?;
     engine::sweep_profiles(); // left behind by crashes
-    let d = Arc::new(Daemon::new(version, Library::load(), Resume::load()));
+    config::migrate_session_cache()?;
+    let cfg = Config::load()?;
+    let authenticated = crate::provider::registry::definition(cfg.effective_provider())
+        .is_ok_and(|p| p.signed_in(&cfg));
+    let d = Arc::new(Daemon::new(
+        version,
+        if authenticated {
+            Library::load()
+        } else {
+            Library::default()
+        },
+        if authenticated { Resume::load() } else { None },
+    ));
     match mpris::Server::start(Arc::downgrade(&d)).await {
         Ok(m) => {
             let _ = d.mpris.set(m);
@@ -265,8 +291,8 @@ impl Daemon {
         Daemon {
             version: version.to_string(),
             mpris: OnceLock::new(),
-            lib,
             inner: Mutex::new(Inner {
+                lib: Arc::new(lib),
                 state: State {
                     status: ipc::STATUS_STARTING.into(),
                     message: "starting".into(),
@@ -340,23 +366,25 @@ impl Daemon {
             Ok(api) => api,
             Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
         };
-        if cfg.developer().is_empty() {
-            return self
-                .set_status(
-                    ipc::STATUS_ERROR,
-                    "no Apple Music developer token in this build",
-                )
-                .await;
+        let provider = match crate::provider::registry::definition(cfg.effective_provider()) {
+            Ok(p) => p,
+            Err(e) => return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await,
+        };
+        if let Err(e) = provider.validate(&cfg) {
+            return self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
         }
-        if cfg.user_token.is_empty() {
+        if !provider.signed_in(&cfg) {
             return self
                 .set_status(ipc::STATUS_LOGGED_OUT, "not signed in")
                 .await;
         }
         let first = {
             let mut i = self.lock();
-            i.api = Some(api);
-            if let Some(exp) = cfg.expires() {
+            i.api = Some(Arc::new(ProviderSession {
+                api,
+                lib: i.lib.clone(),
+            }));
+            if let Some(exp) = provider.expiry(&cfg) {
                 i.expires = Some(exp);
                 let days = (exp - chrono::Utc::now().timestamp()) / 86400;
                 if days < 45 {
@@ -382,7 +410,10 @@ impl Daemon {
         }
         self.set_status(ipc::STATUS_STARTING, "starting player")
             .await;
-        let eng = match Engine::start(cfg.developer(), &cfg.user_token, &self.version).await {
+        let eng = match match provider.playback(&cfg, &self.version) {
+            Ok(page) => Engine::start(page).await,
+            Err(e) => Err(e),
+        } {
             Ok(e) => e,
             Err(e) => return self.failed(e).await,
         };
@@ -646,6 +677,7 @@ impl Daemon {
                 }
             }
             let next = State {
+                auth: i.state.auth.clone(),
                 status: status.into(),
                 message: msg,
                 expires_in: i.expires_in,
@@ -768,6 +800,11 @@ impl Daemon {
     }
 
     async fn handle(self: &Arc<Self>, conn: u64, r: &Request, reply: &mut Message) -> Result<()> {
+        if r.protocol_version != 0 && r.protocol_version != ipc::PROTOCOL_VERSION {
+            return Err(err(
+                "unsupported socket protocol; update Brumm's daemon and frontends together",
+            ));
+        }
         if matches!(
             r.cmd.as_str(),
             ipc::CMD_PLAY
@@ -797,6 +834,11 @@ impl Daemon {
                 };
                 self.poke();
                 reply.state = Some(st);
+                reply.provider = Some(crate::provider::registry::selection(&Config::load()?));
+                return Ok(());
+            }
+            ipc::CMD_CANCEL_LOGIN => {
+                self.cancel_login().await;
                 return Ok(());
             }
             ipc::CMD_PROVIDER => return self.select_provider(&r.query, reply).await,
@@ -807,19 +849,22 @@ impl Daemon {
             }
             ipc::CMD_SEARCH => {
                 let api = self.client()?;
-                reply.shelves = self.auth_check(api.search(&r.query).await).await?;
+                reply.shelves = self.auth_check(&api, api.search(&r.query).await).await?;
                 return Ok(());
             }
             ipc::CMD_FAVORITE => {
                 let api = self.client()?;
-                self.auth_check(api.favorite(&r.refs).await).await?;
+                self.auth_check(&api, api.favorite(&r.refs).await).await?;
                 self.spawn_refresh();
                 return Ok(());
             }
             ipc::CMD_CREATE => {
                 let api = self.client()?;
                 let it = self
-                    .auth_check(api.create_container(&r.list, &r.query, &r.start).await)
+                    .auth_check(
+                        &api,
+                        api.create_container(&r.list, &r.query, &r.start).await,
+                    )
                     .await?;
                 reply.items = vec![it];
                 self.spawn_refresh();
@@ -828,29 +873,31 @@ impl Daemon {
             ipc::CMD_EXPLORE => return self.explore(&r.query, reply).await,
             ipc::CMD_HOME => {
                 let api = self.client()?;
-                reply.shelves = self.auth_check(api.home().await).await?;
+                reply.shelves = self.auth_check(&api, api.home().await).await?;
                 return Ok(());
             }
             ipc::CMD_STATION => return self.station(r, reply).await,
             ipc::CMD_PLAYLIST => return self.add_to_playlist(r, reply).await,
             ipc::CMD_ALBUM => {
                 let api = self.client()?;
-                reply.items = vec![self.auth_check(api.album_of(&r.start).await).await?];
+                reply.items = vec![self.auth_check(&api, api.album_of(&r.start).await).await?];
                 return Ok(());
             }
             ipc::CMD_RATINGS => {
                 let api = self.client()?;
-                reply.ratings = self.auth_check(api.ratings(&r.refs).await).await?;
+                reply.ratings = self.auth_check(&api, api.ratings(&r.refs).await).await?;
                 return Ok(());
             }
             ipc::CMD_RATE => {
                 let api = self.client()?;
                 let first = r.refs.first().ok_or_else(|| err("rate: nothing named"))?;
-                return self.auth_check(api.rate(first, r.value as i64).await).await;
+                return self
+                    .auth_check(&api, api.rate(first, r.value as i64).await)
+                    .await;
             }
             ipc::CMD_ADD => {
                 let api = self.client()?;
-                self.auth_check(api.add_to_library(&r.list, &r.ids).await)
+                self.auth_check(&api, api.add_to_library(&r.list, &r.ids).await)
                     .await?;
                 let d = self.clone();
                 tokio::spawn(async move {
@@ -861,12 +908,12 @@ impl Daemon {
             }
             ipc::CMD_ARTIST => {
                 let api = self.client()?;
-                reply.items = vec![self.auth_check(api.artist_of(&r.start).await).await?];
+                reply.items = vec![self.auth_check(&api, api.artist_of(&r.start).await).await?];
                 return Ok(());
             }
             ipc::CMD_LINK => {
                 let api = self.client()?;
-                reply.link = self.auth_check(api.link(&r.start).await).await?;
+                reply.link = self.auth_check(&api, api.link(&r.start).await).await?;
                 return Ok(());
             }
             ipc::CMD_UPDATE => {
@@ -926,7 +973,8 @@ impl Daemon {
             ipc::CMD_PLAY => {
                 {
                     let mut i = self.lock();
-                    let res = i.resume.get_or_insert_with(Resume::default);
+                    let cache_dir = i.lib.directory();
+                    let res = i.resume.get_or_insert_with(|| Resume::new_at(cache_dir));
                     res.ids = r.ids.clone();
                     res.source = r.source.clone();
                     res.station.clear();
@@ -973,7 +1021,7 @@ impl Daemon {
                             ids: r.ids.clone(),
                             source: r.source.clone(),
                             id: r.start.clone(),
-                            ..Default::default()
+                            ..Resume::new_at(i.lib.directory())
                         });
                     }
                 }
@@ -1006,20 +1054,25 @@ impl Daemon {
     /// A library list from the cache, fetched on a miss.
     async fn list(self: &Arc<Self>, name: &str, reply: &mut Message) -> Result<()> {
         if name == ipc::LIST_SONGS {
-            if let Some(v) = self.lib.tracks(name) {
+            if let Some(v) = self.library().tracks(name) {
                 reply.tracks = v;
                 return Ok(());
             }
-        } else if let Some(v) = self.lib.items(name) {
+        } else if let Some(v) = self.library().items(name) {
             reply.items = v;
             return Ok(());
         }
         let api = self.client()?;
-        let r = self.fetch_list(api.as_ref(), name, reply).await;
-        self.auth_check(r).await
+        let r = self.fetch_list(&api, name, reply).await;
+        self.auth_check(&api, r).await
     }
 
-    async fn fetch_list(&self, api: &dyn Api, name: &str, reply: &mut Message) -> Result<()> {
+    async fn fetch_list(
+        &self,
+        api: &Arc<ProviderSession>,
+        name: &str,
+        reply: &mut Message,
+    ) -> Result<()> {
         let e = match name {
             ipc::LIST_PLAYLISTS => {
                 let (v, e) = api.playlists().await;
@@ -1043,6 +1096,7 @@ impl Daemon {
             }
             other => return Err(err(format!("unknown list {other:?}"))),
         };
+        self.auth_check(api, Ok(())).await?;
         match e {
             // Show what arrived, but do not cache an incomplete list.
             Some(Error::Partial) if reply.items.len() + reply.tracks.len() > 0 => return Ok(()),
@@ -1050,9 +1104,9 @@ impl Daemon {
             None => {}
         }
         if name == ipc::LIST_SONGS {
-            self.lib.set_tracks(name, reply.tracks.clone());
+            api.lib.set_tracks(name, reply.tracks.clone());
         } else {
-            self.lib.set_items(name, reply.items.clone());
+            api.lib.set_items(name, reply.items.clone());
         }
         Ok(())
     }
@@ -1068,19 +1122,20 @@ impl Daemon {
             KIND_STATION | KIND_TERM => return Err(err("this plays; it does not open")),
             _ => {}
         }
-        if let Some(v) = self.lib.tracks(&key) {
+        if let Some(v) = self.library().tracks(&key) {
             reply.tracks = v;
             return Ok(());
         }
         let api = self.client()?;
         let (tracks, e) = api.tracks(it).await;
+        self.auth_check(&api, Ok(())).await?;
         reply.tracks = tracks;
         match e {
             Some(Error::Partial) => return Ok(()), // show, don't cache
-            Some(e) => return self.auth_check(Err(e)).await,
+            Some(e) => return self.auth_check(&api, Err(e)).await,
             None => {}
         }
-        self.lib.set_tracks(&key, reply.tracks.clone());
+        api.lib.set_tracks(&key, reply.tracks.clone());
         Ok(())
     }
 
@@ -1103,8 +1158,15 @@ impl Daemon {
         } else {
             api.open(it).await
         };
-        reply.shelves = self.auth_check(r).await?;
+        reply.shelves = self.auth_check(&api, r).await?;
         let mut i = self.lock();
+        if !i
+            .api
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &api))
+        {
+            return Err(err("music session changed; try again"));
+        }
         if i.pages.len() > 50 {
             i.pages.clear();
         }
@@ -1126,14 +1188,16 @@ impl Daemon {
             _ => {
                 let api = self.client()?;
                 let it = r.item.clone().unwrap_or_default();
-                self.auth_check(api.station(&it, &r.start).await).await?
+                self.auth_check(&api, api.station(&it, &r.start).await)
+                    .await?
             }
         };
         reply.items = vec![st.clone()];
         let source = format!("station:{}", st.id);
         {
             let mut i = self.lock();
-            let res = i.resume.get_or_insert_with(Resume::default);
+            let cache_dir = i.lib.directory();
+            let res = i.resume.get_or_insert_with(|| Resume::new_at(cache_dir));
             res.station = st.id.clone();
             res.ids.clear();
             res.source = source.clone();
@@ -1158,11 +1222,11 @@ impl Daemon {
         }
         if r.start.is_empty() {
             reply.items = vec![
-                self.auth_check(api.create_playlist(&r.query, &r.ids).await)
+                self.auth_check(&api, api.create_playlist(&r.query, &r.ids).await)
                     .await?,
             ];
         } else {
-            self.auth_check(api.add_to_playlist(&r.start, &r.ids).await)
+            self.auth_check(&api, api.add_to_playlist(&r.start, &r.ids).await)
                 .await?;
         }
         let d = self.clone();
@@ -1173,15 +1237,39 @@ impl Daemon {
         Ok(())
     }
 
-    fn client(&self) -> Result<Arc<dyn Api>> {
+    fn library(&self) -> Arc<Library> {
+        self.lock().lib.clone()
+    }
+
+    fn client(&self) -> Result<Arc<ProviderSession>> {
         self.lock().api.clone().ok_or_else(|| err("still starting"))
     }
 
     /// Says the session expired, when Apple says so.
-    async fn auth_check<T>(&self, r: Result<T>) -> Result<T> {
-        if let Err(Error::Unauthorized) = &r {
-            self.set_status(ipc::STATUS_LOGGED_OUT, "music session expired")
-                .await;
+    async fn auth_check<T>(&self, api: &Arc<ProviderSession>, r: Result<T>) -> Result<T> {
+        let state = {
+            let mut i = self.lock();
+            if !i
+                .api
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, api))
+            {
+                return Err(err("music session changed; try again"));
+            }
+            if matches!(&r, Err(Error::Unauthorized)) {
+                i.state.status = ipc::STATUS_LOGGED_OUT.into();
+                i.state.message = "music session expired".into();
+                Some(i.state.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(state) = state {
+            self.broadcast(Message {
+                state: Some(state),
+                ..Default::default()
+            })
+            .await;
         }
         r
     }
@@ -1190,7 +1278,12 @@ impl Daemon {
     /// starts the player if it never ran.
     async fn reload(self: Arc<Self>) {
         let cfg = match Config::load() {
-            Ok(c) if !c.user_token.is_empty() => c,
+            Ok(c)
+                if crate::provider::registry::definition(c.effective_provider())
+                    .is_ok_and(|p| p.signed_in(&c)) =>
+            {
+                c
+            }
             _ => return,
         };
         let api = match new_api(&cfg) {
@@ -1200,13 +1293,26 @@ impl Daemon {
                 return;
             }
         };
+        if let Err(e) = config::migrate_session_cache() {
+            self.set_status(ipc::STATUS_ERROR, &e.to_string()).await;
+            return;
+        }
+        let lib = Arc::new(Library::load_at(config::session_cache_dir_for(&cfg)));
         let eng = {
             let mut i = self.lock();
-            i.api = Some(api);
+            i.lib = lib;
+            i.resume = Resume::load_at(config::session_cache_dir_for(&cfg));
+            i.pages.clear();
+            i.api = Some(Arc::new(ProviderSession {
+                api,
+                lib: i.lib.clone(),
+            }));
             i.eng.clone()
         };
-        if let Some(eng) = eng
-            && eng.set_user_token(&cfg.user_token).await.is_ok()
+        let page = crate::provider::registry::definition(cfg.effective_provider())
+            .and_then(|p| p.playback(&cfg, &self.version));
+        if let (Some(eng), Ok(page)) = (eng, page)
+            && eng.refresh_session(page).await.is_ok()
         {
             self.spawn_refresh();
             return;
@@ -1232,7 +1338,7 @@ impl Daemon {
             i.refreshing = true;
             api
         };
-        self.refresh_with(api.as_ref()).await;
+        self.refresh_with(&api).await;
         let again = {
             let mut i = self.lock();
             let again = i.refresh_next;
@@ -1245,7 +1351,7 @@ impl Daemon {
         }
     }
 
-    async fn refresh_with(self: &Arc<Self>, api: &dyn Api) {
+    async fn refresh_with(self: &Arc<Self>, api: &Arc<ProviderSession>) {
         for name in [
             ipc::LIST_PLAYLISTS,
             ipc::LIST_ALBUMS,
@@ -1253,28 +1359,37 @@ impl Daemon {
             ipc::LIST_SONGS,
         ] {
             let mut reply = Message::default();
-            if let Err(Error::Unauthorized) = self.fetch_list(api, name, &mut reply).await {
-                self.auth_check::<()>(Err(Error::Unauthorized)).await.ok();
+            let result = self.fetch_list(api, name, &mut reply).await;
+            if self.auth_check(api, result).await.is_err() {
                 return;
             }
         }
-        self.library_changed().await;
-        for p in self.lib.items(ipc::LIST_PLAYLISTS).unwrap_or_default() {
-            match api.tracks(&p).await {
+        self.library_changed(api).await;
+        for p in api.lib.items(ipc::LIST_PLAYLISTS).unwrap_or_default() {
+            let result = api.tracks(&p).await;
+            if self.auth_check(api, Ok(())).await.is_err() {
+                return;
+            }
+            match result {
                 (_, Some(Error::Partial)) => continue, // keep the cached full list rather than a cut one
                 (_, Some(Error::Unauthorized)) => {
-                    self.auth_check::<()>(Err(Error::Unauthorized)).await.ok();
+                    self.auth_check::<()>(api, Err(Error::Unauthorized))
+                        .await
+                        .ok();
                     return;
                 }
-                (t, None) => self.lib.set_tracks(&p.key(), t),
+                (t, None) => api.lib.set_tracks(&p.key(), t),
                 _ => {}
             }
         }
-        self.library_changed().await;
+        self.library_changed(api).await;
     }
 
-    async fn library_changed(&self) {
-        if let Err(e) = self.lib.save() {
+    async fn library_changed(&self, api: &Arc<ProviderSession>) {
+        if self.auth_check(api, Ok(())).await.is_err() {
+            return;
+        }
+        if let Err(e) = api.lib.save() {
             eprintln!("library cache: {e}");
         }
         self.broadcast(Message {
@@ -1409,7 +1524,7 @@ impl Daemon {
             return Ok(());
         }
         let api = self.client()?;
-        reply.explorer = Some(self.auth_check(api.feature(route).await).await?);
+        reply.explorer = Some(self.auth_check(&api, api.feature(route).await).await?);
         Ok(())
     }
 
@@ -1420,7 +1535,7 @@ impl Daemon {
         };
         let mut known = false;
         if typ == ipc::LIST_SONGS {
-            let ts = self.lib.tracks(typ)?;
+            let ts = self.library().tracks(typ)?;
             known |= ts.is_empty();
             for t in ts {
                 known |= t.details.iter().any(|d| d.label == "Favorite");
@@ -1432,7 +1547,7 @@ impl Daemon {
             typ,
             ipc::LIST_ALBUMS | ipc::LIST_ARTISTS | ipc::LIST_PLAYLISTS
         ) {
-            let items = self.lib.items(typ)?;
+            let items = self.library().items(typ)?;
             known |= items.is_empty();
             for it in items {
                 known |= it.details.iter().any(|d| d.label == "Favorite");
@@ -1623,7 +1738,7 @@ mod tests {
                 ..Default::default()
             };
             let d = daemon();
-            d.lib.set_tracks(
+            d.library().set_tracks(
                 &it.key(),
                 vec![crate::music::Track {
                     id: "song".into(),
@@ -1650,7 +1765,7 @@ mod tests {
             label: "Favorite".into(),
             value: "true".into(),
         };
-        d.lib.set_tracks(
+        d.library().set_tracks(
             "songs",
             vec![
                 crate::music::Track {
