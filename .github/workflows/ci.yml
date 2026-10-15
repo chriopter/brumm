@@ -1,0 +1,67 @@
+name: ci
+
+# The release's checks on every pull request and push to main, so a broken
+# main shows before a tag is pushed rather than when it is. No secrets: the
+# checks need none, and pull requests from forks get none.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request makes the older run moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: dev/go.mod
+
+      - name: Rust tools
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal --component rustfmt,clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # The same checks as the release job's Test step; keep the two alike.
+      - name: Test
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+          go -C dev test ./...
+          node --test crates/brumm/src/provider/tidal/web/player.test.mjs crates/brumm/src/provider/spotify/web/player.test.mjs
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
+  # Built and tested as the release builds it: against Qt 6.11, see the
+  # gui job in release.yml.
+  gui:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Tools
+        run: |
+          printf 'Server = https://archive.archlinux.org/repos/2026/09/30/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
+          pacman -Syyuu --noconfirm base-devel git rust qt6-base qt6-declarative qt6-shadertools qt6-multimedia
+          [[ $(qmake6 -query QT_VERSION) == 6.11.* ]] || { echo 'GUI build needs Qt 6.11'; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: dev/build-gui dist
+      - name: Test GUI
+        run: |
+          QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software /usr/lib/qt6/bin/qmltestrunner -input gui/tests
