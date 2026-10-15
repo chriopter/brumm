@@ -395,8 +395,9 @@ support are documented above.
 <details>
 <summary>1.4: now with Tidal and Spotify</summary>
 
-![Choose your music services](assets/release-1.4.0-services.png)
-![Cathedral visualizer](assets/release-1.4.0-cathedral.png)
+| Music services | Cathedral |
+|:---:|:---:|
+| ![Choose your music services](assets/release-1.4.0-services.png) | ![Cathedral visualizer](assets/release-1.4.0-cathedral.png) |
 
 ### New
 - 🌊 Tidal is here. Thank you, [@keylimesoda](https://github.com/keylimesoda)!
