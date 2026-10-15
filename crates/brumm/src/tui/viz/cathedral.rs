@@ -569,7 +569,7 @@ impl Visualizer {
         let a = &self.au;
         let s = &mut self.cathedral;
         s.tick += dt * (0.3 + 0.7 * a.live);
-        s.pan += dt * (0.5 + 0.5 * a.live);
+        s.pan += dt; // steady camera motion, independent of playback and beats
         if a.kicks != s.k {
             s.k = a.kicks;
             s.swell = (s.swell + 0.35).min(0.7);
@@ -602,20 +602,21 @@ impl Visualizer {
             m[1] = (m[1] + dt * (0.04 + 0.03 * m[3])).rem_euclid(9.0);
         }
 
-        // the camera and the sun, as in the window's shader
+        // The same slow, two-minute pan as the window's shader.
+        let tau = std::f64::consts::TAU;
         let ro = [
-            0.8 * (t * 0.071).sin(),
-            2.6 + 0.25 * (t * 0.093 + 1.0).sin(),
-            -13.0 + 0.8 * (t * 0.052 + 2.0).sin(),
+            0.45 * (t * tau / 180.0).sin(),
+            2.6 + 0.10 * (t * tau / 210.0 + 1.0).sin(),
+            -13.0 + 0.35 * (t * tau / 240.0 + 2.0).sin(),
         ];
         let aim = [
-            0.25 * (t * 0.061 + 2.5).sin(),
-            4.9 + 0.2 * (t * 0.047).sin(),
+            1.6 * (t * tau / 120.0).sin(),
+            4.9 + 0.2 * (t * tau / 160.0).sin(),
             0.0,
         ];
         let fw = norm(sub(aim, ro));
         let rt = norm(cross([0.0, 1.0, 0.0], fw));
-        let roll = 0.015 * (t * 0.083).sin();
+        let roll = 0.004 * (t * tau / 200.0).sin();
         let sunx = 0.38 + 0.3 * (tick * 0.021).sin();
         let cloud = (0.6 + 0.5 * (tick * 0.13).sin() * (tick * 0.071 + 1.3).sin()).clamp(0.0, 1.0);
         let sun = (0.62 + 0.38 * cloud) * (1.0 + s.swell);
@@ -628,7 +629,7 @@ impl Visualizer {
             fw,
             rt,
             up: cross(fw, rt),
-            focal: 1.45 + 0.05 * (t * 0.039).sin(),
+            focal: 1.45,
             roll: (roll.cos(), roll.sin()),
             l: norm([sunx, -1.35, -1.0]),
         };

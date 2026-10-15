@@ -160,17 +160,20 @@ vec3 finish(vec3 col) {
 }
 
 void main() {
-    // the camera: drifting slowly through the nave, always turned to the glass
+    // A gentle two-minute sweep across the glass. The aim moves more than
+    // the camera, so the pan is visible instead of keeping the window locked
+    // to the same spot. Long, independent periods avoid abrupt turns.
     float t = pan;
-    vec3 ro = vec3(0.8 * sin(t * 0.071), 2.6 + 0.25 * sin(t * 0.093 + 1.0), -13.0 + 0.8 * sin(t * 0.052 + 2.0));
-    vec3 at = vec3(0.25 * sin(t * 0.061 + 2.5), 3.5 + 0.2 * sin(t * 0.047), 0.0);
+    const float TAU = 6.28318530718;
+    vec3 ro = vec3(0.45 * sin(t * TAU / 180.0), 2.6 + 0.10 * sin(t * TAU / 210.0 + 1.0), -13.0 + 0.35 * sin(t * TAU / 240.0 + 2.0));
+    vec3 at = vec3(1.6 * sin(t * TAU / 120.0), 3.5 + 0.2 * sin(t * TAU / 160.0), 0.0);
     vec3 fw = normalize(at - ro);
     vec3 rt = normalize(cross(vec3(0, 1, 0), fw));
     vec3 up = cross(fw, rt);
-    float roll = 0.015 * sin(t * 0.083);
+    float roll = 0.004 * sin(t * TAU / 200.0);
     vec2 sp = (qt_TexCoord0 - 0.5) * vec2(aspect, -1.0);
     sp = mat2(cos(roll), -sin(roll), sin(roll), cos(roll)) * sp;
-    float focal = 1.0 + 0.05 * sin(t * 0.039);
+    float focal = 1.0;
     vec3 rd = normalize(fw * focal + rt * sp.x + up * sp.y);
 
     vec3 l = sunDir();
