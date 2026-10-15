@@ -20,6 +20,10 @@ pub struct Place {
     pub section_id: String,
     #[serde(rename = "playerView", skip_serializing_if = "std::ops::Not::not")]
     pub player_view: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub visualizer: String,
     /// The stack above the section's root.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<PlaceView>,
@@ -69,6 +73,12 @@ impl Model {
             section_name: self.navigation[self.section].label.clone(),
             section_id: self.navigation[self.section].id.clone(),
             player_view: self.player_view,
+            full: self.full,
+            visualizer: if self.full {
+                super::viz::NAMES[self.viz_style].into()
+            } else {
+                String::new()
+            },
             query: self.query.clone(),
             ..Default::default()
         };
@@ -148,6 +158,17 @@ impl Model {
             s = i;
         }
         self.player_view = p.player_view;
+        if self.full != p.full {
+            self.toggle_full();
+        }
+        if p.full
+            && let Some(style) = super::viz::NAMES
+                .iter()
+                .position(|name| *name == p.visualizer)
+        {
+            self.viz_style = style;
+            self.viz_prev = None;
+        }
         self.query.clone_from(&p.query);
         let q = p.query.trim();
         if q.chars().count() >= 2 {

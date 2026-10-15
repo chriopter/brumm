@@ -19,6 +19,8 @@ export BRUMM_DESKTOP_RUNTIME="$desktop_runtime"
 if [[ -n ${WAYLAND_DISPLAY:-} && $WAYLAND_DISPLAY != /* ]]; then
   export WAYLAND_DISPLAY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$WAYLAND_DISPLAY"
 fi
+# A preview is visual; do not inherit log-only color suppression.
+unset NO_COLOR
 export XDG_RUNTIME_DIR="$run" XDG_CONFIG_HOME="$run/config" XDG_CACHE_HOME="$run/cache" XDG_DATA_HOME="$run/data" BRUMM_PROTOTYPE=1
 "$build/fakedaemon" >"$run/daemon.log" 2>&1 &
 fake=$!

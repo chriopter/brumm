@@ -24,6 +24,7 @@ TestCase {
         property string selected: "apple"
         property var configured: ({apple:true})
         property int generation: 1
+        function setOption(key, value) { options = Object.assign({}, options, {[key]:value}) }
         signal providerChanged(var info)
         function info() {
             return { protocolVersion:1, generation:generation, selected:selected,
@@ -62,6 +63,8 @@ TestCase {
                 callback("", { explorer: { items: [{ kind: "album", id: request.query, name: "Result", artwork: "cover" }] } })
             else if (request.cmd === "resolve")
                 callback("", { items: [{ kind: "album", id: "resolved", name: "Album", catalog: true }], ids: ["song"] })
+            else if (request.cmd === "queue")
+                callback("", {tracks:[{id:"previous",title:"Previous"},{id:"playing",title:"Playing"},{id:"next",title:"Next"}],pos:1})
             else
                 callback("", {})
         }
@@ -233,6 +236,54 @@ TestCase {
         compare(store.providerChoiceNeeded,true)
         store.providerKey("esc")
         compare(store.providerPickerOpen,false)
+    }
+
+    function test_servicesStayInOptionsSectionWhenPreferencesAreCollapsed() {
+        store.menuOptions = false
+        const rows = store.menuRows
+        const heading = rows.findIndex(r => r.heading === "Options")
+        const services = rows.findIndex(r => r.act === "ctrl+o")
+        const preferences = rows.findIndex(r => r.fold)
+        verify(heading >= 0 && services > heading && services < preferences)
+        compare(rows.filter(r => r.option !== undefined).length, 0)
+        store.menuRow(services)
+        verify(store.providerPickerOpen)
+        store.providerKey("esc")
+    }
+
+    function test_nowPlayingShowsFreshQueueAndSelectsPlayingSong() {
+        store.switchTo(store.secAlbums)
+        store.st = {status:"ready",id:"playing",source:"album:current"}
+        fakeDaemon.asked = []
+        store.showPlayer()
+        verify(store.playerView)
+        compare(store.section,store.secQueue)
+        compare(store.cur().key,"queue:")
+        compare(store.cur().rows.length,3)
+        compare(store.cur().sel,1)
+        compare(fakeDaemon.asked.filter(r => r.cmd === "queue").length,1)
+        store.showPlayer()
+        compare(fakeDaemon.asked.filter(r => r.cmd === "queue").length,2)
+        store.switchTo(store.secHome)
+        verify(!store.playerView)
+        compare(store.section,store.secHome)
+    }
+
+    function test_visualizerSurvivesFrontendHandoff() {
+        store.full = true
+        store.vizStyle = 4
+        const place = store.here()
+        compare(place.full,true)
+        compare(place.visualizer,"wire")
+        store.full = false
+        store.vizStyle = 0
+        store.goPlace(place)
+        verify(store.full)
+        compare(store.vizStyle,4)
+        store.vizList = true
+        compare(store.vizKey("g"),false)
+        store.full = false
+        store.vizList = false
     }
 
 }

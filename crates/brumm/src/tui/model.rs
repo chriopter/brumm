@@ -1273,6 +1273,7 @@ impl Model {
             && ms.kind == MouseKind::Moved
             && ms.button == Button::None
             && !self.dragging
+            && !self.full
         {
             // Hovering: the pointer's shape, nothing drawn.
             self.still = true;
@@ -1371,7 +1372,11 @@ impl Model {
                     return; // replaced by a sooner one
                 }
                 self.tick_at = None;
-                if self.full && !self.opts.o.no_viz_cycle && self.viz_at.elapsed() > VIZ_EVERY {
+                if self.full
+                    && !self.viz_list
+                    && !self.opts.o.no_viz_cycle
+                    && self.viz_at.elapsed() > VIZ_EVERY
+                {
                     self.show_viz((self.viz_style + 1) % viz::NAMES.len());
                 }
                 if !self.flash.is_empty() && self.flash_at.elapsed() > Duration::from_secs(4) {
@@ -1816,6 +1821,7 @@ impl Model {
         if s == self.sec("queue") {
             self.section_stack_mut("queue").truncate(1);
             self.cur_mut().loaded = false; // always fresh
+            self.cur_mut().want = self.state.player.id.clone();
         }
         self.searching = false; // the box stays behind; at Search, typing a letter goes into it
         if !self.cur().loaded {
@@ -2182,6 +2188,7 @@ impl Model {
         let n = viz::NAMES.len();
         if self.viz_list {
             match k {
+                "g" => return false,
                 "up" | "k" | "shift+tab" => {
                     self.viz_sel = (self.viz_sel + n - 1) % n;
                     self.preview_viz(self.viz_sel);
@@ -2530,7 +2537,7 @@ impl Model {
                 save_split(self.split);
             }
             "c" => {
-                self.jump_to_playing();
+                self.switch_to(self.sec("queue"));
                 self.player_view = true;
             }
             "o" => {
@@ -2916,7 +2923,7 @@ impl Model {
         } else if g.repeat.has(x, y) {
             self.key("r");
         } else if g.queue.has(x, y) {
-            self.switch_to(self.sec("queue"));
+            self.key("c");
         } else if g.volume.has(x, y) {
             self.key("m");
         } else if g.artist.has(x, y) && has_song {

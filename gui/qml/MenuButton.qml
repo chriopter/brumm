@@ -35,11 +35,12 @@ Item {
         id: menu
         parent: win.contentItem
         visible: store.menuOpen && f.visible
+        onVisibleChanged: if (visible) { menuScroll.contentY = 0; f.hint = "" }
         readonly property point at: { store.menuOpen; win.width; win.height; return f.mapToItem(win.contentItem, 0, 0) }
         x: at.x
         y: at.y + button.height + ui.px(10)
-        width: ui.px(300)
-        height: list.implicitHeight + ui.px(40) // and a line for the hint
+        width: Math.min(ui.px(320), win.width - x - ui.px(12))
+        height: Math.min(list.implicitHeight + ui.px(44), win.height - y - ui.px(12)) // and a line for the hint
         z: 50
 
         TapHandler {} // a click between the rows does not close it
@@ -86,132 +87,156 @@ Item {
             font { family: ui.sans; pixelSize: ui.px(11) }
         }
 
-        Column {
-            id: list
-            anchors { left: parent.left; right: parent.right; top: parent.top; margins: ui.px(8) }
-            Repeater {
-                model: store.menuRows
-                Item {
-                    id: row
-                    required property int index
-                    required property var modelData
-                    readonly property bool pickable: store.menuPickable(modelData)
-                    readonly property bool option: modelData.option !== undefined
-                    readonly property bool fold: !!modelData.fold
-                    readonly property bool colors: modelData.option === "cover_colors"
-                    readonly property bool on: { daemon.options; return option && store.optionOn(modelData.option) }
-                    readonly property bool picked: pickable && (store.menuSel === index || rowHover.hovered)
-                    width: list.width
-                    height: modelData.sep ? ui.px(11) : modelData.heading ? ui.px(fold ? 32 : 28) : ui.px(32)
-                    onPickedChanged: if (picked && option) f.hint = modelData.hint || ""
-                                     else if (!picked && f.hint === (modelData.hint || "")) f.hint = ""
-
-                    // A divider: a hairline fading out at both ends.
-                    Rectangle {
-                        visible: !!row.modelData.sep
-                        anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: ui.px(10) }
-                        height: 1
-                        gradient: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0; color: "transparent" }
-                            GradientStop { position: 0.5; color: Qt.alpha(ui.bright, 0.16) }
-                            GradientStop { position: 1; color: "transparent" }
-                        }
-                    }
-                    // A heading, as the list's shelves have.
-                    Text {
-                        visible: !!row.modelData.heading
-                        anchors { left: parent.left; leftMargin: ui.px(12); bottom: parent.bottom; bottomMargin: ui.px(row.fold ? 10 : 6) }
-                        text: (row.modelData.heading || "").toUpperCase()
-                        color: ui.here
-                        font { family: ui.sans; pixelSize: ui.px(10); weight: Font.Bold; letterSpacing: 1.6 }
-                    }
-
-                    RowLight {
-                        anchors.fill: parent
-                        visible: row.picked
-                    }
-                    Text {
-                        id: glyph
-                        visible: !!row.modelData.icon
-                        anchors { left: parent.left; leftMargin: ui.px(12); verticalCenter: parent.verticalCenter }
-                        width: ui.px(18)
-                        text: row.modelData.icon || ""
-                        color: row.picked ? ui.here : ui.dim
-                        font { family: ui.mono; pixelSize: ui.px(15) }
-                    }
-                    Column {
-                        id: words
-                        visible: row.pickable && !row.fold
-                        anchors { left: parent.left; leftMargin: row.option ? ui.px(12) : ui.px(42); right: tail.left; rightMargin: ui.px(10); verticalCenter: parent.verticalCenter }
-                        spacing: ui.px(1)
-                        Text {
-                            width: parent.width
-                            // The colors row names what it is set to: theme or cover.
-                            text: row.colors ? (row.on ? "Cover Colors" : "Theme Colors") : (row.modelData.label || "")
-                            color: row.picked ? ui.bright : ui.fg
-                            elide: Text.ElideRight
-                            font { family: ui.sans; pixelSize: ui.px(13); weight: row.picked ? Font.DemiBold : Font.Normal }
-                        }
-                    }
+        Flickable {
+            id: menuScroll
+            anchors { fill: parent; margins: ui.px(8); bottomMargin: ui.px(32) }
+            contentHeight: list.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+            Column {
+                id: list
+                width: menuScroll.width
+                Repeater {
+                    model: store.menuRows
                     Item {
-                        id: tail
-                        anchors { right: parent.right; rightMargin: ui.px(12); verticalCenter: parent.verticalCenter }
-                        width: row.colors ? pick.width : row.option ? toggle.width : key.implicitWidth
-                        height: parent.height
-                        Toggle {
-                            id: toggle
-                            visible: row.option && !row.colors
-                            anchors.verticalCenter: parent.verticalCenter
-                            on: row.on
-                        }
-                        // Theme or cover: the two halves of one pill, the
-                        // chosen one lit; a click goes over to the other.
+                        id: row
+                        required property int index
+                        required property var modelData
+                        readonly property bool pickable: store.menuPickable(modelData)
+                        readonly property bool option: modelData.option !== undefined
+                        readonly property bool fold: !!modelData.fold
+                        readonly property bool colors: modelData.option === "cover_colors"
+                        readonly property bool on: { daemon.options; return option && store.optionOn(modelData.option) }
+                        readonly property bool picked: pickable && (store.menuSel === index || rowHover.hovered)
+                        width: list.width
+                        height: modelData.sep ? ui.px(13) : modelData.heading ? ui.px(32) : ui.px(34)
+                        onPickedChanged: if (picked) f.hint = modelData.hint || ""
+                                         else if (!picked && f.hint === (modelData.hint || "")) f.hint = ""
+
+                        // A divider: a hairline fading out at both ends.
                         Rectangle {
-                            id: pick
-                            visible: row.colors
-                            anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                            width: halves.implicitWidth + ui.px(4)
-                            height: ui.px(22)
-                            radius: height / 2
-                            color: Qt.alpha(ui.deep, 0.6)
-                            border { width: 1; color: Qt.alpha(ui.bright, 0.16) }
-                            Row {
-                                id: halves
-                                anchors.centerIn: parent
-                                Repeater {
-                                    model: ["Theme", "Cover"]
-                                    Rectangle {
-                                        required property int index
-                                        required property string modelData
-                                        readonly property bool lit: (index === 1) === row.on
-                                        width: word.implicitWidth + ui.px(14)
-                                        height: ui.px(18)
-                                        radius: height / 2
-                                        color: lit ? ui.here : "transparent"
-                                        Behavior on color { enabled: !ui.calm; ColorAnimation { duration: 160 } }
-                                        Text {
-                                            id: word
-                                            anchors.centerIn: parent
-                                            text: parent.modelData
-                                            color: parent.lit ? (theme.dark ? ui.deep : "white") : ui.dim
-                                            font { family: ui.sans; pixelSize: ui.px(10); weight: Font.DemiBold }
+                            visible: !!row.modelData.sep
+                            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: ui.px(10) }
+                            height: 1
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0; color: "transparent" }
+                                GradientStop { position: 0.5; color: Qt.alpha(ui.bright, 0.16) }
+                                GradientStop { position: 1; color: "transparent" }
+                            }
+                        }
+                        // A heading, as the list's shelves have.
+                        Text {
+                            visible: !!row.modelData.heading
+                            anchors { left: parent.left; leftMargin: ui.px(12); bottom: parent.bottom; bottomMargin: ui.px(7) }
+                            text: (row.modelData.heading || "").toUpperCase()
+                            color: ui.dim
+                            font { family: ui.sans; pixelSize: ui.px(10); weight: Font.DemiBold; letterSpacing: 1.4 }
+                        }
+
+                        RowLight {
+                            anchors.fill: parent
+                            visible: row.picked
+                        }
+                        Text {
+                            id: glyph
+                            visible: !!row.modelData.icon
+                            anchors { left: parent.left; leftMargin: ui.px(12); verticalCenter: parent.verticalCenter }
+                            width: ui.px(18)
+                            text: row.modelData.icon || ""
+                            color: row.picked ? ui.here : ui.dim
+                            font { family: ui.mono; pixelSize: ui.px(15) }
+                        }
+                        Column {
+                            id: words
+                            visible: row.pickable
+                            anchors { left: parent.left; leftMargin: row.modelData.icon ? ui.px(42) : ui.px(12); right: tail.left; rightMargin: ui.px(10); verticalCenter: parent.verticalCenter }
+                            spacing: ui.px(1)
+                            Text {
+                                width: parent.width
+                                // The colors row names what it is set to: theme or cover.
+                                text: row.colors ? (row.on ? "Cover Colors" : "Theme Colors") : (row.modelData.label || "")
+                                color: row.picked ? ui.bright : ui.fg
+                                elide: Text.ElideRight
+                                font { family: ui.sans; pixelSize: ui.px(13); weight: row.picked ? Font.DemiBold : Font.Normal }
+                            }
+                        }
+                        Item {
+                            id: tail
+                            anchors { right: parent.right; rightMargin: ui.px(12); verticalCenter: parent.verticalCenter }
+                            width: row.colors ? pick.width : row.option ? toggle.width : row.fold ? ui.px(16) : keyCap.width
+                            height: parent.height
+                            Toggle {
+                                id: toggle
+                                visible: row.option && !row.colors
+                                anchors.verticalCenter: parent.verticalCenter
+                                on: row.on
+                            }
+                            // Theme or cover: the two halves of one pill, the
+                            // chosen one lit; a click goes over to the other.
+                            Rectangle {
+                                id: pick
+                                visible: row.colors
+                                anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                                width: halves.implicitWidth + ui.px(4)
+                                height: ui.px(22)
+                                radius: height / 2
+                                color: Qt.alpha(ui.deep, 0.6)
+                                border { width: 1; color: Qt.alpha(ui.bright, 0.16) }
+                                Row {
+                                    id: halves
+                                    anchors.centerIn: parent
+                                    Repeater {
+                                        model: ["Theme", "Cover"]
+                                        Rectangle {
+                                            required property int index
+                                            required property string modelData
+                                            readonly property bool lit: (index === 1) === row.on
+                                            width: word.implicitWidth + ui.px(14)
+                                            height: ui.px(18)
+                                            radius: height / 2
+                                            color: lit ? ui.here : "transparent"
+                                            Behavior on color { enabled: !ui.calm; ColorAnimation { duration: 160 } }
+                                            Text {
+                                                id: word
+                                                anchors.centerIn: parent
+                                                text: parent.modelData
+                                                color: parent.lit ? (theme.dark ? ui.deep : "white") : ui.dim
+                                                font { family: ui.sans; pixelSize: ui.px(10); weight: Font.DemiBold }
+                                            }
                                         }
                                     }
                                 }
                             }
+                            Text {
+                                visible: row.fold
+                                anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                                text: store.menuOptions ? "󰅀" : "󰅂"
+                                color: row.picked ? ui.bright : ui.dim
+                                font { family: ui.mono; pixelSize: ui.px(16) }
+                            }
+                            Rectangle {
+                                id: keyCap
+                                visible: row.modelData.act !== undefined
+                                anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+                                width: key.implicitWidth + ui.px(12)
+                                height: ui.px(21)
+                                radius: ui.px(5)
+                                color: Qt.alpha(ui.bright, row.picked ? 0.09 : 0.035)
+                                border.color: Qt.alpha(ui.bright, row.picked ? 0.2 : 0.08)
+                                Text {
+                                    id: key
+                                    anchors.centerIn: parent
+                                    text: row.modelData.keys || row.modelData.act || ""
+                                    color: row.picked ? ui.bright : ui.dim
+                                    font { family: ui.sans; pixelSize: ui.px(10); weight: Font.DemiBold }
+                                }
+                            }
                         }
-                        Text { // its key, a note about the row; a fold's way
-                            id: key
-                            visible: row.modelData.act !== undefined || row.fold
-                            anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-                            text: row.fold ? (store.menuOptions ? "▾" : "▸") : (row.modelData.keys || row.modelData.act || "")
-                            color: row.picked ? ui.fg : ui.dim
-                            font { family: ui.sans; pixelSize: ui.px(row.fold ? 16 : 12); weight: Font.DemiBold }
-                        }
+                        HoverHandler { id: rowHover; enabled: row.pickable; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { enabled: row.pickable; onTapped: store.menuRow(row.index) }
                     }
-                    HoverHandler { id: rowHover; enabled: row.pickable; cursorShape: Qt.PointingHandCursor }
-                    TapHandler { enabled: row.pickable; onTapped: store.menuRow(row.index) }
                 }
             }
         }

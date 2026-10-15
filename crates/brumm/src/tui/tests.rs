@@ -896,6 +896,10 @@ fn viz_controls() {
     assert_ne!(m.viz_style, start);
     m.full_key("v");
     assert!(m.viz_list && shows(&mut m, "styles"));
+    assert!(
+        !m.full_key("g"),
+        "frontend switching also works from the style list"
+    );
     let from = m.viz_style;
     m.full_key("down");
     assert_ne!(m.viz_style, from, "moving in the list shows the style");
@@ -925,6 +929,56 @@ fn viz_controls() {
     press(&mut m, "esc");
     press(&mut m, "f");
     assert!(!m.full, "f closes the visualizer");
+}
+
+#[test]
+fn now_playing_opens_queue_on_current_song() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(160, 40);
+    m.state.player.id = "current".into();
+    m.key("c");
+    assert!(m.player_view);
+    assert_eq!(m.section, m.sec("queue"));
+    assert_eq!(m.cur().key, "queue:");
+    let view = m.cur().id;
+    m.update(Msg::Loaded {
+        view,
+        reply: Ok(tracks(vec![
+            track("before", "Before"),
+            track("current", "Current"),
+            track("after", "After"),
+        ])),
+        select: String::new(),
+    });
+    assert_eq!(m.cur().sel, 1);
+    m.switch_to(SEC_HOME);
+    assert!(!m.player_view);
+}
+
+#[test]
+fn visualizer_mouse_movement_wakes_hidden_controls() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(120, 35);
+    m.full = true;
+    m.opts.o.viz_bare = true;
+    m.mouse_at = Instant::now() - Duration::from_millis(1100);
+    assert!(!shows(&mut m, "controls hide"));
+    m.update(Msg::Mouse(Mouse {
+        kind: MouseKind::Moved,
+        button: Button::None,
+        x: 4,
+        y: 4,
+    }));
+    assert!(m.mouse_at.elapsed() < Duration::from_millis(100));
+    assert!(
+        !m.still,
+        "the controls need to be redrawn after moving the mouse"
+    );
+    assert!(shows(&mut m, "controls hide"));
 }
 
 /// The visualizer draws at 30 fps unless told otherwise; F steps through
@@ -1611,6 +1665,8 @@ fn place_round_trip() {
     let mut a = model(120, 35);
     a.section = SEC_ALBUMS;
     a.player_view = true;
+    a.full = true;
+    a.viz_style = 4;
     let album = Item {
         kind: KIND_ALBUM.into(),
         id: "l.1".into(),
@@ -1636,6 +1692,8 @@ fn place_round_trip() {
     let p = serde_json::to_value(a.here()).unwrap();
     assert_eq!(p["sectionName"], "Albums");
     assert_eq!(p["sel"]["id"], "s2");
+    assert_eq!(p["full"], true);
+    assert_eq!(p["visualizer"], super::viz::NAMES[4]);
 
     let mut m = model(120, 35);
     m.state.player.source = "lib:playlist:p.1".into();
@@ -1658,6 +1716,11 @@ fn place_round_trip() {
         select: String::new(),
     });
     assert!(m.player_view, "Now Playing mode kept");
+    assert!(m.full, "Visualizer mode kept");
+    assert_eq!(
+        m.viz_style, 4,
+        "The displayed style wins over saved options"
+    );
     assert_eq!(m.cur().sel, 1);
 
     let mut m = model(120, 35);
