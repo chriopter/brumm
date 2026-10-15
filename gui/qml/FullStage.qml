@@ -4,6 +4,7 @@
 // bottom. It listens to the daemon's sound only while it shows.
 import QtQuick
 import QtQuick.Window
+import QtQuick.Controls
 import Brumm
 
 Item {
@@ -24,7 +25,9 @@ Item {
     VizTexture { id: waveTex; audio: vizAudio; wave: true }
 
     // The listener moves on once a frame while the visualizer shows.
-    FrameAnimation {
+    Binding { target: vizClock; property: "running"; value: fs.moving }
+    Binding { target: vizClock; property: "fps"; value: store.vizRate(vizClock.refreshRate) }
+    VizFrame {
         running: fs.moving
         onTriggered: vizAudio.tick(frameTime, !!store.st.playing)
     }
@@ -110,7 +113,7 @@ Item {
     property bool resting: false
     readonly property bool autoHide: !!daemon.options.viz_bare
     onAutoHideChanged: stir()
-    readonly property bool bare: autoHide && resting && !store.vizList
+    readonly property bool bare: autoHide && resting && !store.vizList && !settingsMenu.opened
     Timer { id: rest; interval: 1000; running: fs.shown; onTriggered: fs.resting = true }
     function stir() { resting = false; if (shown) rest.restart(); else rest.stop() }
     onShownChanged: stir()
@@ -181,17 +184,14 @@ Item {
             spacing: ui.px(7)
             Repeater {
                 model: [
-                    {icon:"󰅁", tip:"Previous visualizer · Shift+Tab", action:"shift+tab", active:false},
                     {icon:"󰀻", tip:(store.vizNames[store.vizStyle] || "Visualizer") + " · Choose style (V)", action:"v", active:store.vizList},
-                    {icon:"󰅂", tip:"Next visualizer · Tab", action:"tab", active:false},
-                    {icon:"󰑖", tip:daemon.options.no_viz_cycle ? "Keep this style · Enable auto-change (A)" : "Change style each minute · Disable (A)", action:"a", active:!daemon.options.no_viz_cycle},
-                    {icon:daemon.options.viz_bare ? "󰈉" : "󰈈", tip:daemon.options.viz_bare ? "Auto-hide controls · Keep visible (X)" : "Controls stay visible · Auto-hide (X)", action:"x", active:!daemon.options.viz_bare},
+                    {icon:"󰒓", tip:"Visualizer settings · " + store.vizRateLabel(vizClock.refreshRate), action:"settings", active:settingsMenu.opened},
                     {icon:"󰅖", tip:"Exit visualizer · F", action:"f", active:false}
                 ]
                 Item {
                     required property var modelData
                     required property int index
-                    width: button.width + (index === 2 || index === 4 ? ui.px(7) : 0)
+                    width: button.width
                     height: button.height
                     Orb {
                         id: button
@@ -199,8 +199,73 @@ Item {
                         icon: modelData.icon
                         tooltip: modelData.tip
                         on: modelData.active
-                        onClicked: store.dispatch(modelData.action, { text: modelData.action.length === 1 ? modelData.action : "", modifiers: 0 })
+                        onClicked: {
+                            if (modelData.action === "settings") { store.vizList = false; settingsMenu.open() }
+                            else store.dispatch(modelData.action, { text: modelData.action.length === 1 ? modelData.action : "", modifiers: 0 })
+                        }
                     }
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: settingsMenu
+        x: fs.width - width - ui.gap
+        y: fs.height - strip.height - height
+        width: ui.px(240)
+        padding: ui.px(8)
+        focus: true
+        onOpened: fs.stir()
+        background: Rectangle {
+            color: Qt.alpha(ui.deep, 0.96)
+            radius: ui.px(12)
+            border.color: Qt.alpha(ui.bright, 0.18)
+        }
+        contentItem: Column {
+            Text {
+                text: "QUALITY · FPS"
+                color: ui.dim
+                height: ui.px(30)
+                verticalAlignment: Text.AlignVCenter
+                font { family: ui.sans; pixelSize: ui.px(11); weight: Font.DemiBold }
+            }
+            Repeater {
+                model: [{value:0,label:"30 FPS"}, {value:60,label:"60 FPS"}, {value:120,label:"120 FPS"},
+                        {value:-1,label:"Auto · " + Math.round(vizClock.refreshRate) + " FPS"}]
+                Button {
+                    required property var modelData
+                    width: parent.width
+                    height: ui.px(36)
+                    readonly property bool selected: (daemon.options.viz_fps || 0) === modelData.value
+                    contentItem: Text {
+                        text: (parent.selected ? "●  " : "○  ") + parent.modelData.label
+                        color: parent.selected ? ui.here : ui.bright
+                        verticalAlignment: Text.AlignVCenter
+                        font { family: ui.sans; pixelSize: ui.px(13) }
+                    }
+                    background: Rectangle { radius: ui.px(6); color: parent.hovered ? ui.glassHi : "transparent" }
+                    onClicked: { daemon.setOption("viz_fps", modelData.value); fs.stir() }
+                }
+            }
+            Rectangle { width: parent.width; height: 1; color: ui.edge }
+            Repeater {
+                model: [
+                    {label:"Auto-change styles",key:"no_viz_cycle",on:!daemon.options.no_viz_cycle},
+                    {label:"Auto-hide controls",key:"viz_bare",on:!!daemon.options.viz_bare}
+                ]
+                Button {
+                    required property var modelData
+                    width: parent.width
+                    height: ui.px(38)
+                    contentItem: Text {
+                        text: (parent.modelData.on ? "☑  " : "☐  ") + parent.modelData.label
+                        color: parent.modelData.on ? ui.here : ui.bright
+                        verticalAlignment: Text.AlignVCenter
+                        font { family: ui.sans; pixelSize: ui.px(13) }
+                    }
+                    background: Rectangle { radius: ui.px(6); color: parent.hovered ? ui.glassHi : "transparent" }
+                    onClicked: { daemon.setOption(modelData.key, !daemon.options[modelData.key]); fs.stir() }
                 }
             }
         }

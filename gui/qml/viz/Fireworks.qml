@@ -132,13 +132,13 @@ VizEffect {
         property var prev: trail
         fragmentShader: "qrc:/shaders/viz_fireworks_sparks.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: trail
         sourceItem: sparks
         hideSource: true
         visible: false
         recursive: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
         textureSize: Qt.size(Math.max(1, fx.width / 2), Math.max(1, fx.height / 2))
@@ -156,13 +156,13 @@ VizEffect {
         property var sparks: trail
         fragmentShader: "qrc:/shaders/viz_fireworks_smoke.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: haze
         sourceItem: smoke
         hideSource: true
         visible: false
         recursive: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
         textureSize: Qt.size(Math.max(1, fx.width / 4), Math.max(1, fx.height / 4))

@@ -4,6 +4,7 @@
 // draws over itself (shaders/viz_ridge_push.frag); one full pass shows it
 // (shaders/viz_ridge.frag).
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -11,7 +12,7 @@ VizEffect {
     // Ten pushes a second; slide is how far the lines have gone toward the
     // next one, so they recede smoothly between pushes.
     property real slide: 0
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: {
             const s = fx.slide + Math.min(frameTime, 0.1) * 10

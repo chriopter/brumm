@@ -9,6 +9,7 @@
 // half size (shaders/viz_scope_trail.frag) and the screen, bloomed from
 // its mip levels (shaders/viz_scope.frag).
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -21,7 +22,7 @@ VizEffect {
         return Qt.hsva(q.hsvHue < 0 ? 0 : q.hsvHue, Math.min(1, q.hsvSaturation * s + 0.15), 1, 1)
     }
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: fx.dt = Math.min(frameTime, 0.1)
     }
@@ -41,12 +42,12 @@ VizEffect {
         property var spectrum: fx.spectrum
         fragmentShader: "qrc:/shaders/viz_scope_trig.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: scanTex
         sourceItem: trig
         hideSource: true
         recursive: true
-        live: fx.running
+        running: fx.running
         smooth: false
         textureSize: Qt.size(1, 1)
     }
@@ -68,12 +69,12 @@ VizEffect {
         property var spectrum: fx.spectrum
         fragmentShader: "qrc:/shaders/viz_scope_trail.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: phosphorTex
         sourceItem: trail
         hideSource: true
         recursive: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
         textureSize: Qt.size(Math.max(2, Math.round(fx.width / 2)), Math.max(2, Math.round(fx.height / 2)))

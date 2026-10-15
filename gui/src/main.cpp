@@ -27,6 +27,7 @@
 #include "system.h"
 #include "theme.h"
 #include "vizaudio.h"
+#include "vizclock.h"
 
 int main(int argc, char *argv[])
 {
@@ -89,6 +90,7 @@ int main(int argc, char *argv[])
     Covers covers;
     System system;
     VizAudio viz;
+    VizClock vizClock;
     QObject::connect(&daemon, &Daemon::sound, &viz, &VizAudio::feed);
 
     qmlRegisterType<VizTexture>("Brumm", 1, 0, "VizTexture");
@@ -120,6 +122,7 @@ int main(int argc, char *argv[])
     ctx->setContextProperty("covers", &covers);
     ctx->setContextProperty("sys", &system);
     ctx->setContextProperty("vizAudio", &viz);
+    ctx->setContextProperty("vizClock", &vizClock);
     ctx->setContextProperty("monoFont", mono);
     ctx->setContextProperty("sansFont", sans);
     // For tests: keys to press once the window is up, as the terminal
@@ -136,6 +139,11 @@ int main(int argc, char *argv[])
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);
     engine.load(QUrl("qrc:/qml/Main.qml"));
+    if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
+        QObject::connect(w, &QQuickWindow::afterFrameEnd, &vizClock, &VizClock::paceFrame, Qt::DirectConnection);
+        QObject::connect(w, &QWindow::screenChanged, &vizClock, &VizClock::setScreen);
+        vizClock.setScreen(w->screen());
+    }
 
     // Omarchy lays its window transparency over every window; the player's
     // light and covers want to be seen whole, so this one is opaque.

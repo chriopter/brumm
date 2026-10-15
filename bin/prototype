@@ -7,7 +7,7 @@ if ! go version >/dev/null 2>&1 && command -v mise >/dev/null; then
   export PATH="$(mise where go)/bin:$PATH"
 fi
 export GOCACHE=${GOCACHE:-/tmp/brumm-go-cache}
-build=tmp/prototype-build
+build=${BRUMM_PROTOTYPE_BUILD:-tmp/prototype-build}
 GUI_BUILD="$build" bin/build-gui "$build"
 go build -o "$build/fakedaemon" ./tools/fakedaemon
 cargo build --release --locked -p brumm
@@ -30,21 +30,5 @@ for ((i=0;i<100;i++)); do
   kill -0 "$fake" || exit 1
   sleep .1
 done
-if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && command -v hyprctl >/dev/null; then
-  # exec keeps the launcher's PID, so Hyprland applies the rules to Qt.
-  {
-    printf '#!/usr/bin/env bash\nprintf "%%s" "$$" > %q\nexec env ' "$run/gui.pid"
-    printf '%q ' "XDG_RUNTIME_DIR=$run" "XDG_CONFIG_HOME=$run/config" "XDG_CACHE_HOME=$run/cache" "XDG_DATA_HOME=$run/data" "BRUMM_PROTOTYPE=1" "BRUMM_DESKTOP_RUNTIME=$desktop_runtime" "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" "$(realpath "$build/brumm-gui")"
-    printf '\n'
-  } > "$run/start-gui"
-  XDG_RUNTIME_DIR="$desktop_runtime" hyprctl dispatch "hl.dsp.exec_cmd(\"exec bash $run/start-gui\", { workspace = \"4 silent\", no_initial_focus = true })"
-  for ((i=0;i<100;i++)); do
-    [[ -s $run/gui.pid ]] && break
-    sleep .1
-  done
-  [[ -s $run/gui.pid ]] || { echo 'Prototype launch failed' >&2; exit 1; }
-  wait "$fake"
-else
-  "$build/brumm-gui" &
-  wait "$fake"
-fi
+"$build/brumm-gui" &
+wait "$fake"

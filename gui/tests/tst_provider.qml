@@ -255,8 +255,10 @@ TestCase {
         store.switchTo(store.secAlbums)
         store.st = {status:"ready",id:"playing",source:"album:current"}
         fakeDaemon.asked = []
+        store.compactBrowser = true
         store.showPlayer()
         verify(store.playerView)
+        verify(!store.compactBrowser)
         compare(store.section,store.secQueue)
         compare(store.cur().key,"queue:")
         compare(store.cur().rows.length,3)
@@ -284,6 +286,21 @@ TestCase {
         compare(store.vizKey("g"),false)
         store.full = false
         store.vizList = false
+    }
+
+    function test_visualizerFrameRatesUseSharedOptions() {
+        fakeDaemon.options = {}
+        compare(store.vizRate(144),30)
+        for (const expected of [60,120,-1,0]) {
+            verify(store.vizKey("ctrl+f"))
+            compare(fakeDaemon.options.viz_fps,expected)
+        }
+        fakeDaemon.options = {viz_fps:-1}
+        compare(store.vizRate(144),144)
+        compare(store.vizRateLabel(144),"Auto · 144 FPS")
+        fakeDaemon.options = {viz_fps:17}
+        compare(store.vizRate(144),30)
+        fakeDaemon.options = {}
     }
 
 }

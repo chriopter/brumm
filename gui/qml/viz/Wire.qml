@@ -11,6 +11,7 @@
 // passes: the phosphor at half size (shaders/viz_wire_trail.frag) and the
 // screen, bloomed from its mip levels (shaders/viz_wire.frag).
 import QtQuick
+import ".."
 import QtQuick.Shapes
 
 VizEffect {
@@ -172,7 +173,7 @@ VizEffect {
         sparkLines.paths = sparks
     }
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: fx.step(Math.min(frameTime, 0.1))
     }
@@ -194,11 +195,11 @@ VizEffect {
         Stroke { strokeColor: "#ffffff"; strokeWidth: fx.lw * 1.6; PathMultiline { id: nearLines } }
         Stroke { strokeColor: "#ffffff"; strokeWidth: fx.lw * 0.8; PathMultiline { id: sparkLines } }
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: linesTex
         sourceItem: shape
         hideSource: true
-        live: fx.running
+        running: fx.running
         smooth: true
     }
 
@@ -211,12 +212,12 @@ VizEffect {
         property var lines: linesTex
         fragmentShader: "qrc:/shaders/viz_wire_trail.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: phosphor
         sourceItem: trail
         hideSource: true
         recursive: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
         textureSize: Qt.size(Math.max(2, Math.round(fx.width / 2)), Math.max(2, Math.round(fx.height / 2)))

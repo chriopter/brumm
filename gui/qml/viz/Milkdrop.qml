@@ -7,6 +7,7 @@
 // (shaders/viz_milkdrop_warp.frag) and the screen, bloomed from its mip
 // levels (shaders/viz_milkdrop.frag).
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -23,7 +24,7 @@ VizEffect {
         return Qt.hsva(q.hsvHue < 0 ? 0 : q.hsvHue, Math.min(1, q.hsvSaturation * 1.25 + 0.1), 1, 1)
     }
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: {
             const a = fx.audio, dt = Math.min(frameTime, 0.1)
@@ -54,12 +55,12 @@ VizEffect {
         property var wave: fx.wave
         fragmentShader: "qrc:/shaders/viz_milkdrop_warp.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: echoes
         sourceItem: warp
         hideSource: true
         recursive: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
         textureSize: Qt.size(Math.max(2, Math.round(fx.width / 2)), Math.max(2, Math.round(fx.height / 2)))

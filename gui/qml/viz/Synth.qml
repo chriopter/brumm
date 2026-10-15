@@ -8,6 +8,7 @@
 // the size (shaders/viz_synth_rays.frag) and the screen, bloomed from the
 // world's mip levels (shaders/viz_synth.frag).
 import QtQuick
+import ".."
 
 VizEffect {
     id: fx
@@ -51,7 +52,7 @@ VizEffect {
         return Qt.rgba(c.r + (to.r - c.r) * k, c.g + (to.g - c.g) * k, c.b + (to.b - c.b) * k, 1)
     }
 
-    FrameAnimation {
+    VizFrame {
         running: fx.running
         onTriggered: {
             const a = fx.audio, dt = Math.min(frameTime, 0.1)
@@ -129,11 +130,11 @@ VizEffect {
         property var spectrum: fx.spectrum
         fragmentShader: "qrc:/shaders/viz_synth_scene.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: worldTex
         sourceItem: world
         hideSource: true
-        live: fx.running
+        running: fx.running
         mipmap: true
         smooth: true
     }
@@ -148,11 +149,11 @@ VizEffect {
         property var scene: worldTex
         fragmentShader: "qrc:/shaders/viz_synth_rays.frag.qsb"
     }
-    ShaderEffectSource {
+    VizBuffer {
         id: raysTex
         sourceItem: shafts
         hideSource: true
-        live: fx.running
+        running: fx.running
         smooth: true
         textureSize: Qt.size(Math.max(2, Math.round(fx.width / 4)), Math.max(2, Math.round(fx.height / 4)))
     }
