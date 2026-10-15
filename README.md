@@ -68,23 +68,70 @@ Qt 6 Multimedia QML package on other Linux systems.
 
 ## Keys
 
-| | |
-|---|---|
-| <kbd>enter</kbd> | play / open |
-| <kbd>space</kbd> | pause · hold to preview |
-| <kbd>←</kbd> <kbd>→</kbd> <kbd>1</kbd>–<kbd>9</kbd> | sections |
-| <kbd>/</kbd> | filter here · <kbd>tab</kbd> search everywhere |
-| <kbd>R</kbd> | radio from song or artist |
-| <kbd>*</kbd> <kbd>d</kbd> <kbd>i</kbd> <kbd>P</kbd> | love · dislike · library · playlist |
-| <kbd>f</kbd> | visualizer: <kbd>tab</kbd> <kbd>v</kbd> <kbd>a</kbd> <kbd>x</kbd> <kbd>F</kbd> |
-| <kbd>g</kbd> | switch between terminal and window |
-| <kbd>o</kbd> | options |
-| <kbd>Ctrl</kbd>+<kbd>o</kbd> | connect or switch music services |
-| <kbd>U</kbd> | look for an update |
-| <kbd>Q</kbd> / <kbd>q</kbd> | close, keep playing / quit |
+Press <kbd>?</kbd> in brumm for the full shortcut list.
 
-Enable <kbd>Super</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> to open brumm with
-`brumm keys on`; `brumm keys off` restores the previous music-key behavior.
+| Action | Shortcut |
+|---|---|
+| Play or open the selection | <kbd>Enter</kbd> |
+| Pause or resume | <kbd>Space</kbd> |
+| Switch between GUI and TUI | <kbd>g</kbd> |
+| Filter or search | <kbd>/</kbd> |
+| Connect or switch music services | <kbd>Ctrl</kbd> + <kbd>O</kbd> |
+| Open or close the visualizer | <kbd>f</kbd> |
+| Close the interface, keep music playing | <kbd>Shift</kbd> + <kbd>Q</kbd> |
+| Quit brumm and stop the music | <kbd>q</kbd> |
+
+While filtering, press <kbd>Tab</kbd> to search the entire service.
+
+<details>
+<summary>More player shortcuts</summary>
+
+| Action | Shortcut |
+|---|---|
+| Switch section | <kbd>1</kbd>–<kbd>9</kbd> |
+| Show Now Playing and the queue | <kbd>c</kbd> |
+| Open options | <kbd>o</kbd> |
+| Next track | <kbd>n</kbd> |
+| Previous track | <kbd>p</kbd> |
+| Preview the selection | Hold <kbd>Space</kbd> |
+| Like the selection | <kbd>*</kbd> |
+| Dislike the selection | <kbd>d</kbd> |
+| Add to the library | <kbd>i</kbd> |
+| Add to a playlist | <kbd>Shift</kbd> + <kbd>P</kbd> |
+| Start radio from the song or artist | <kbd>Shift</kbd> + <kbd>R</kbd> |
+
+Available actions depend on the music service.
+
+</details>
+
+<details>
+<summary>Visualizer shortcuts</summary>
+
+| Action | GUI | TUI |
+|---|---|---|
+| Choose a style | <kbd>v</kbd> | <kbd>v</kbd> |
+| Next style | <kbd>Tab</kbd> | <kbd>Tab</kbd> |
+| Previous style | <kbd>Shift</kbd> + <kbd>Tab</kbd> | <kbd>Shift</kbd> + <kbd>Tab</kbd> |
+| Toggle automatic style changes | <kbd>a</kbd> | <kbd>a</kbd> |
+| Toggle auto-hide controls | <kbd>x</kbd> | <kbd>x</kbd> |
+| Change frame rate | <kbd>Ctrl</kbd> + <kbd>F</kbd> | <kbd>Shift</kbd> + <kbd>F</kbd> |
+| Toggle fullscreen | <kbd>Shift</kbd> + <kbd>F</kbd> | Uses the terminal window |
+| Leave the visualizer | <kbd>Esc</kbd> | <kbd>Esc</kbd> |
+
+</details>
+
+<details>
+<summary>Desktop shortcut</summary>
+
+Enable <kbd>Super</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> to open brumm:
+
+```sh
+brumm keys on
+```
+
+Run `brumm keys off` to restore the previous music-key behavior.
+
+</details>
 
 ## More
 
