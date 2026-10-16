@@ -1,10 +1,11 @@
 name: release
 
 # A pushed tag (git tag -s v0.2.0 && git push origin v0.2.0) publishes that
-# version. Every push to main rebuilds the pre-release "next" from it, for
-# testing by hand: neither the installer nor brumm's updater offers it. The
-# daily check only opens a reminder issue when the latest stable release is
-# three months old.
+# version. Every push to main publishes a development build, the next patch
+# version as a pre-release numbered by run (v1.5.3-dev.412); only the newest
+# stays. Nobody is offered it unless brumm's "Development Builds" option is
+# on. The daily check only opens a reminder issue when the latest stable
+# release is three months old.
 on:
   push:
     tags: ["v*"]
@@ -13,7 +14,7 @@ on:
     - cron: "23 5 * * *"
   workflow_dispatch:
 
-# A newer main supersedes a "next" build still running; version builds all finish.
+# A newer main supersedes a development build still running; version builds all finish.
 concurrency:
   group: release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
@@ -44,7 +45,7 @@ jobs:
         run: python3 .github/scripts/release_reminder.py
 
   # Only a push can start the build and publication jobs: a tag names its
-  # release, main publishes as "next".
+  # release, main becomes the next patch version's development build.
   version:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -53,12 +54,16 @@ jobs:
     steps:
       - name: Pick version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ $GITHUB_REF_TYPE == tag ]]; then
             echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=next" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          prev=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || echo v0.0.0)
+          IFS=. read -r major minor patch <<< "${prev#v}"
+          echo "tag=v$major.$minor.$((${patch%%-*} + 1))-dev.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
   # Build against Qt 6.11, which Omarchy still ships. Arch's rolling
   # repositories may already have a newer Qt whose symbols would prevent
@@ -203,12 +208,14 @@ jobs:
           else
             changes=$(git log --no-merges --format='- %s' "$GITHUB_SHA")
           fi
+          dev=false
+          [[ $TAG == *-dev.* ]] && dev=true
           {
-            if [[ $TAG == next ]]; then
-              echo "The newest main, built ${GITHUB_SHA::7} on $(date -u +%Y-%m-%d), for testing by hand. Nobody is offered it."
+            if [[ $dev == true ]]; then
+              echo "The newest main, built from ${GITHUB_SHA::7} on $(date -u +%Y-%m-%d). brumm offers it with \"Development Builds\" on in its options; the installer with:"
               echo
               echo '```'
-              echo "curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/next/install.sh | BRUMM_TAG=next bash"
+              echo "curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/install.sh | BRUMM_TAG=$TAG bash"
               echo '```'
               echo
             fi
@@ -219,22 +226,19 @@ jobs:
             else
               echo "No changes since $prev: a fresh build so the embedded Apple Music token stays valid."
             fi
-            if [[ $TAG != next ]]; then
-              echo
-              echo "**Update:** press <kbd>U</kbd> when brumm offers it, or run \`brumm update\`."
-            fi
+            echo
+            echo "**Update:** press <kbd>U</kbd> when brumm offers it, or run \`brumm update\`."
           } > notes.md
-          # A tag with a hyphen (v0.9.0-rc1) is a pre-release: to test, never
-          # "latest", so neither the installer nor brumm's updater offers it.
+          # A tag with a hyphen (v0.9.0-rc1, v0.9.1-dev.412) is a pre-release:
+          # never "latest", so neither the installer nor brumm's updater offers
+          # it unasked.
           pre=()
           [[ $TAG == *-* ]] && pre=(--prerelease)
-          title=$TAG
-          if [[ $TAG == next ]]; then
-            # One rolling pre-release: the previous build and its tag make way.
-            pre=(--prerelease)
-            title="next: main at ${GITHUB_SHA::7}"
-            gh release delete next --yes --cleanup-tag 2>/dev/null || true
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/next" 2>/dev/null || true
+          if [[ $dev == true ]]; then
+            # One development build at a time: the earlier ones and their tags make way.
+            for old in $(gh release list --limit 100 --json tagName --jq '.[].tagName | select(test("-dev\\."))'); do
+              [[ $old == "$TAG" ]] || gh release delete "$old" --yes --cleanup-tag || true
+            done
           fi
           gh release create "$TAG" brumm-linux-amd64.tar.gz install.sh SHA256SUMS SHA256SUMS.sig \
-            --target "$GITHUB_SHA" --title "$title" --notes-file notes.md "${pre[@]}"
+            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md "${pre[@]}"

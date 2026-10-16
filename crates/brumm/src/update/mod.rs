@@ -15,6 +15,7 @@
 mod keys;
 mod plugin;
 
+use std::cmp::Ordering;
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -107,52 +108,70 @@ async fn get_json<T: for<'de> Deserialize<'de>>(url: &str, limit: usize) -> Resu
     Ok(serde_json::from_slice(&b)?)
 }
 
-/// The newest release's tag.
-pub async fn latest() -> Result<String> {
-    Ok(latest_notes().await?.0)
+/// The newest release's tag. With dev, the development builds of main
+/// (pre-releases) count too.
+pub async fn latest(dev: bool) -> Result<String> {
+    Ok(latest_notes(dev).await?.0)
 }
 
 /// The newest release's tag and what it says is new: the points of its
 /// notes, as plain lines.
-pub async fn latest_notes() -> Result<(String, Vec<String>)> {
+pub async fn latest_notes(dev: bool) -> Result<(String, Vec<String>)> {
     let base = test_base();
     if !base.is_empty() {
         let tag = fetch(&format!("{base}/latest")).await?;
         return Ok((String::from_utf8_lossy(&tag).trim().to_string(), Vec::new()));
     }
-    let rel: Release = get_json(
-        &format!("https://api.github.com/repos/{REPO}/releases/latest"),
-        1 << 20,
-    )
-    .await?;
-    Ok((rel.tag_name, points(&rel.body)))
-}
-
-/// The newest release's tag and what is new since current: the points of
-/// every release in between, not only the newest, for someone who skipped
-/// some. They are merged by section (New, Changed, Faster, Fixed), the
-/// newest release's points first in each.
-pub async fn notes_since(current: &str) -> Result<(String, Vec<String>)> {
-    if !test_base().is_empty() {
-        return latest_notes().await;
+    if !dev {
+        let rel: Release = get_json(
+            &format!("https://api.github.com/repos/{REPO}/releases/latest"),
+            1 << 20,
+        )
+        .await?;
+        return Ok((rel.tag_name, points(&rel.body)));
     }
     let rels: Vec<Release> = get_json(
         &format!("https://api.github.com/repos/{REPO}/releases?per_page=50"),
         4 << 20,
     )
     .await?;
-    let mut latest = String::new();
-    for r in &rels {
-        if !r.draft && !r.prerelease && (latest.is_empty() || newer(&r.tag_name, &latest)) {
-            latest = r.tag_name.clone();
+    let rel = newest(&rels, true).ok_or_else(|| err("github: no release"))?;
+    Ok((rel.tag_name.clone(), points(&rel.body)))
+}
+
+/// The newest of some releases: a stable one, or with dev a pre-release too.
+fn newest(rels: &[Release], dev: bool) -> Option<&Release> {
+    let mut best: Option<&Release> = None;
+    for r in rels {
+        if r.draft || (r.prerelease && !dev) {
+            continue;
+        }
+        if best.is_none_or(|b| newer(&r.tag_name, &b.tag_name)) {
+            best = Some(r);
         }
     }
-    if latest.is_empty() {
-        return Err(err("github: no release"));
+    best
+}
+
+/// The newest release's tag and what is new since current: the points of
+/// every release in between, not only the newest, for someone who skipped
+/// some. They are merged by section (New, Changed, Faster, Fixed), the
+/// newest release's points first in each.
+pub async fn notes_since(current: &str, dev: bool) -> Result<(String, Vec<String>)> {
+    if !test_base().is_empty() {
+        return latest_notes(dev).await;
     }
+    let rels: Vec<Release> = get_json(
+        &format!("https://api.github.com/repos/{REPO}/releases?per_page=50"),
+        4 << 20,
+    )
+    .await?;
+    let latest = newest(&rels, dev)
+        .map(|r| r.tag_name.clone())
+        .ok_or_else(|| err("github: no release"))?;
     let bodies: Vec<(String, String)> = rels
         .into_iter()
-        .filter(|r| !r.draft && !r.prerelease && newer(&r.tag_name, current))
+        .filter(|r| !r.draft && (dev || !r.prerelease) && newer(&r.tag_name, current))
         .map(|r| (r.tag_name, r.body))
         .collect();
     Ok((latest, merge(bodies)))
@@ -282,15 +301,42 @@ pub fn points(body: &str) -> Vec<String> {
 }
 
 /// Whether tag a is a later version than b (vMAJOR.MINOR.PATCH, optionally
-/// -PRERELEASE, which ranks below its release).
+/// -PRERELEASE, which ranks below its release and among pre-releases as
+/// SemVer orders them).
 pub fn newer(a: &str, b: &str) -> bool {
     let (na, pa) = parse(a);
     let (nb, pb) = parse(b);
     if na != nb {
         return na > nb;
     }
-    // Same numbers: a release beats its pre-release, nothing else is newer.
-    pa.is_empty() && !pb.is_empty()
+    match (pa.is_empty(), pb.is_empty()) {
+        (true, false) => true, // a release beats its pre-release
+        (false, false) => pre_cmp(&pa, &pb) == Ordering::Greater,
+        _ => false,
+    }
+}
+
+/// Orders pre-release names as SemVer does: part by part between the
+/// dots, numbers by value and before words, words by their letters, a
+/// name after its own prefix: dev.9 < dev.10 < rc1 < rc2.
+fn pre_cmp(a: &str, b: &str) -> Ordering {
+    let (mut pa, mut pb) = (a.split('.'), b.split('.'));
+    loop {
+        let o = match (pa.next(), pb.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => match (x.parse::<u64>(), y.parse::<u64>()) {
+                (Ok(x), Ok(y)) => x.cmp(&y),
+                (Ok(_), Err(_)) => Ordering::Less,
+                (Err(_), Ok(_)) => Ordering::Greater,
+                (Err(_), Err(_)) => x.cmp(y),
+            },
+        };
+        if o != Ordering::Equal {
+            return o;
+        }
+    }
 }
 
 fn parse(tag: &str) -> ([i64; 3], String) {
@@ -304,10 +350,10 @@ fn parse(tag: &str) -> ([i64; 3], String) {
     (nums, pre.to_string())
 }
 
-/// Installs the newest release when it is newer than current; says the
-/// tag and whether it installed anything.
-pub async fn update(current: &str) -> Result<(String, bool)> {
-    let tag = latest().await?;
+/// Installs the newest release (with dev: or development build) when it
+/// is newer than current; says the tag and whether it installed anything.
+pub async fn update(current: &str, dev: bool) -> Result<(String, bool)> {
+    let tag = latest(dev).await?;
     if !newer(&tag, current) {
         return Ok((tag, false));
     }
@@ -682,9 +728,42 @@ mod tests {
             ("v1.2.1", "v1.2.3-rc1", false),
             ("v1.2.3", "v1.2.3-rc1", true),
             ("v1.2.3-rc2", "v1.2.3", false),
+            ("v1.5.3-dev.10", "v1.5.3-dev.9", true),
+            ("v1.5.3-dev.9", "v1.5.3-dev.10", false),
+            ("v1.5.3-dev.5", "v1.5.3-dev.5", false),
+            ("v1.5.3-rc1", "v1.5.3-dev.412", true),
+            ("v1.5.3-rc2", "v1.5.3-rc1", true),
+            ("v1.5.3-dev.412", "v1.5.2", true),
+            ("v1.5.2", "v1.5.3-dev.412", false),
+            ("v1.5.3", "v1.5.3-dev.412", true),
         ] {
             assert_eq!(newer(a, b), want, "newer({a}, {b})");
         }
+    }
+
+    #[test]
+    fn newest_release_counts_development_builds_only_when_asked() {
+        let rel = |tag: &str, prerelease: bool, draft: bool| Release {
+            tag_name: tag.into(),
+            prerelease,
+            draft,
+            ..Default::default()
+        };
+        let rels = [
+            rel("v1.5.3-dev.412", true, false),
+            rel("v1.5.2", false, false),
+            rel("v1.6.0", false, true),
+            rel("v1.5.1", false, false),
+        ];
+        assert_eq!(
+            newest(&rels, false).map(|r| r.tag_name.as_str()),
+            Some("v1.5.2")
+        );
+        assert_eq!(
+            newest(&rels, true).map(|r| r.tag_name.as_str()),
+            Some("v1.5.3-dev.412")
+        );
+        assert!(newest(&rels[2..3], true).is_none(), "a draft is no release");
     }
 
     #[test]
@@ -850,7 +929,7 @@ mod tests {
         if std::env::var_os("BRUMM_NET_TEST").is_none() {
             return;
         }
-        let tag = latest().await.unwrap();
+        let tag = latest(false).await.unwrap();
         let base = format!("https://github.com/{REPO}/releases/download/{tag}/");
         checksum(&format!("{base}{SUMS}"), &tag)
             .await

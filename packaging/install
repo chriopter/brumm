@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install brumm from the latest release:
 #   curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
-# or, to test the newest main, the pre-release "next":
-#   curl -fsSL https://github.com/chriopter/brumm/releases/download/next/install.sh | BRUMM_TAG=next bash
+# or a development build of main, whose notes name its tag:
+#   curl -fsSL https://github.com/chriopter/brumm/releases/download/v1.5.3-dev.412/install.sh | BRUMM_TAG=v1.5.3-dev.412 bash
 # Refuses to install unless the release is signed by brumm's release key —
 # the same key brumm checks its own updates with.
 set -euo pipefail

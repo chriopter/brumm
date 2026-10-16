@@ -16,6 +16,11 @@ use crate::{launch, update};
 /// (RestartForceExitStatus in the unit): the program was replaced.
 const EXIT_UPDATED: i32 = 75;
 
+/// Whether the options ask for the development builds of main too.
+fn dev_builds() -> bool {
+    config::Options::load().dev_builds
+}
+
 impl Daemon {
     /// Looks for a newer release right after start, daily, and whenever a
     /// player opens (check_now, at most every 10 minutes), and offers it
@@ -56,7 +61,7 @@ impl Daemon {
                     }
                 }
             }
-            let tag = match update::latest().await {
+            let tag = match update::latest(dev_builds()).await {
                 Ok(t) => t,
                 Err(e) => {
                     eprintln!("update check: {e}");
@@ -96,7 +101,7 @@ impl Daemon {
                 self.version
             )));
         }
-        let (tag, installed) = update::update(&self.version).await?;
+        let (tag, installed) = update::update(&self.version, dev_builds()).await?;
         if installed {
             eprintln!("installed {tag}; restarting when idle");
             self.lock().installed = tag;
@@ -201,7 +206,7 @@ impl Daemon {
                 self.version
             )));
         }
-        let (tag, notes) = update::notes_since(&current).await?;
+        let (tag, notes) = update::notes_since(&current, dev_builds()).await?;
         reply.link.clone_from(&tag);
         if update::newer(&tag, &current) {
             reply.pos = 1;
