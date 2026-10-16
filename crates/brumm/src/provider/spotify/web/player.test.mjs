@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 const html = fs.readFileSync(new URL('../player.html', import.meta.url), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace('__BRUMM_CFG__', '{version:"test"}');
 const A='1111111111111111111111', B='2222222222222222222222';
-function setup({firstFails=false}={}) {
+function setup({firstFails=false,answer=''}={}) {
  const requests=[], timers=[], credentials=[];
  const context=vm.createContext({window:{addEventListener(){}}, location:{pathname:'/secret'}, AbortSignal:{timeout(){}}, performance:{now:()=>0},
  setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){},
@@ -13,7 +13,7 @@ function setup({firstFails=false}={}) {
  if(url==='/secret/credentials') { credentials.push(JSON.parse(options.body));return {ok:true,status:200,json:async()=>({accessToken:'test'})}; }
  if(url==='/secret/tracks') { return {ok:true,status:200,json:async()=>JSON.parse(options.body).ids.map(id=>({id,title:'Title '+id}))}; }
  requests.push({url,body:options.body ? JSON.parse(options.body) : null}); const fail=firstFails && requests.length===1;
- return {status:fail?404:204,ok:!fail,json:async()=>({error:{message:'Device not found'}}),text:async()=>''};}});
+ return {status:fail?404:answer?200:204,ok:!fail,json:async()=>({error:{message:'Device not found'}}),text:async()=>answer};}});
  vm.runInContext(script,context);
  const player=vm.runInContext('B',context); player.device='test'; player.ready=true;
  return {context,player,requests,timers,credentials};
@@ -26,6 +26,11 @@ test('duplicate songs advance the queue by occurrence', async()=>{
  vm.runInContext('follow',context)(state(179000,[{id:A},{id:B}],[]));
  vm.runInContext('follow',context)(state(0,[{id:B}],[{id:A}]));
  assert.equal(player.q.pos,1);
+});
+test('a plain-text answer to play neither fails it nor skips the modes', async()=>{
+ const {player,requests}=setup({answer:'p2JKrMekJa'});
+ await player.playIds([A,B],A,'test',0);
+ assert.deepEqual(requests.map(r=>r.url.split('?')[0]),['https://api.spotify.com/v1/me/player/play','https://api.spotify.com/v1/me/player/repeat','https://api.spotify.com/v1/me/player/shuffle']);
 });
 test('a delayed device retry cannot supersede a newer play', async()=>{
  const {player,requests,timers}=setup({firstFails:true});

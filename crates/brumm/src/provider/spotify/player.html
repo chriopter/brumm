@@ -117,8 +117,8 @@ async function api(method, path, body, again = true) {
     if (r.status === 403 && /premium/i.test(msg)) msg = 'Spotify Premium is needed to play';
     throw new Error(msg);
   }
-  const text = await r.text();
-  return text ? JSON.parse(text) : null;
+  // Only commands go through here, and none reads the answer: Spotify may
+  // answer play with a plain-text id, which is no JSON.
 }
 
 const onDevice = (path) => path + (path.includes('?') ? '&' : '?') + 'device_id=' + encodeURIComponent(B.device);
