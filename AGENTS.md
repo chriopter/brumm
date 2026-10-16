@@ -64,3 +64,6 @@ available". So they are short and plain:
 - brumm's updater and the installer take GitHub's latest release, which is
   always a stable one. To test a release first, tag a pre-release
   (`v0.9.0-rc1`): the workflow marks it so, and nobody is offered it.
+- Every push to main rebuilds the pre-release `next`, the newest main for
+  testing by hand (`BRUMM_TAG=next` for the installer). It is never offered
+  to anyone. A stable release is a signed tag on a commit `next` has proven.

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Install brumm from the latest release:
 #   curl -fsSL https://github.com/chriopter/brumm/releases/latest/download/install.sh | bash
+# or, to test the newest main, the pre-release "next":
+#   curl -fsSL https://github.com/chriopter/brumm/releases/download/next/install.sh | BRUMM_TAG=next bash
 # Refuses to install unless the release is signed by brumm's release key —
 # the same key brumm checks its own updates with.
 set -euo pipefail
@@ -14,9 +16,13 @@ for tool in curl tar openssl sha256sum base64; do
 done
 
 # Resolve the release once, so every file comes from the same one.
-tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest")
-tag=${tag##*/}
-[[ $tag == v* ]] || { echo "could not find the latest release" >&2; exit 1; }
+if [[ -n ${BRUMM_TAG:-} ]]; then
+  tag=$BRUMM_TAG
+else
+  tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest")
+  tag=${tag##*/}
+  [[ $tag == v* ]] || { echo "could not find the latest release" >&2; exit 1; }
+fi
 base="https://github.com/$repo/releases/download/$tag"
 
 work="${XDG_CACHE_HOME:-$HOME/.cache}/brumm/install"
