@@ -133,11 +133,13 @@ type Options struct {
 	NoVizCycle    bool   `json:"no_viz_cycle,omitempty"`  // the visualizer keeps its style instead of moving on each minute
 	VizBare       bool   `json:"viz_bare,omitempty"`      // hide the controls while the mouse rests
 	Viz           string `json:"viz,omitempty"`           // the visualizer last selected in either frontend
+	VizFull       bool   `json:"viz_full,omitempty"`      // it shows large, not in the player
 	VizFPS        int    `json:"viz_fps,omitempty"`       // fullscreen frames per second: 30 (default), 60, 120, or -1 for the screen's rate
 	Bar           string `json:"bar,omitempty"`           // the bar widget as last set or seen: on or off; empty: never known
 	BarOffered    bool   `json:"bar_offered,omitempty"`   // the first start asked about the bar widget
 	Start         string `json:"start,omitempty"`         // what plain brumm opens: tui (default) or gui
 	MusicKeys     bool   `json:"music_keys,omitempty"`    // SUPER+SHIFT+M (and +ALT) open brumm, not Omarchy's music apps
+	DevBuilds     bool   `json:"dev_builds,omitempty"`    // updates take the development builds of main too
 }
 
 type Request struct {
