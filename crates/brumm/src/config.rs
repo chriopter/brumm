@@ -325,6 +325,10 @@ pub struct Options {
     /// SUPER+SHIFT+M (and +ALT) open brumm, not Omarchy's music apps.
     #[serde(skip_serializing_if = "is_false")]
     pub music_keys: bool,
+    /// Updates to the development builds of main too: the vX.Y.Z-dev.N
+    /// pre-releases, every change as soon as it is built.
+    #[serde(skip_serializing_if = "is_false")]
+    pub dev_builds: bool,
 }
 
 /// Switches reduce motion took over: any of them set starts it on.
