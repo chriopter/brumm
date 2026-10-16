@@ -12,7 +12,8 @@ Row {
     height: ui.px(12)
 
     // It bobs with the window's clock (ui.clock), eight times a second,
-    // in the frames the rest moves in.
+    // in the frames the rest moves in. The bars jump rather than glide: an
+    // easing would keep the whole window drawing at the screen's rate.
     property int step: -1
     Connections {
         target: ui
@@ -34,7 +35,6 @@ Row {
             anchors.bottom: parent.bottom
             radius: width / 2
             color: Qt.alpha(eq.color, 0.85)
-            Behavior on height { enabled: !ui.calm; NumberAnimation { duration: 180; easing.type: Easing.InOutSine } }
         }
     }
 }

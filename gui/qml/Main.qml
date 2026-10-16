@@ -75,13 +75,14 @@ Window {
         readonly property int lift: theme.dark && effects ? Text.Raised : Text.Normal
         readonly property color liftColor: Qt.alpha("black", 0.35)
         // One clock for all that moves while music plays in the window
-        // in front — the backdrop's drift, the equalizers, the progress
-        // bar — so they move in the same frames, not each in its own: 20
-        // ticks a second (8 without effects: only the equalizers). It
-        // stands while paused, in the background, minimized, with motion
-        // reduced, and under the visualizer.
+        // in front — the equalizers, the progress bar — so they move in
+        // the same frames, not each in its own. While the player view's
+        // backdrop moves it ticks with that (vizClock, 20 a second), else
+        // by itself: 20 ticks a second, 8 without effects (only the
+        // equalizers). It stands while paused, in the background,
+        // minimized, with motion reduced, and under the visualizer.
         property int clock: 0 // milliseconds it has run
-        readonly property bool pulsing: pulse.running
+        readonly property bool pulsing: win.pulsing
         readonly property int radius: px(16)
         readonly property int coverRadius: px(6) // every cover's corners, big or small
         readonly property int gap: px(24)
@@ -90,12 +91,17 @@ Window {
 
     Store { id: store }
 
+    readonly property bool pulsing: !!store.st.playing && ui.awake && !ui.calm && win.visibility !== Window.Minimized && !(store.full && full.opacity === 1)
     Timer {
-        id: pulse
         interval: ui.effects ? 50 : 125
         repeat: true
-        running: !!store.st.playing && ui.awake && !ui.calm && win.visibility !== Window.Minimized && !(store.full && full.opacity === 1)
+        running: win.pulsing && !vizClock.running
         onTriggered: ui.clock += interval
+    }
+    Connections {
+        target: vizClock
+        enabled: win.pulsing && vizClock.running
+        function onTriggered() { ui.clock += Math.round(vizClock.frameTime * 1000) }
     }
 
     // The cover's accent, picked once per cover.
