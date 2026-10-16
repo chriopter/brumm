@@ -47,6 +47,15 @@ available". So they are short and plain:
   notes take in what its patch releases brought, and those are deleted (the
   tags stay).
 
+## Changes
+
+- Nothing lands on main directly, not even from the maintainer: branch,
+  open a pull request and enable auto-merge (`gh pr merge N --auto
+  --squash`). GitHub merges once the `test` and `gui` checks are green and
+  deletes the branch.
+- Contributors with write access merge their own pull requests the same
+  way. Release tags are the maintainer's alone; see below.
+
 ## Releases
 
 - A signed tag `vX.Y.Z` on main releases: the workflow builds, signs and
