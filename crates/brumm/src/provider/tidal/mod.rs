@@ -229,12 +229,14 @@ impl Client {
         let (resources, mut error) = self.pages(route).await;
         let mut tracks = Vec::new();
         let mut stale = Vec::new();
+        let mut availability_served = false;
         for (doc, value) in resources {
             if value["type"] == "tracks" {
                 if let Some(track) = doc.track(&value) {
                     let attributes = &value["attributes"];
-                    if !attributes["availability"].is_array()
-                        && let Some(isrc) = attributes["isrc"].as_str().filter(|s| !s.is_empty())
+                    if attributes["availability"].is_array() {
+                        availability_served = true;
+                    } else if let Some(isrc) = attributes["isrc"].as_str().filter(|s| !s.is_empty())
                     {
                         stale.push((tracks.len(), isrc.to_owned()));
                     }
@@ -244,7 +246,9 @@ impl Client {
                 }
             }
         }
-        if let Some(e) = self.relink(&mut tracks, &stale).await {
+        // Without `availability` on any entry the field is not served here (Tidal
+        // has deprecated it); its absence then says nothing about staleness.
+        if availability_served && let Some(e) = self.relink(&mut tracks, &stale).await {
             error = Some(e);
         }
         if !tracks.is_empty() && error.is_some() {
@@ -253,9 +257,10 @@ impl Client {
         (tracks, error)
     }
     /// Playlists and collections keep the IDs of releases Tidal has since replaced.
-    /// Those IDs still list with metadata, but no longer stream and have no
-    /// availability. The same recording is live under another ID; find it by ISRC.
-    /// Tracks without a live match stay as listed.
+    /// List routes ask Tidal to project the replacement (`replaceMedia`); entries
+    /// that still come back without availability no longer stream, and the same
+    /// recording is live under another ID: find it by ISRC. Tracks without a live
+    /// match stay as listed.
     async fn relink(&self, tracks: &mut [Track], stale: &[(usize, String)]) -> Option<Error> {
         let mut isrcs: Vec<&str> = stale.iter().map(|(_, isrc)| isrc.as_str()).collect();
         isrcs.sort_unstable();
@@ -443,7 +448,7 @@ impl Catalog for Client {
                 Ok(k) => k,
                 Err(e) => return (vec![], Some(e)),
             };
-            self.track_list(&format!("{kind}/{}/relationships/items?include=items,items.artists,items.albums,items.albums.coverArt", Self::id(&item.id))).await
+            self.track_list(&format!("{kind}/{}/relationships/items?include=items,items.artists,items.albums,items.albums.coverArt&replaceMedia=items", Self::id(&item.id))).await
         })
     }
     fn album_of<'a>(&'a self, song: &'a str) -> Reply<'a, Result<Item>> {
@@ -558,7 +563,7 @@ impl Library for Client {
     }
     fn songs<'a>(&'a self) -> Reply<'a, Listing<Track>> {
         Box::pin(async move {
-            let (mut tracks,error) = self.track_list("userCollectionTracks/me/relationships/items?include=items,items.artists,items.albums,items.albums.coverArt").await;
+            let (mut tracks,error) = self.track_list("userCollectionTracks/me/relationships/items?include=items,items.artists,items.albums,items.albums.coverArt&replaceMedia=items").await;
             for track in &mut tracks {
                 track.favorite = true;
             }
@@ -573,7 +578,7 @@ impl Api for Client {
     fn artist<'a>(&'a self, item: &'a Item) -> Reply<'a, Result<Vec<Shelf>>> {
         Box::pin(async move {
             let id = Self::id(&item.id);
-            let (tracks,error) = self.track_list(&format!("artists/{id}/relationships/tracks?collapseBy=FINGERPRINT&include=tracks,tracks.artists,tracks.albums,tracks.albums.coverArt")).await;
+            let (tracks,error) = self.track_list(&format!("artists/{id}/relationships/tracks?collapseBy=FINGERPRINT&include=tracks,tracks.artists,tracks.albums,tracks.albums.coverArt&replaceMedia=tracks")).await;
             if let Some(e) = error {
                 return Err(e);
             }
@@ -945,6 +950,49 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(filter, "A,C", "only stale ISRCs are looked up, once each");
+    }
+    #[tokio::test]
+    async fn lists_served_without_availability_cause_no_relink_request() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let song =
+            |id: &str| json!({"type":"tracks","id":id,"attributes":{"title":"Song","isrc":"A"}});
+        let (client, task) = fixture(vec![(200, json!({"data":[song("1"),song("2")]}))]).await;
+        let (tracks, error) = client.track_list("playlists/p/relationships/items").await;
+        assert_eq!(error, None);
+        assert_eq!(
+            tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["1", "2"]
+        );
+        assert_eq!(task.await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn list_routes_ask_tidal_to_replace_media() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let (client, task) =
+            fixture(vec![(200, json!({"data":[]})), (200, json!({"data":[]}))]).await;
+        let playlist = Item {
+            kind: crate::music::KIND_PLAYLIST.into(),
+            id: "p".into(),
+            ..Default::default()
+        };
+        let _ = client.tracks(&playlist).await;
+        let _ = client.songs().await;
+        let requests = task.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        for request in &requests {
+            let url = url::Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+            let replace = url.query_pairs().find(|(k, _)| k == "replaceMedia");
+            assert_eq!(
+                replace.map(|(_, v)| v.into_owned()).as_deref(),
+                Some("items"),
+                "{}",
+                request.target
+            );
+        }
     }
     #[tokio::test]
     async fn live_tracks_cause_no_relink_request() {
