@@ -14,7 +14,7 @@ use mapping::Document;
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     time::Duration,
 };
 
@@ -228,19 +228,65 @@ impl Client {
     async fn track_list(&self, route: &str) -> Listing<Track> {
         let (resources, mut error) = self.pages(route).await;
         let mut tracks = Vec::new();
+        let mut stale = Vec::new();
         for (doc, value) in resources {
             if value["type"] == "tracks" {
                 if let Some(track) = doc.track(&value) {
+                    let attributes = &value["attributes"];
+                    if !attributes["availability"].is_array()
+                        && let Some(isrc) = attributes["isrc"].as_str().filter(|s| !s.is_empty())
+                    {
+                        stale.push((tracks.len(), isrc.to_owned()));
+                    }
                     tracks.push(track);
                 } else {
                     error = Some(Error::Partial);
                 }
             }
         }
+        if let Some(e) = self.relink(&mut tracks, &stale).await {
+            error = Some(e);
+        }
         if !tracks.is_empty() && error.is_some() {
             error = Some(Error::Partial);
         }
         (tracks, error)
+    }
+    /// Playlists and collections keep the IDs of releases Tidal has since replaced.
+    /// Those IDs still list with metadata, but no longer stream and have no
+    /// availability. The same recording is live under another ID; find it by ISRC.
+    /// Tracks without a live match stay as listed.
+    async fn relink(&self, tracks: &mut [Track], stale: &[(usize, String)]) -> Option<Error> {
+        let mut isrcs: Vec<&str> = stale.iter().map(|(_, isrc)| isrc.as_str()).collect();
+        isrcs.sort_unstable();
+        isrcs.dedup();
+        let mut live: HashMap<String, (bool, Track)> = HashMap::new();
+        let mut error = None;
+        for batch in isrcs.chunks(20) {
+            let route = format!(
+                "tracks?filter[isrc]={}&include={TRACK_INCLUDE}",
+                Self::id(&batch.join(","))
+            );
+            let (resources, e) = self.pages(&route).await;
+            error = error.or(e);
+            for (doc, value) in resources {
+                let attributes = &value["attributes"];
+                let streamable = attributes["availability"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|v| v == "STREAM"));
+                if let (Some(isrc), Some(track)) = (attributes["isrc"].as_str(), doc.track(&value))
+                    && live.get(isrc).is_none_or(|(known, _)| streamable && !known)
+                {
+                    live.insert(isrc.to_owned(), (streamable, track));
+                }
+            }
+        }
+        for (index, isrc) in stale {
+            if let Some((_, track)) = live.get(isrc) {
+                tracks[*index] = track.clone();
+            }
+        }
+        error
     }
     async fn item_list(&self, route: &str, favorite: bool) -> Listing<Item> {
         let (resources, mut error) = self.pages(route).await;
@@ -335,14 +381,12 @@ impl Client {
                 }
             }
         }
-        ids.iter()
-            .map(|id| {
-                mapped
-                    .get(id)
-                    .cloned()
-                    .ok_or_else(|| err("Tidal returned incomplete track metadata"))
-            })
-            .collect()
+        // Tidal silently omits tracks that were removed from the catalog but remain in
+        // a user's collection. Return the ones it knows; the player tolerates the gaps.
+        Ok(ids
+            .iter()
+            .filter_map(|id| mapped.get(id).cloned())
+            .collect())
     }
 }
 
@@ -785,6 +829,22 @@ mod tests {
         assert!(!requests[0].target.contains("filter[id]"));
     }
     #[tokio::test]
+    async fn batch_metadata_skips_tracks_missing_from_the_catalog() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let (client,server)=fixture(vec![(200,json!({"data":[{"type":"tracks","id":"1","attributes":{"title":"One"}},{"type":"tracks","id":"3","attributes":{"title":"Three"}}]}))]).await;
+        let tracks = client
+            .player_tracks(&["1".into(), "gone".into(), "3".into()])
+            .await
+            .unwrap();
+        assert_eq!(
+            tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["1", "3"]
+        );
+        server.await.unwrap();
+    }
+    #[tokio::test]
     async fn mixes_expand_playlist_cards() {
         let Some(_env) = crate::config::testenv::isolated() else {
             return;
@@ -840,6 +900,62 @@ mod tests {
         );
         assert_eq!(error, Some(Error::Partial));
         task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn playlist_tracks_without_availability_relink_to_the_live_recording_by_isrc() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let stale = |id: &str, isrc: &str| json!({"type":"tracks","id":id,"attributes":{"title":"Old","isrc":isrc,"duration":"PT3M"}});
+        let live = |id: &str, isrc: &str, title: &str| json!({"type":"tracks","id":id,"attributes":{"title":title,"isrc":isrc,"duration":"PT3M","availability":["STREAM","DJ"]}});
+        let (client, task) = fixture(vec![
+            (
+                200,
+                json!({"data":[stale("10","A"),live("20","B","Kept"),stale("11","C"),stale("12","A")]}),
+            ),
+            (
+                200,
+                json!({"data":[live("110","A","New A"),live("111","unrelated","Other")]}),
+            ),
+        ])
+        .await;
+        let (tracks, error) = client
+            .track_list("playlists/p/relationships/items?include=items")
+            .await;
+        assert_eq!(error, None);
+        assert_eq!(
+            tracks
+                .iter()
+                .map(|t| (t.id.as_str(), t.title.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("110", "New A"),
+                ("20", "Kept"),
+                ("11", "Old"),
+                ("110", "New A")
+            ],
+            "order and duplicates are kept; a live track and an unmatched stale one are untouched"
+        );
+        let requests = task.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        let lookup = url::Url::parse(&format!("http://fixture{}", requests[1].target)).unwrap();
+        let filter = lookup
+            .query_pairs()
+            .find(|(k, _)| k == "filter[isrc]")
+            .unwrap()
+            .1;
+        assert_eq!(filter, "A,C", "only stale ISRCs are looked up, once each");
+    }
+    #[tokio::test]
+    async fn live_tracks_cause_no_relink_request() {
+        let Some(_env) = crate::config::testenv::isolated() else {
+            return;
+        };
+        let live = json!({"type":"tracks","id":"1","attributes":{"title":"Song","isrc":"A","availability":["STREAM"]}});
+        let (client, task) = fixture(vec![(200, json!({"data":[live]}))]).await;
+        let (tracks, error) = client.track_list("playlists/p/relationships/items").await;
+        assert_eq!((tracks.len(), error), (1, None));
+        assert_eq!(task.await.unwrap().len(), 1);
     }
     #[tokio::test]
     async fn foreign_next_links_are_rejected_without_following_them() {
