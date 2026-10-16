@@ -149,7 +149,7 @@ fn self_update() -> Result<()> {
         )));
     }
     let rt = runtime(2);
-    let (tag, installed) = rt.block_on(update::update(VERSION))?;
+    let (tag, installed) = rt.block_on(update::update(VERSION, Options::load().dev_builds))?;
     if installed {
         println!("updated to {tag}");
         rt.block_on(restart_offer());

@@ -114,17 +114,19 @@ pub fn on_off(on: bool) -> &'static str {
 pub const OPT_COLORS: usize = 0;
 pub const OPT_AUTOPLAY: usize = 1;
 pub const OPT_MOTION: usize = 2;
-pub const OPT_COVER: usize = 3;
-pub const OPT_KEYS: usize = 4;
-pub const OPT_BAR: usize = 5;
-pub const OPT_MUSIC_KEYS: usize = 6;
-pub const OPT_VISUALIZER: usize = 7;
-pub const NUM_OPTIONS: usize = 8;
+pub const OPT_DEV: usize = 3;
+pub const OPT_COVER: usize = 4;
+pub const OPT_KEYS: usize = 5;
+pub const OPT_BAR: usize = 6;
+pub const OPT_MUSIC_KEYS: usize = 7;
+pub const OPT_VISUALIZER: usize = 8;
+pub const NUM_OPTIONS: usize = 9;
 
 const OPT_LABELS: [&str; NUM_OPTIONS] = [
     "Cover Colors",
     "Autoplay",
     "Reduce Motion",
+    "Development Builds",
     "Cover Style",
     "Show Shortcuts",
     "Show in Top Bar",
@@ -135,6 +137,7 @@ const OPT_HINTS: [&str; NUM_OPTIONS] = [
     "Use the cover's colors for the app.",
     "Play on after the last song.",
     "No scrolling text, fewer wobbles.",
+    "Update to every change on main, as soon as it is built.",
     "How album covers are drawn.",
     "Show keys on the buttons.",
     "The song in Omarchy's top bar.",
@@ -329,6 +332,7 @@ impl Model {
             OPT_COLORS => !self.opts.o.no_cover_colors,
             OPT_AUTOPLAY => !self.opts.o.no_autoplay,
             OPT_MOTION => self.opts.o.reduce_motion,
+            OPT_DEV => self.opts.o.dev_builds,
             OPT_KEYS => self.opts.o.always_tips,
             OPT_BAR => self.bar_on,
             OPT_MUSIC_KEYS => self.opts.o.music_keys,
@@ -356,6 +360,7 @@ impl Model {
                 });
             }
             OPT_MOTION => self.opts.o.reduce_motion = !self.opts.o.reduce_motion, // the bar widget follows the saved file
+            OPT_DEV => self.opts.o.dev_builds = !self.opts.o.dev_builds, // the daemon's next check follows
             OPT_KEYS => self.opts.o.always_tips = !self.opts.o.always_tips,
             OPT_BAR => {
                 let on = !self.bar_on;

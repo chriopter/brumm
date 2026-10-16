@@ -1390,6 +1390,7 @@ fn options_menu() {
         "Cover Colors",
         "Autoplay",
         "Reduce Motion",
+        "Development Builds",
         "Cover Style",
         "Show Shortcuts",
     ]

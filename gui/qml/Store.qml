@@ -278,7 +278,8 @@ Item {
         if (menuOptions) {
             rows.push({ option: "cover_colors", icon: "󰏘", label: "Cover Colors", hint: "Use the cover's colors for the app." },
                       { option: "autoplay", icon: "󰁨", label: "Autoplay", hint: "Play on after the last song." },
-                      { option: "reduce_motion", icon: "󰔗", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." })
+                      { option: "reduce_motion", icon: "󰔗", label: "Reduce Motion", hint: "No scrolling text, fewer wobbles." },
+                      { option: "dev_builds", icon: "󰚰", label: "Development Builds", hint: "Update to every change on main, as soon as it is built." })
             if (daemon.omarchy)
                 rows.push({ option: "bar", icon: "󰍹", label: "Show in Top Bar", hint: "The song in Omarchy's top bar." },
                           { option: "music_keys", icon: "󰌌", label: "Music Keys", hint: "Super+Shift+M opens brumm, not Spotify." })
@@ -306,6 +307,7 @@ Item {
         case "cover_colors": return !o.no_cover_colors
         case "autoplay": return !o.no_autoplay
         case "reduce_motion": return !!o.reduce_motion
+        case "dev_builds": return !!o.dev_builds
         case "bar": return o.bar === "on"
         case "music_keys": return !!o.music_keys
         }
@@ -1652,6 +1654,7 @@ Item {
         case "cover_colors": daemon.setOption("no_cover_colors", !o.no_cover_colors); break
         case "autoplay": daemon.setOption("no_autoplay", !o.no_autoplay); break // the daemon tells the player
         case "reduce_motion": daemon.setOption("reduce_motion", !o.reduce_motion); break
+        case "dev_builds": daemon.setOption("dev_builds", !o.dev_builds); break // the daemon's next check follows
         case "wall": wall = !wall; sys.setSetting("wall", wall ? "true" : "false"); break
         case "bar": setBar(o.bar !== "on"); break
         case "music_keys":
