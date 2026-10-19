@@ -30,7 +30,7 @@ Item {
     // send the sound either.
     readonly property bool artworkStyle: ["coverwall", "waves", "coverflow"].includes(store.vizNames[store.vizDisplayed])
     readonly property bool moving: shown && ui.effects && win.visibility !== Window.Minimized
-        && (store.full || (!!store.st.playing && !ui.calm))
+        && (store.full || !!store.st.playing)
         && !win.popup && !store.menuOpen
     readonly property bool listening: moving && !artworkStyle
     onListeningChanged: daemon.listen(listening)
