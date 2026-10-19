@@ -139,6 +139,10 @@ impl Client {
             rb = rb
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_vec(&b)?);
+        } else if method == Method::POST {
+            // Library additions carry IDs in the query, but Apple still
+            // requires an explicit length for the empty POST body.
+            rb = rb.header(reqwest::header::CONTENT_LENGTH, 0);
         }
         let resp = rb.send().await?;
         let status = resp.status();
@@ -799,6 +803,33 @@ mod tests {
         let (it, song) = parse_link("https://music.apple.com/us/song/name/789").unwrap();
         assert_eq!((it.id.as_str(), song.as_str()), ("", "789"));
         assert!(parse_link("https://example.com/x").is_none());
+    }
+
+    #[tokio::test]
+    async fn add_to_library_sends_zero_content_length() {
+        let (base, seen) = serve(Arc::new(|s: &Seen| {
+            if s.headers.get("content-length").map(String::as_str) != Some("0") {
+                return (411, String::new());
+            }
+            (204, String::new())
+        }))
+        .await;
+        let client = Client::with_base(&base, "dev", "user");
+        for kind in ["songs", "albums", "playlists"] {
+            client
+                .add_to_library(kind, &["123".into(), "456".into()])
+                .await
+                .unwrap();
+        }
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        for (s, kind) in seen.iter().zip(["songs", "albums", "playlists"]) {
+            assert_eq!(s.method, "POST");
+            let (path, query) = split(&s.target);
+            assert_eq!(path, "/v1/me/library");
+            assert_eq!(query[&format!("ids[{kind}]")], "123,456");
+            assert!(s.body.is_empty());
+        }
     }
 
     #[tokio::test]
