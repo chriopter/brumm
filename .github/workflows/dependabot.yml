@@ -1,0 +1,40 @@
+name: dependabot
+
+# Dependabot's pull requests merge themselves once ci is green on the very
+# commit it checked; one that breaks the build (often a major version) stays
+# open until it is fixed by hand. A merge made with the workflow token starts
+# no push workflows, so this one starts the development build itself.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/') &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dependabot-merge
+      cancel-in-progress: false
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr=$(gh pr list --head "$BRANCH" --state open --json number,author \
+            --jq '.[] | select(.author.login == "app/dependabot") | .number')
+          [[ -n $pr ]] || { echo "No open Dependabot pull request for $BRANCH"; exit 0; }
+          gh pr merge "$pr" --squash --delete-branch --match-head-commit "$SHA"
+          gh workflow run release.yml --ref main

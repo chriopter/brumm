@@ -44,10 +44,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: python3 .github/scripts/release_reminder.py
 
-  # Only a push can start the build and publication jobs: a tag names its
+  # Only a push or a manual start on main (the dependabot workflow uses it after
+  # merging) can start the build and publication jobs: a tag names its
   # release, main becomes the next patch version's development build.
   version:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}

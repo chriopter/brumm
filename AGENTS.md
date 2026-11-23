@@ -55,6 +55,9 @@ available". So they are short and plain:
   deletes the branch.
 - Contributors with write access merge their own pull requests the same
   way. Release tags are the maintainer's alone; see below.
+- Dependabot's pull requests merge themselves (`.github/workflows/dependabot.yml`)
+  once ci is green, and start a development build. One that stays red
+  (usually a major version) waits to be fixed on its branch.
 
 ## Releases
 
