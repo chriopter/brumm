@@ -29,6 +29,6 @@ sha2 = "=0.11.1"
 tar = { version = "=0.4.46", default-features = false }
 tokio = { version = "=1.53.3", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal", "process"] }
 unicode-segmentation = "=1.13.3"
-unicode-width = "=0.2.2"
+unicode-width = "=0.2.3"
 url = "=2.5.8"
 zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
