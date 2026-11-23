@@ -1,0 +1,54 @@
+name: stable
+
+# Once a month, a week after Dependabot's monthly pull requests, main becomes
+# the next patch release by itself: when it has changes since the latest
+# stable release, or when that release is two months old and its embedded
+# Apple Music token should be renewed. Only a main its development build has
+# already proven is released. A tag pushed with the workflow token starts no
+# workflow, so this one starts the release build for the tag itself.
+on:
+  schedule:
+    - cron: "41 6 8 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: stable
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tag the next patch release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          latest=$(gh api "repos/$GH_REPO/releases/latest")
+          prev=$(jq -r .tag_name <<< "$latest")
+          published=$(jq -r .published_at <<< "$latest")
+          prev_sha=$(gh api "repos/$GH_REPO/commits/$prev" --jq .sha)
+          ahead=$(gh api "repos/$GH_REPO/compare/$prev_sha...$head" --jq .ahead_by)
+          age_days=$(( ($(date -u +%s) - $(date -u -d "$published" +%s)) / 86400 ))
+          if [[ $ahead == 0 && $age_days -lt 60 ]]; then
+            echo "Nothing new since $prev, which is $age_days days old."
+            exit 0
+          fi
+          dev_sha=$(gh release list --limit 20 --json tagName,isPrerelease \
+            --jq '[.[] | select(.isPrerelease and (.tagName | test("-dev\\.")))][0].tagName // ""' |
+            xargs -r -I{} gh api "repos/$GH_REPO/releases/tags/{}" --jq .target_commitish)
+          if [[ $dev_sha != "$head" ]]; then
+            echo "::error::No development build of main (${head::7}) yet; not releasing it."
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<< "${prev#v}"
+          tag="v$major.$minor.$((patch + 1))"
+          gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$tag" -f sha="$head" >/dev/null
+          gh workflow run release.yml --ref "$tag"
+          echo "Tagged $tag on ${head::7} ($ahead commits since $prev) and started its release."

@@ -54,16 +54,22 @@ available". So they are short and plain:
   --squash`). GitHub merges once the `test` and `gui` checks are green and
   deletes the branch.
 - Contributors with write access merge their own pull requests the same
-  way. Release tags are the maintainer's alone; see below.
+  way. Minor and major version tags are the maintainer's alone; see below.
 - Dependabot's pull requests merge themselves (`.github/workflows/dependabot.yml`)
   once ci is green, and start a development build. One that stays red
   (usually a major version) waits to be fixed on its branch.
 
 ## Releases
 
-- A signed tag `vX.Y.Z` on main releases: the workflow builds, signs and
-  publishes. Afterwards its notes are written by hand, as above
-  (`gh release edit vX.Y.Z --title … --notes-file …`).
+- Patch releases happen by themselves: on the 8th of each month
+  (`.github/workflows/stable.yml`) main becomes the next patch version
+  when it has changes since the latest stable release, or when that
+  release is two months old (a fresh Apple Music token). Its notes are the
+  commit titles; rewrite them as above when it is worth it
+  (`gh release edit vX.Y.Z --title … --notes-file …`). Run the workflow by
+  hand for a patch release now.
+- A minor or major version is a signed tag `vX.Y.Z` on main: the workflow
+  builds, signs and publishes. Its notes are written by hand, as above.
 - brumm's updater and the installer take GitHub's latest release, which is
   always a stable one. To test a release first, tag a pre-release
   (`v0.9.0-rc1`): the workflow marks it so, and nobody is offered it.
