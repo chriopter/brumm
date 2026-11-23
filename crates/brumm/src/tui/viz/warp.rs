@@ -67,11 +67,11 @@ impl Visualizer {
             s.rip[0] = a.t;
         }
         let t = s.t as f32;
-        for x in 0..w {
-            s.sx[x] = vsin(x as f32 * 0.08 + t);
+        for (x, v) in s.sx.iter_mut().enumerate().take(w) {
+            *v = vsin(x as f32 * 0.08 + t);
         }
-        for y in 0..h {
-            s.sy[y] = vsin(y as f32 * 0.19 - t * 1.3);
+        for (y, v) in s.sy.iter_mut().enumerate().take(h) {
+            *v = vsin(y as f32 * 0.19 - t * 1.3);
         }
         // Ripples: a ring 8 rows wide running out at 30 rows a second, fading.
         let (mut rr, mut ra) = ([0f32; 4], [0f32; 4]);
@@ -166,7 +166,7 @@ impl Visualizer {
             self.milk.tmp = vec![0.0; n_dots];
             // Where each dot pulls its value from: calm / punch zoom, each
             // twisting either way. Built once per size.
-            for k in 0..4 {
+            for (k, slot) in self.milk.map.iter_mut().enumerate() {
                 let zoom = if k & 1 != 0 { 0.87 } else { 0.95 };
                 let rot = if k & 2 != 0 { -0.025 } else { 0.025 };
                 let (cs, sn) = (f64::cos(rot) * zoom, f64::sin(rot) * zoom);
@@ -181,7 +181,7 @@ impl Visualizer {
                         }
                     }
                 }
-                self.milk.map[k] = m;
+                *slot = m;
             }
         }
         let (kicks, beat, level, bass, live, t) = (

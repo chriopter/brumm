@@ -272,9 +272,7 @@ impl Visualizer {
             while x < w {
                 let bw = 3 + (self.rnd() % 6) as usize;
                 let bh = (1 + self.rnd() % (h / 7).max(1) as u64) as i8;
-                for i in x..(x + bw).min(w) {
-                    self.fw.city[i] = bh;
-                }
+                self.fw.city[x..(x + bw).min(w)].fill(bh);
                 x += bw;
             }
         }
