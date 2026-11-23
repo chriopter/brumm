@@ -44,11 +44,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: python3 .github/scripts/release_reminder.py
 
-  # Only a push or a manual start on main (the dependabot workflow uses it after
-  # merging) can start the build and publication jobs: a tag names its
-  # release, main becomes the next patch version's development build.
+  # Only a push or a manual start on main or a tag (the dependabot and stable
+  # workflows use it) can start the build and publication jobs: a tag names
+  # its release, main becomes the next patch version's development build.
   version:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag'))
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -80,7 +80,12 @@ jobs:
       - name: Tools
         run: |
           printf 'Server = https://archive.archlinux.org/repos/2026/09/30/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
-          pacman -Syyuu --noconfirm base-devel git rust qt6-base qt6-declarative qt6-shadertools qt6-multimedia
+          # The archive is often slow: no download timeout, three tries.
+          for try in 1 2 3; do
+            pacman -Syyuu --noconfirm --disable-download-timeout base-devel git rust qt6-base qt6-declarative qt6-shadertools qt6-multimedia && break
+            [[ $try == 3 ]] && exit 1
+            sleep 30
+          done
           [[ $(qmake6 -query QT_VERSION) == 6.11.* ]] || { echo 'GUI build needs Qt 6.11'; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
