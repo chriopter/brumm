@@ -870,9 +870,9 @@ impl Model {
                 self.geo.next = cell(start + tw - 1, 1);
             }
             Hit::UpNext { n, tw, th } => {
-                for j in 0..n {
+                for (j, r) in self.geo.upnext.iter_mut().enumerate().take(n) {
                     let x0 = x + j as i64 * (tw + 2);
-                    self.geo.upnext[j] = Rect::new(x0, y, x0 + tw, y + th);
+                    *r = Rect::new(x0, y, x0 + tw, y + th);
                 }
             }
             Hit::UpSongs { w: wd, n } => self.geo.upsongs = Rect::new(x, y, x + wd, y + n),
