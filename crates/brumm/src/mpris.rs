@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 use zbus::{Connection, interface};
+use zbus::{ObjectPath, OwnedVariant, Variant};
 
 use crate::daemon::Daemon;
 use crate::ipc::Player as PlayerState;
@@ -71,13 +71,13 @@ fn status(st: &PlayerState) -> &'static str {
     }
 }
 
-fn owned(v: Value<'_>) -> OwnedValue {
-    v.try_to_owned().unwrap_or_else(|_| OwnedValue::from(0u8))
+fn owned(v: Variant<'_>) -> OwnedVariant {
+    v.try_to_owned().unwrap_or_else(|_| OwnedVariant::from(0u8))
 }
 
 /// Always every key, empty ones included, so no client keeps a stale
 /// value from the previous track.
-fn metadata(st: &PlayerState, id: &str) -> HashMap<String, OwnedValue> {
+fn metadata(st: &PlayerState, id: &str) -> HashMap<String, OwnedVariant> {
     let artists: Vec<String> = if st.artist.is_empty() {
         Vec::new()
     } else {
@@ -86,23 +86,26 @@ fn metadata(st: &PlayerState, id: &str) -> HashMap<String, OwnedValue> {
     let path = ObjectPath::try_from(id.to_string())
         .unwrap_or_else(|_| ObjectPath::from_static_str_unchecked(NO_TRACK));
     HashMap::from([
-        ("mpris:trackid".to_string(), owned(Value::ObjectPath(path))),
+        (
+            "mpris:trackid".to_string(),
+            owned(Variant::ObjectPath(path)),
+        ),
         (
             "mpris:length".to_string(),
-            owned(Value::I64((st.dur * 1e6) as i64)),
+            owned(Variant::I64((st.dur * 1e6) as i64)),
         ),
         (
             "mpris:artUrl".to_string(),
-            owned(Value::from(st.artwork.clone())),
+            owned(Variant::from(st.artwork.clone())),
         ),
         (
             "xesam:title".to_string(),
-            owned(Value::from(st.title.clone())),
+            owned(Variant::from(st.title.clone())),
         ),
-        ("xesam:artist".to_string(), owned(Value::from(artists))),
+        ("xesam:artist".to_string(), owned(Variant::from(artists))),
         (
             "xesam:album".to_string(),
-            owned(Value::from(st.album.clone())),
+            owned(Variant::from(st.album.clone())),
         ),
     ])
 }
@@ -252,7 +255,7 @@ impl Player {
         }
     }
     #[zbus(property)]
-    fn metadata(&self) -> HashMap<String, OwnedValue> {
+    fn metadata(&self) -> HashMap<String, OwnedVariant> {
         let s = self.shared.lock().unwrap();
         metadata(&s.state, &s.last_id)
     }
@@ -313,21 +316,21 @@ impl Server {
             at: Instant::now(),
             last_id: NO_TRACK.into(),
         }));
-        let conn = zbus::connection::Builder::session()?
-            .name(BUS_NAME)?
+        let conn = zbus::connection::Builder::session()
+            .name(BUS_NAME)
             .serve_at(
                 OBJECT_PATH,
                 Root {
                     daemon: daemon.clone(),
                 },
-            )?
+            )
             .serve_at(
                 OBJECT_PATH,
                 Player {
                     daemon,
                     shared: shared.clone(),
                 },
-            )?
+            )
             .build()
             .await?;
         Ok(Server { conn, shared })
@@ -348,33 +351,33 @@ impl Server {
             s.last_id = id.clone();
             (prev, expected, id, changed)
         };
-        let mut changed: HashMap<&str, Value<'_>> = HashMap::new();
+        let mut changed: HashMap<&str, Variant<'_>> = HashMap::new();
         let has = !st.title.is_empty();
         if track_changed || prev.dur != st.dur || prev.artwork != st.artwork {
-            let md: HashMap<String, Value<'_>> = metadata(st, &id)
+            let md: HashMap<String, Variant<'_>> = metadata(st, &id)
                 .into_iter()
-                .map(|(k, v)| (k, Value::from(v)))
+                .map(|(k, v)| (k, Variant::from(v)))
                 .collect();
-            changed.insert("Metadata", Value::from(md));
-            changed.insert("CanGoNext", Value::from(has && st.index < st.length - 1));
-            changed.insert("CanGoPrevious", Value::from(has));
-            changed.insert("CanPause", Value::from(has));
-            changed.insert("CanSeek", Value::from(has));
+            changed.insert("Metadata", Variant::from(md));
+            changed.insert("CanGoNext", Variant::from(has && st.index < st.length - 1));
+            changed.insert("CanGoPrevious", Variant::from(has));
+            changed.insert("CanPause", Variant::from(has));
+            changed.insert("CanSeek", Variant::from(has));
         }
         if status(&prev) != status(st) {
-            changed.insert("PlaybackStatus", Value::from(status(st)));
+            changed.insert("PlaybackStatus", Variant::from(status(st)));
         }
         if prev.volume != st.volume {
-            changed.insert("Volume", Value::from(st.volume));
+            changed.insert("Volume", Variant::from(st.volume));
         }
         if prev.shuffle != st.shuffle {
-            changed.insert("Shuffle", Value::from(st.shuffle));
+            changed.insert("Shuffle", Variant::from(st.shuffle));
         }
         if prev.repeat != st.repeat {
-            changed.insert("LoopStatus", Value::from(loop_status(st.repeat)));
+            changed.insert("LoopStatus", Variant::from(loop_status(st.repeat)));
         }
         if prev.ready != st.ready {
-            changed.insert("CanPlay", Value::from(st.ready));
+            changed.insert("CanPlay", Variant::from(st.ready));
         }
         let Ok(emitter) = SignalEmitter::new(&self.conn, OBJECT_PATH) else {
             return;
