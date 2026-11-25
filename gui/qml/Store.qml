@@ -1565,15 +1565,21 @@ Item {
         else if (st.id) { what = { track: { id: st.id, title: st.title } }; name = st.title }
         else return setFlash("select a song, album or playlist to add")
         pick = { what: what, name: name, lists: [], loading: true, sel: 0, naming: false, input: "" }
+        const pending = pick
         help = false
         daemon.request({ cmd: "list", list: "playlists" }, (err, reply) => {
-            if (!pick) return
+            if (pick !== pending) return
+            if (err) { pick = null; return setFlash(err) }
             pick = Object.assign({}, pick, { loading: false, lists: (reply && reply.items || []).filter(i => i.editable) })
         })
     }
 
     function pickerKey(k, ev) {
         const p = pick
+        if (p.loading) {
+            if (["esc", "q", "P", "h"].includes(k)) pick = null
+            return
+        }
         if (p.naming) {
             if (k === "esc") pick = Object.assign({}, p, { naming: false })
             else if (k === "enter") { if (p.input.trim()) addToPlaylist("", p.input.trim()) }

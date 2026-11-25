@@ -348,6 +348,14 @@ Window {
         readonly property bool music: !!row && (!!row.track || (row.item && ["album", "playlist"].includes(row.item.kind)))
         ContextAction { text: rowMenu.row && rowMenu.row.track ? "Play" : "Open"; onTriggered: win.rowAction(index => store.activateAt(index)) }
         ContextAction { text: "Add to Playlist…"; visible: rowMenu.music && !!store.capabilities.playlistWrite; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.openPicker()) }
+        ContextAction {
+            text: "Edit in Apple Music…"
+            readonly property var playlist: win.contextView && win.contextView.item
+            visible: !!(store.selectedProvider === "apple" && rowMenu.row && rowMenu.row.track
+                        && playlist && playlist.kind === "playlist" && playlist.editable && playlist.id)
+            height: visible ? implicitHeight : 0
+            onTriggered: win.rowAction(() => Qt.openUrlExternally("https://music.apple.com/library/playlist/" + encodeURIComponent(playlist.id)))
+        }
         ContextAction { text: "Add to Library"; visible: !!(store.capabilities.collectionWrite && rowMenu.music && rowMenu.row && rowMenu.entry && (rowMenu.row.track ? !rowMenu.row.track.id.startsWith("i.") : rowMenu.entry.catalog)); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.addToLibrary()) }
         ContextAction { text: "Favorite"; visible: !!store.capabilities.preference && rowMenu.music; height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.rate(1)) }
         ContextAction { text: "Start Radio"; visible: !!store.capabilities.stations && !!rowMenu.row && (!!rowMenu.row.track || (rowMenu.entry && ["artist", "station"].includes(rowMenu.entry.kind))); height: visible ? implicitHeight : 0; onTriggered: win.rowAction(() => store.playStation()) }

@@ -21,6 +21,7 @@ TestCase {
         readonly property color edge: "#333333"
         readonly property color glassHi: "#222222"
         readonly property color shade: "#000000"
+        readonly property int gap: 12
         readonly property int coverRadius: 6
         readonly property string sans: "sans-serif"
         readonly property string mono: "monospace"
@@ -39,6 +40,9 @@ TestCase {
         readonly property var stacks: []
         readonly property int rev: 0
         readonly property int secAlbums: 0
+        property var pick: null
+        property int pickedRow: -1
+        function pickRow(index) { pickedRow = index }
         property var rows: []
         readonly property int sel: 0
         readonly property var view: ({ key: "albums:" })
@@ -51,6 +55,25 @@ TestCase {
     }
     Item { id: browser }
     Item { id: playbackStage; property real playbackTop: 0 }
+
+    Component { id: pickerComponent; Brumm.PickerBox {} }
+
+    function test_playlistWheelAndClick() {
+        const playlists = Array.from({length: 30}, (_, i) => ({name: "Playlist " + i}))
+        store.pick = {name: "Test song", lists: playlists, sel: 0}
+        const picker = createTemporaryObject(pickerComponent, this)
+        verify(picker)
+        const choices = findChild(picker, "playlistChoices")
+        tryCompare(choices, "count", playlists.length)
+        mouseWheel(choices, 20, 20, 0, -360)
+        tryVerify(() => choices.contentY > 0)
+        tryCompare(choices, "moving", false)
+        const index = choices.indexAt(20, choices.contentY + 20)
+        verify(index > 0)
+        mouseClick(choices, 20, 20)
+        compare(store.pickedRow, index + 1)
+        store.pick = null
+    }
 
     function test_hiddenDiscoveryDoesNotBuildLibraryCards() {
         const grid = createTemporaryObject(gridComponent, this)
